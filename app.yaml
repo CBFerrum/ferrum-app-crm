@@ -1,0 +1,14 @@
+id: crm
+name: CRM
+version: 0.1.0
+publisher: cbferrum
+summary: Leads, opportunities and pipeline, contacts, campaigns, activities and quotations
+description: README.md
+categories: [crm, sales]
+license: AGPL-3.0-only
+homepage: https://github.com/CBFerrum/ferrum-app-crm
+support: https://github.com/CBFerrum/ferrum-app-crm/issues
+runtime: native
+platform: ">=0.3, <0.4"
+packages: [crm]
+uninstall: ask
