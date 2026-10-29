@@ -7,11 +7,11 @@ use crate::opportunity::{follow_orders, lose_with_quotation};
 use crate::{check_assignee, lookup, lost_reason, today};
 use async_trait::async_trait;
 use chrono::NaiveDate;
-use ferrum_domain::flow::{MapSpec, add_progress, created, map_document};
+use ferrum_domain::flow::{MapSpec, add_progress_in, created, map_document};
 use ferrum_domain::india::GstTemplateHook;
 use ferrum_domain::pricing::{Side, calculate};
 use ferrum_domain::trade::create_for_user;
-use ferrum_domain::util::{d, date, id, money, rows, s, set, sys};
+use ferrum_domain::util::{d, date, id, money, rows, s, set, sys, unit_factor};
 use ferrum_kernel::value::parse_date;
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, Filter, HookCtx, Kernel, Op, Result, Tx};
 use rust_decimal::Decimal;
@@ -138,7 +138,7 @@ async fn make_sales_order(hc: &mut HookCtx<'_>, q: &Doc) -> Result<Value> {
         link_field: "crm_quotation",
         line_field: "crm_quotation_line",
         header: &header,
-        line_fields: &["item", "price_list_rate", "discount_percent"],
+        line_fields: &["item", "uom", "price_list_rate", "discount_percent"],
     };
     let mut input = map_document(q, &spec)?;
     input.insert("customer".into(), json!(customer.to_string()));
@@ -191,7 +191,7 @@ async fn track_orders(hc: &mut HookCtx<'_>, order: &Doc, sign: Decimal) -> Resul
     let mut quotations = Vec::new();
     for r in rows(order, "items") {
         let (Some(q), Some(line)) = (id(&r, "crm_quotation"), id(&r, "crm_quotation_line")) else { continue };
-        add_progress(hc.kernel, hc.ctx, hc.tx, "Quotation", q, line, "ordered_qty", sign * d(&r, "qty")).await?;
+        add_progress_in(hc.kernel, hc.ctx, hc.tx, "Quotation", q, line, "ordered_qty", sign * d(&r, "qty"), Some(unit_factor(&r))).await?;
         if !quotations.contains(&q) {
             quotations.push(q);
         }
