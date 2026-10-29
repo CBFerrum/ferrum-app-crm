@@ -608,4 +608,18 @@ async fn scenario() {
     assert_eq!(dec(&export["base_amount"]), n("8400"), "a rate the user gives stands");
     let export = maria.update("Opportunity", uid(&export), json!({"currency": inr["id"]})).await;
     assert_eq!((dec(&export["conversion_rate"]), dec(&export["base_amount"])), (n("1"), n("100")));
+
+    // ── a personal-data erasure takes a contact's names and every email and phone ──
+    let kim = admin
+        .insert(
+            "Contact",
+            json!({"first_name": "Kim", "last_name": "Private", "emails": [{"email": "kim@private.test"}], "phones": [{"phone": "+1 555 0199"}]}),
+        )
+        .await;
+    let found = k.personal_data(&admin.ctx, "kim@private.test").await.unwrap();
+    assert!(found["records"].as_array().unwrap().iter().any(|r| r["entity"] == json!("Contact")), "{found}");
+    k.erase_personal_data(&admin.ctx, "kim@private.test", "Request 7").await.unwrap();
+    let kim = admin.get("Contact", uid(&kim)).await;
+    assert!(kim["first_name"].as_str().unwrap().starts_with("Erased ") && kim["last_name"].is_null() && kim["email"].is_null(), "{kim:?}");
+    assert!(kim["emails"].as_array().unwrap().is_empty() && kim["phones"].as_array().unwrap().is_empty());
 }
