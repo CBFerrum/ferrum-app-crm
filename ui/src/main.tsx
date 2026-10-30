@@ -10,7 +10,8 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, Link, RouterProvider, useRouteError } from "react-router";
 import { routeBase, shell } from "@ferrum/client";
 import { ConfirmHost, EmptyState, ErrorState, Toaster } from "@ferrum/kit";
-import { AppSettingsPage, FormView, ListView, ReportView, RequireAuth, ScreenPage, setFrameMode } from "@ferrum/records";
+import { FormView, ListView, ReportView } from "@ferrum/records";
+import { AppSettingsPage, RequireAuth, ScreenPage, setFrameMode } from "@ferrum/records/frame";
 import { CrmHome } from "./Home";
 import "./styles.css";
 
