@@ -1,6 +1,6 @@
 id: crm
 name: CRM
-version: 0.3.0
+version: 0.3.1
 publisher: cbferrum
 summary: Leads, opportunities and pipeline, contacts, campaigns, activities and quotations
 description: README.md
@@ -22,6 +22,7 @@ contributes:
       route: crm
       title: CRM
       description: Leads, deals, contacts and quotations
+      icon: contact
       color: "#0f766e"
       roles: [Sales User, Sales Manager]
   shell.open:

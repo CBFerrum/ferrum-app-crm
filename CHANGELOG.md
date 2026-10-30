@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- The launcher draws CRM with an icon (`contact`).
+
 ## 0.3.0
 
 - CRM's own interface at /crm/ (Ferrum docs/plan/apps-ui.md §13, U4b), in `ui/` (built into
