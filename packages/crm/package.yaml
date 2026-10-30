@@ -23,7 +23,7 @@ modules:
     label: CRM
     icon: handshake
     order: 35
-    items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, Address, Campaign, SalesStage, Territory, LostReason,
+    items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, Address, Customer, Item, Campaign, SalesStage, Territory, LostReason,
             report:sales_pipeline, report:lead_funnel, report:campaign_performance, report:quotation_register]
 
 roles:

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0
+
+- CRM's own interface at /crm/ (Ferrum docs/plan/apps-ui.md §13, U4b), in `ui/` (built into
+  `ui/dist` and embedded as `UI`): the pipeline on its home (open deals by sales stage with what
+  they are worth and weigh, your open activities, new leads), and leads, deals, contacts,
+  customers, quotations and activities in the records frame, CRM's modules in the sidebar.
+- The launcher entry (Sales User, Sales Manager), New Lead and New Deal in the bar's Create menu,
+  and its records, contacts and customers open in it (/open).
+
 ## 0.2.0
 
 - CRM works on its own: it depends on the platform's `contacts`, `parties` and `products` instead
