@@ -1,18 +1,22 @@
 package: crm
-version: 0.1.0
+version: 0.2.0
 label: CRM
 description: Leads, opportunities and the sales pipeline, prospects, contacts and addresses, campaigns, activities and quotations.
-depends: [core, selling]
+# Contacts, customers and items are shared with other apps; ERP's sales orders and taxes come with
+# the crm_erp connector (docs: plan/apps-ui.md §13 in the platform).
+depends: [core, contacts, parties, products]
 field_prefix: crm_
 
 overlays:
-  - entity: SalesOrder
+  # A contact's and an address's lead (and a contact's prospect).
+  - entity: Contact
     ops:
-      - {op: add_field, after: customer_name, field: {name: crm_quotation, type: link, to: Quotation, label: Quotation, read_only: true, in_filter: true}}
-  - entity: SalesOrderItem
+      - {op: add_field, column: true, after: supplier, field: {name: lead, type: link, to: Lead, in_filter: true}}
+      - {op: add_field, column: true, after: lead, field: {name: prospect, type: link, to: Prospect, in_filter: true}}
+  - entity: Address
     ops:
-      - {op: add_field, field: {name: crm_quotation, type: link, to: Quotation, label: Quotation, read_only: true}}
-      - {op: add_field, field: {name: crm_quotation_line, type: data, label: Quotation Line, read_only: true, hidden: true}}
+      - {op: add_field, column: true, after: supplier, field: {name: lead, type: link, to: Lead, in_filter: true}}
+      - {op: add_rule, rule: {name: linked, check: "doc.customer != null || doc.supplier != null || doc.lead != null", message: "Link the address to a customer, supplier or lead"}}
 
 modules:
   - name: crm
@@ -95,8 +99,6 @@ roles:
 # What a personal-data request exports and erases for a person (their email).
 personal_data:
   - {entity: Lead, match: email, erase: [first_name, last_name, lead_name, job_title, email, phone, mobile]}
-  - {entity: Contact, match: email, erase: [first_name, last_name, full_name, designation, department, email, phone, emails, phones, notes]}
-  - {entity: Address, match: email, erase: [address_title, address_line1, address_line2, postal_code, email, phone, display]}
 seed:
   - entity: SalesStage
     key: [stage_name]

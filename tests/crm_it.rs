@@ -131,7 +131,8 @@ async fn scenario() {
             admin_email: "admin@crm.test".into(),
             admin_password: PASSWORD.into(),
             admin_name: None,
-            packages: vec!["crm".into()],
+            // With ERP: the connector brings taxes and sales orders.
+            packages: vec!["crm".into(), "crm_erp".into()],
             settings: Some(json!({"fiscal_year_start_month": 4})),
         })
         .await
@@ -622,4 +623,73 @@ async fn scenario() {
     let kim = admin.get("Contact", uid(&kim)).await;
     assert!(kim["first_name"].as_str().unwrap().starts_with("Erased ") && kim["last_name"].is_null() && kim["email"].is_null(), "{kim:?}");
     assert!(kim["emails"].as_array().unwrap().is_empty() && kim["phones"].as_array().unwrap().is_empty());
+
+    crm_alone(&k).await;
+}
+
+/// CRM in a workspace without ERP (docs/plan/apps-ui.md §13): contacts, customers and items are the
+/// platform's; quotations have no taxes and make no sales orders; nothing of ERP is there.
+async fn crm_alone(k: &Arc<Kernel>) {
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: "solo".into(),
+            name: "Solo Sales".into(),
+            admin_email: "admin@solo.test".into(),
+            admin_password: PASSWORD.into(),
+            admin_name: None,
+            packages: vec!["crm".into()],
+            settings: None,
+        })
+        .await
+        .expect("tenant");
+    let session = k.login("solo", "admin@solo.test", PASSWORD).await.expect("login");
+    let admin = U { k: k.clone(), ctx: k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx") };
+    let schema = admin.ctx.schema.clone();
+    assert_eq!(schema.packages, ["core", "contacts", "parties", "products", "crm"]);
+    for erp in ["SalesOrder", "Account", "TaxTemplate", "Warehouse", "FiscalYear"] {
+        assert!(schema.entity(erp).is_none(), "{erp} without ERP");
+    }
+    let q = schema.entity("Quotation").unwrap();
+    assert!(q.field("taxes").is_none() && q.field("tax_template").is_none());
+    assert!(q.def.actions.iter().all(|a| a.name != "make_sales_order"));
+    assert!(q.def.form.iter().all(|s| !s.fields.iter().any(|f| f == "taxes")), "the layout leaves ERP's fields out");
+    let contact = schema.entity("Contact").unwrap();
+    for link in ["customer", "supplier", "lead", "prospect"] {
+        assert!(contact.field(link).is_some(), "Contact.{link}");
+    }
+    assert!(schema.entity("Item").unwrap().field("is_stock_item").is_none(), "an item's stock settings come with ERP");
+
+    // A company gets no chart of accounts; customers, items, contacts and addresses work as before.
+    let inr = admin.one("Currency", json!({"code": "INR"})).await;
+    let company = admin.insert("Company", json!({"company_name": "Solo Sales", "abbr": "SS", "default_currency": inr["id"]})).await;
+    let customer = admin.insert("Customer", json!({"customer_name": "Acme Buyers"})).await;
+    let nos = admin.one("Uom", json!({"uom_name": "Nos"})).await;
+    let group = admin.one("ItemGroup", json!({"group_name": "Products"})).await;
+    let item = admin
+        .insert("Item", json!({"item_code": "WIDGET", "item_name": "Widget", "item_group": group["id"], "stock_uom": nos["id"], "standard_rate": "250"}))
+        .await;
+    let ct =
+        admin.insert("Contact", json!({"first_name": "Ann", "last_name": "Buyer", "customer": customer["id"], "emails": [{"email": "ann@acme.test"}]})).await;
+    assert_eq!((ct["full_name"].as_str(), ct["email"].as_str()), (Some("Ann Buyer"), Some("ann@acme.test")));
+    let addr = admin
+        .insert("Address", json!({"address_line1": "1 Market St", "city": "Pune", "postal_code": "411001", "customer": customer["id"], "is_primary": true}))
+        .await;
+    assert_eq!(addr["address_title"].as_str(), Some("Acme Buyers"), "titled after the customer");
+    assert_eq!(admin.get("Customer", uid(&customer)).await["billing_address"].as_str(), Some("1 Market St\nPune 411001"));
+    refused(k.insert(&admin.ctx, "Address", obj(json!({"address_line1": "Nowhere", "city": "Pune"}))).await, "Link the address");
+
+    // A quotation is priced without taxes, submitted, and lost.
+    let quote = admin
+        .insert(
+            "Quotation",
+            json!({"company": company["id"], "party_type": "Customer", "customer": customer["id"], "items": [{"item": item["id"], "qty": "4"}]}),
+        )
+        .await;
+    assert_eq!((dec(&quote["net_total"]), dec(&quote["total_taxes"]), dec(&quote["grand_total"])), (n("1000"), n("0"), n("1000")));
+    let quote = admin.submit("Quotation", uid(&quote)).await;
+    assert_eq!(quote["status"].as_str(), Some("Open"));
+    let lost = admin.insert("LostReason", json!({"reason": "Went elsewhere"})).await;
+    admin.action("Quotation", uid(&quote), "mark_lost", json!({"lost_reason": lost["id"]})).await;
+    assert_eq!(admin.get("Quotation", uid(&quote)).await["status"].as_str(), Some("Lost"));
+    refused(k.run_action(&admin.ctx, "Quotation", uid(&quote), "make_sales_order", json!({})).await, "not found");
 }

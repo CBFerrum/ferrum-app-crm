@@ -1,12 +1,12 @@
-//! CRM: leads, opportunities and pipeline, prospects, contacts and addresses, campaigns, activities and quotations.
+//! CRM: leads, opportunities and pipeline, prospects, campaigns, activities and quotations, over
+//! the platform's contacts, customers and items.
 //!
-//! Quotations are priced by the selling engine (`ferrum_domain::pricing`) and turn into sales
-//! orders; the orders' quantities flow back onto the quotation lines and win the opportunity
-//! behind them. Leads, opportunities, activities and quotations are also owned by the user named
+//! Quotations are priced by the platform's pricing (`ferrum_domain::pricing`). With ERP, the
+//! `crm_erp` connector package adds their taxes and turns them into sales orders; the orders'
+//! quantities flow back onto the quotation lines and win the opportunity behind them. Leads, opportunities, activities and quotations are also owned by the user named
 //! in `assigned_to` (`owner_fields`), so own-records permissions cover what is assigned to a rep.
 
 mod activity;
-mod contact;
 mod lead;
 mod opportunity;
 mod quotation;
@@ -20,17 +20,21 @@ use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Registers this package's document hooks. The `SalesOrder` hook runs after the selling hooks.
+/// Registers this app's document hooks. The connector's `SalesOrder` hook runs only where
+/// `crm_erp` is installed, after the selling hooks.
 pub fn register(hooks: &mut HookRegistry) {
     hooks
         .register("Lead", Arc::new(lead::LeadHook))
         .register("Opportunity", Arc::new(opportunity::OpportunityHook))
         .register("Quotation", Arc::new(quotation::QuotationHook))
-        .register("SalesOrder", Arc::new(quotation::SalesOrderHook))
-        .register("Activity", Arc::new(activity::ActivityHook))
-        .register("Contact", Arc::new(contact::ContactHook))
-        .register("Address", Arc::new(contact::AddressHook));
+        .register("Activity", Arc::new(activity::ActivityHook));
+    hooks.scoped(&[CONNECTOR_PACKAGE.to_string()], |h| {
+        h.register("SalesOrder", Arc::new(quotation::SalesOrderHook));
+    });
 }
+
+/// The connector with ERP's package.
+pub const CONNECTOR_PACKAGE: &str = "crm_erp";
 
 /// This package's reports.
 pub fn reports() -> Vec<Arc<dyn ReportSource>> {
@@ -99,6 +103,10 @@ include!(concat!(env!("OUT_DIR"), "/packages.rs"));
 
 /// This app's manifest (`app.yaml`).
 pub const MANIFEST: &str = include_str!("../app.yaml");
+
+/// The manifest of the connector app with ERP (`connectors/erp/app.yaml`): its package is
+/// `crm_erp`, its code this crate's. It ships with CRM.
+pub const CONNECTOR_MANIFEST: &str = include_str!("../connectors/erp/app.yaml");
 
 /// This app's metadata packages, embedded at build time.
 pub fn packages() -> std::result::Result<Vec<ferrum_meta::Package>, ferrum_meta::MetaError> {
