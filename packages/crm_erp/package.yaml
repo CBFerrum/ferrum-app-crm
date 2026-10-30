@@ -1,0 +1,20 @@
+package: crm_erp
+version: 0.1.0
+label: CRM and ERP
+description: Quotations take ERP's taxes and become sales orders, which remember the quotation they came from.
+depends: [crm, selling]
+field_prefix: crm_
+
+overlays:
+  - entity: Quotation
+    ops:
+      - {op: add_field, column: true, after: price_list, field: {name: tax_template, type: link, to: TaxTemplate}}
+      - {op: add_field, column: true, after: items, field: {name: taxes, type: table, of: TaxRow}}
+      - {op: add_action, action: {name: make_sales_order, label: Create Sales Order, docstatus: [1], permission: read, condition: "doc.status == 'Open' || doc.status == 'Partially Ordered' || doc.status == 'Expired'"}}
+  - entity: SalesOrder
+    ops:
+      - {op: add_field, after: customer_name, field: {name: crm_quotation, type: link, to: Quotation, label: Quotation, read_only: true, in_filter: true}}
+  - entity: SalesOrderItem
+    ops:
+      - {op: add_field, field: {name: crm_quotation, type: link, to: Quotation, label: Quotation, read_only: true}}
+      - {op: add_field, field: {name: crm_quotation_line, type: data, label: Quotation Line, read_only: true, hidden: true}}

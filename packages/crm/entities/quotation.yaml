@@ -41,9 +41,7 @@
     - {name: currency, type: link, to: Currency}
     - {name: conversion_rate, type: decimal, default: 1, min: "0.000000001"}
     - {name: price_list, type: link, to: PriceList}
-    - {name: tax_template, type: link, to: TaxTemplate}
     - {name: items, type: table, of: QuotationItem}
-    - {name: taxes, type: table, of: TaxRow}
     - {name: discount_percent, type: percent, min: "0", max: "100", label: Additional Discount %}
     - {name: total, type: currency, currency: currency, read_only: true}
     - {name: discount_amount, type: currency, currency: currency, read_only: true}
@@ -73,6 +71,5 @@
     - {name: validity_after_date, check: "doc.valid_till == null || doc.valid_till >= doc.posting_date", message: "Valid till cannot be before the quotation date"}
     - {name: has_items, check: "size(doc.items) > 0", message: "Add at least one item", on: submit}
   actions:
-    - {name: make_sales_order, label: Create Sales Order, docstatus: [1], permission: read, condition: "doc.status == 'Open' || doc.status == 'Partially Ordered' || doc.status == 'Expired'"}
     - {name: mark_lost, label: Mark as Lost, docstatus: [1], permission: submit, condition: "doc.status == 'Open' || doc.status == 'Expired'"}
   list: {columns: [number, party_name, posting_date, valid_till, grand_total, status], sort: posting_date desc}

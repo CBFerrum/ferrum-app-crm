@@ -1,0 +1,17 @@
+# CRM's connector with ERP (docs/plan/apps-ui.md §13 in the platform): what needs both apps' records.
+# A won quotation becomes a sales order, which remembers it; quotations take ERP's tax templates.
+# Offered where both apps are installed; ships with CRM.
+id: crm-erp
+name: CRM and ERP
+version: 0.1.0
+publisher: cbferrum
+summary: Quotations with ERP's taxes, and sales orders made from them
+categories: [crm, sales]
+license: AGPL-3.0-only
+homepage: https://github.com/CBFerrum/ferrum-app-crm
+support: https://github.com/CBFerrum/ferrum-app-crm/issues
+runtime: native
+platform: ">=0.3.2, <0.4"
+requires: {crm: ">=0.2", erp: ">=0.1"}
+packages: [crm_erp]
+uninstall: ask
