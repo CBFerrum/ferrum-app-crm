@@ -1,6 +1,6 @@
 id: crm
 name: CRM
-version: 0.2.0
+version: 0.3.0
 publisher: cbferrum
 summary: Leads, opportunities and pipeline, contacts, campaigns, activities and quotations
 description: README.md
@@ -12,3 +12,25 @@ runtime: native
 platform: ">=0.3.2, <0.4"
 packages: [crm]
 uninstall: ask
+# Its own interface at /crm/ (Ferrum docs/plan/apps-ui.md §13, U4b): the pipeline, and its records
+# in lists and forms (ui/, built into ui/dist).
+ui:
+  dist: ui/dist
+contributes:
+  shell.app:
+    - id: crm
+      route: crm
+      title: CRM
+      description: Leads, deals, contacts and quotations
+      color: "#0f766e"
+      roles: [Sales User, Sales Manager]
+  shell.open:
+    # Its own records, and the contacts it keeps (customers and items open where the workspace's
+    # other apps show them, ERP's or this one's, by install order).
+    - {id: crm, package: crm, path: "crm/e/{entity}/{id}", list: "crm/e/{entity}"}
+    - {id: contacts, package: contacts, path: "crm/e/{entity}/{id}", list: "crm/e/{entity}", priority: 1}
+    - {id: parties, package: parties, path: "crm/e/{entity}/{id}", list: "crm/e/{entity}"}
+  shell.create:
+    - {id: lead, label: Lead, path: crm/e/Lead/new, entity: Lead}
+    - {id: deal, label: Deal, path: crm/e/Opportunity/new, entity: Opportunity}
+
