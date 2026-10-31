@@ -3,8 +3,8 @@
 
 use crate::{check_assignee, lookup, person_name, today};
 use async_trait::async_trait;
+use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::created;
-use ferrum_domain::trade::create_for_user;
 use ferrum_domain::util::{b, find, id, s, set, sys};
 use ferrum_kernel::{Doc, DocHook, Error, Filter, HookCtx, Op, Result};
 use serde_json::{Map, Value, json};
