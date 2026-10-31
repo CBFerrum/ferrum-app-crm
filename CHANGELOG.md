@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.4
+
+- Record cards (the bar's previews on hover, Ferrum apps-ui.md U5) stay off the pipeline's board, whose rows
+  already show what a card would.
+
 ## 0.3.3
 
 - Rebuilt with Ferrum-Frontend a8d4dda: under the platform's bar the records frame no longer shows

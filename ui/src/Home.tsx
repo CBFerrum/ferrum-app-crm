@@ -36,7 +36,7 @@ function Pipeline() {
     );
   }
   return (
-    <div className="crm-stages" role="list" aria-label="Pipeline by sales stage">
+    <div className="crm-stages" role="list" aria-label="Pipeline by sales stage" data-ferrum-nocard>
       {q.data.map((c) => (
         <section key={c.stage?.id ?? "none"} className="crm-stage" role="listitem" aria-label={c.stage?.stage_name ?? "No stage"}>
           <div className="crm-stage-head">
