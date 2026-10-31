@@ -7,10 +7,9 @@ use crate::opportunity::{follow_orders, lose_with_quotation};
 use crate::{check_assignee, lookup, lost_reason, today};
 use async_trait::async_trait;
 use chrono::NaiveDate;
+use ferrum_app_erp::pricing::{Side, calculate};
+use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::{MapSpec, add_progress_in, created, map_document};
-use ferrum_domain::india::GstTemplateHook;
-use ferrum_domain::pricing::{Side, calculate};
-use ferrum_domain::trade::create_for_user;
 use ferrum_domain::util::{d, date, id, money, rows, s, set, sys, unit_factor};
 use ferrum_kernel::value::parse_date;
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, Filter, HookCtx, Kernel, Op, Result, Tx};
@@ -72,8 +71,7 @@ impl DocHook for QuotationHook {
         {
             set(doc, "valid_till", (on + chrono::Duration::days(DEFAULT_VALIDITY_DAYS)).to_string());
         }
-        // The GST template (India) depends on the party, and the prices and taxes on the template.
-        GstTemplateHook(Side::Selling).before_validate(hc, doc).await?;
+        // Prices and taxes, after the countries' rules for the party (India: the GST template).
         calculate(hc.kernel, hc.ctx, hc.tx, hc.entity, doc, Side::Selling).await?;
         if d(doc, "docstatus").is_zero() {
             set(doc, "status", "Draft");
@@ -86,7 +84,7 @@ impl DocHook for QuotationHook {
     }
 
     async fn before_submit(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
-        GstTemplateHook(Side::Selling).before_submit(hc, doc).await
+        ferrum_app_erp::localization::check(hc, doc, Side::Selling).await
     }
 
     async fn on_submit(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {

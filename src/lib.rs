@@ -1,9 +1,9 @@
 //! CRM: leads, opportunities and pipeline, prospects, campaigns, activities and quotations, over
 //! the platform's contacts, customers and items.
 //!
-//! Quotations are priced by the platform's pricing (`ferrum_domain::pricing`). With ERP, the
-//! `crm_erp` connector package adds their taxes and turns them into sales orders; the orders'
-//! quantities flow back onto the quotation lines and win the opportunity behind them. Leads, opportunities, activities and quotations are also owned by the user named
+//! Quotations are priced by ERP's pricing (`ferrum_app_erp::pricing`, whether or not a workspace
+//! has ERP). With ERP, the `crm_erp` connector package adds their taxes and turns them into sales
+//! orders; the orders' quantities flow back onto the quotation lines and win the opportunity behind them. Leads, opportunities, activities and quotations are also owned by the user named
 //! in `assigned_to` (`owner_fields`), so own-records permissions cover what is assigned to a rep.
 
 mod activity;

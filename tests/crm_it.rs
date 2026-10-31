@@ -62,16 +62,22 @@ async fn fresh_kernel() -> Arc<Kernel> {
     let db = Db::connect(DbConfig { url, max_connections: 10, ..Default::default() }).await.expect("connect");
     sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
     let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
     packages.extend(ferrum_app_crm::packages().expect("app packages"));
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
+    ferrum_app_erp::register(&mut hooks);
+    for source in ferrum_app_erp::reports() {
+        ferrum_domain::reports::add_source(source);
+    }
     ferrum_app_crm::register(&mut hooks);
     for source in ferrum_app_crm::reports() {
         ferrum_domain::reports::add_source(source);
     }
     let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("maintenance");
+    ferrum_app_erp::maintenance(&k).await.expect("maintenance");
     k
 }
 
