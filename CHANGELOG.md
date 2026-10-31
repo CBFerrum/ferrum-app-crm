@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.3
+
+- Rebuilt with Ferrum-Frontend a8d4dda: under the platform's bar the records frame no longer shows
+  a second bell (the bar has notifications). CRM's own colours follow the theme's (borders, surfaces, the accent on hover).
+
 ## 0.3.1
 
 - The launcher draws CRM with an icon (`contact`).
