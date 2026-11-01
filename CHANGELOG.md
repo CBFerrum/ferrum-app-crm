@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0
+
+- The pipeline is a board: drag a deal between stages, see what each is worth, drop it on Won or Lost. Touch
+  screens and keyboards have the same moves from each card's menu. A move that is refused goes back, with the reason.
+- A deal has a page of its own: where it stands, what is coming up, everything that happened, and a note, a call or
+  a task logged without leaving it. Mail from Comms joins the story when Comms is installed.
+- Today: what is due, in the order to work through it, with what asked to be followed up.
+- Duplicate leads merge; a sales forecast by month; quotations past a limit need someone else's approval.
+
 ## 0.3.5
 
 - The interface starts faster: its first download holds the frame and the app's own pages, and

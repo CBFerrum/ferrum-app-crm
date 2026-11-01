@@ -1,6 +1,6 @@
 id: crm
 name: CRM
-version: 0.3.5
+version: 0.4.0
 publisher: cbferrum
 summary: Leads, opportunities and pipeline, contacts, campaigns, activities and quotations
 description: README.md
@@ -28,6 +28,7 @@ contributes:
   shell.open:
     # Its own records, and the contacts it keeps (customers and items open where the workspace's
     # other apps show them, ERP's or this one's, by install order).
+    - {id: deal, entity: Opportunity, path: "crm/d/{id}", list: crm/, priority: 1}
     - {id: crm, package: crm, path: "crm/e/{entity}/{id}", list: "crm/e/{entity}"}
     - {id: contacts, package: contacts, path: "crm/e/{entity}/{id}", list: "crm/e/{entity}", priority: 1}
     - {id: parties, package: parties, path: "crm/e/{entity}/{id}", list: "crm/e/{entity}"}

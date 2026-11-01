@@ -1,6 +1,6 @@
-// CRM's own interface (Ferrum docs/plan/apps-ui.md §13, U4b) at /crm/: the pipeline on its home,
-// and leads, deals, contacts, customers, quotations and activities as lists and forms in the
-// records frame, with CRM's modules in the sidebar under the platform's bar. With ERP, the crm-erp
+// CRM's own interface (Ferrum docs/plan/apps-ui.md §13, U4b) at /crm/: the pipeline on its home, a
+// deal's whole story at /d/{id}, the day's work at /today, and leads, contacts, customers, quotations
+// and activities as lists and forms in the records frame, with CRM's modules in the sidebar under the platform's bar. With ERP, the crm-erp
 // connector's "Create Sales Order" on a quotation hands the order to ERP (records open through
 // /open, in the app that shows them).
 
@@ -11,7 +11,7 @@ import { createBrowserRouter, Link, RouterProvider, useRouteError } from "react-
 import { routeBase, shell } from "@ferrum/client";
 import { ConfirmHost, EmptyState, ErrorState, Toaster } from "@ferrum/kit";
 import { RequireAuth, setFrameMode } from "@ferrum/records/frame";
-import { CrmHome } from "./Home";
+import { Board } from "./Board";
 import "./styles.css";
 
 /** A page of the records frame, loaded when first opened. */
@@ -58,7 +58,9 @@ const router = createBrowserRouter(
       ),
       errorElement: <RouteError />,
       children: [
-        { index: true, element: <CrmHome /> },
+        { index: true, element: <Board /> },
+        { path: "today", lazy: () => import("./Today").then((m) => ({ Component: m.Today })) },
+        { path: "d/:id", lazy: () => import("./Deal").then((m) => ({ Component: m.DealRoute })) },
         { path: "e/:entity", lazy: page("ListView") },
         { path: "e/:entity/:id", lazy: page("FormView") },
         { path: "r/:name", lazy: page("ReportView") },
