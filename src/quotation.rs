@@ -10,7 +10,7 @@ use chrono::NaiveDate;
 use ferrum_app_erp::pricing::{Side, calculate};
 use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::{MapSpec, add_progress_in, created, map_document};
-use ferrum_domain::util::{d, date, id, money, rows, s, set, sys, unit_factor};
+use ferrum_domain::util::{b, d, date, id, money, rows, s, set, sys, unit_factor};
 use ferrum_kernel::value::parse_date;
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, Filter, HookCtx, Kernel, Op, Result, Tx};
 use rust_decimal::Decimal;
@@ -76,6 +76,15 @@ impl DocHook for QuotationHook {
         if d(doc, "docstatus").is_zero() {
             set(doc, "status", "Draft");
         }
+        let rules = approval_rules(hc).await?;
+        let needed = !applicable(&rules, doc).is_empty();
+        set(doc, "needs_approval", needed);
+        // What was approved is these numbers: other numbers have not been.
+        if s(doc, "approved_by").is_some() && (d(doc, "approved_total") != d(doc, "grand_total") || d(doc, "approved_discount") != d(doc, "discount_percent")) {
+            for f in ["approved_by", "approved_at", "approved_total", "approved_discount"] {
+                set(doc, f, Value::Null);
+            }
+        }
         Ok(())
     }
 
@@ -84,6 +93,9 @@ impl DocHook for QuotationHook {
     }
 
     async fn before_submit(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
+        if b(doc, "needs_approval") && s(doc, "approved_by").is_none() {
+            return Err(Error::invalid("this quotation is past what can go out without approval; ask for it first"));
+        }
         ferrum_app_erp::localization::check(hc, doc, Side::Selling).await
     }
 
@@ -106,9 +118,58 @@ impl DocHook for QuotationHook {
         match name {
             "make_sales_order" => make_sales_order(hc, doc).await.map(Some),
             "mark_lost" => mark_lost(hc, doc, params).await.map(Some),
+            "approve_quotation" => approve(hc, doc).await.map(Some),
             _ => Ok(None),
         }
     }
+}
+
+/// A limit past which a quotation needs someone else's approval.
+pub struct ApprovalRule {
+    discount_over: Option<Decimal>,
+    total_over: Option<Decimal>,
+    approver_role: String,
+}
+
+async fn approval_rules(hc: &mut HookCtx<'_>) -> Result<Vec<ApprovalRule>> {
+    let rows: Vec<(Option<Decimal>, Option<Decimal>, String)> =
+        sqlx::query_as("select discount_over, total_over, approver_role from e_quotation_approval_rule where tenant_id = $1 and enabled")
+            .bind(hc.ctx.tenant)
+            .fetch_all(&mut **hc.tx)
+            .await?;
+    Ok(rows.into_iter().map(|(discount_over, total_over, approver_role)| ApprovalRule { discount_over, total_over, approver_role }).collect())
+}
+
+/// The rules a quotation is past. Its total is compared in the company's currency.
+fn applicable<'a>(rules: &'a [ApprovalRule], doc: &Doc) -> Vec<&'a ApprovalRule> {
+    let (discount, total) = (d(doc, "discount_percent"), d(doc, "base_grand_total"));
+    rules.iter().filter(|r| r.discount_over.is_some_and(|l| discount > l) || r.total_over.is_some_and(|l| total > l)).collect()
+}
+
+/// Approves a draft: by someone with a role each limit it is past names, who did not raise it and
+/// does not own it. Not even an administrator approves their own.
+async fn approve(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
+    let rules = approval_rules(hc).await?;
+    let past = applicable(&rules, doc);
+    if past.is_empty() {
+        return Err(Error::invalid("this quotation needs no approval"));
+    }
+    let own = doc.get("created_by").and_then(Value::as_str) == Some(hc.ctx.user.to_string().as_str())
+        || s(doc, "assigned_to").is_some_and(|a| a.eq_ignore_ascii_case(&hc.ctx.email));
+    if own {
+        return Err(Error::Forbidden("someone else has to approve a quotation you raised".into()));
+    }
+    if let Some(r) = past.iter().find(|r| !hc.ctx.is_admin && !hc.ctx.has_role(&r.approver_role)) {
+        return Err(Error::Forbidden(format!("this needs a {}", r.approver_role)));
+    }
+    let mut v = Doc::new();
+    v.insert("approved_by".into(), json!(hc.ctx.email));
+    v.insert("approved_at".into(), json!(chrono::Utc::now().to_rfc3339()));
+    v.insert("approved_total".into(), doc.get("grand_total").cloned().unwrap_or(Value::Null));
+    v.insert("approved_discount".into(), doc.get("discount_percent").cloned().unwrap_or(Value::Null));
+    let quotation = id(doc, "id").ok_or_else(|| Error::internal("quotation without id"))?;
+    hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Quotation", quotation, v).await?;
+    Ok(json!({"approved_by": hc.ctx.email}))
 }
 
 /// A draft sales order for the quantities not ordered yet, at the quoted prices. Only a customer

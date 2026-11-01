@@ -630,6 +630,53 @@ async fn scenario() {
     assert!(kim["first_name"].as_str().unwrap().starts_with("Erased ") && kim["last_name"].is_null() && kim["email"].is_null(), "{kim:?}");
     assert!(kim["emails"].as_array().unwrap().is_empty() && kim["phones"].as_array().unwrap().is_empty());
 
+    // ── duplicate leads become one, and what hung off them stays ──
+    let first =
+        anna.insert("Lead", json!({"first_name": "Dana", "last_name": "Twice", "email": "dana@twice.test", "mobile": "+91 98765 00001", "company": cid})).await;
+    let again = anna
+        .insert("Lead", json!({"first_name": "D.", "last_name": "Twice", "email": "dana.work@twice.test", "mobile": "+91 98765 00001", "company": cid}))
+        .await;
+    let groups = k.duplicates(&maria.ctx, "Lead", 50).await.unwrap();
+    assert!(groups.iter().any(|g| g["ids"].as_array().is_some_and(|ids| ids.contains(&again["id"]) && ids.contains(&first["id"]))), "{groups:?}");
+    let deal = anna
+        .insert(
+            "Opportunity",
+            json!({"title": "Their deal", "opportunity_from": "Lead", "lead": again["id"], "company": cid, "sales_stage": stage("Proposal")}),
+        )
+        .await;
+    k.merge_records(&maria.ctx, "Lead", uid(&first), uid(&again), "The same person, entered twice").await.expect("merged");
+    assert_eq!(anna.get("Opportunity", uid(&deal)).await["lead"], first["id"], "their deal comes along");
+    assert_eq!(anna.get("Lead", uid(&again)).await["id"], first["id"], "the old id answers with what it became");
+
+    // ── a forecast by month, weighted, and honest about what has no date ──
+    let month = today().format("%Y-%m").to_string();
+    let forecast = maria.report("sales_forecast", &[company_param.clone(), ("from_date", today().to_string()), ("to_date", today().to_string())]).await;
+    let row = forecast["rows"].as_array().unwrap().iter().find(|r| r["month"] == json!(month)).cloned();
+    assert!(row.is_some(), "{forecast}");
+    assert!(forecast["meta"]["without_a_date"].as_i64().unwrap() >= 1, "their deal has no date: counted apart, {forecast}");
+
+    // ── big discounts and totals need someone else ──
+    admin
+        .insert("QuotationApprovalRule", json!({"rule_name": "Big ones", "discount_over": "10", "total_over": "100000", "approver_role": "Sales Manager"}))
+        .await;
+    let quote = anna.insert("Quotation", json!({"company": cid, "party_type": "Customer", "customer": acme, "items": [{"item": widget, "qty": "10", "rate": "100"}], "discount_percent": "5"})).await;
+    assert_eq!(quote["needs_approval"], json!(false), "within the limits");
+    let q = uid(&quote);
+    let quote = anna.update("Quotation", q, json!({"discount_percent": "20"})).await;
+    assert_eq!(quote["needs_approval"], json!(true));
+    refused(anna.k.submit(&anna.ctx, "Quotation", q, None).await, "approval");
+    refused(anna.k.run_action(&anna.ctx, "Quotation", q, "approve_quotation", json!({})).await, "someone else");
+    refused(ben.k.run_action(&ben.ctx, "Quotation", q, "approve_quotation", json!({})).await, "not found");
+    maria.action("Quotation", q, "approve_quotation", json!({})).await;
+    let quote = anna.get("Quotation", q).await;
+    assert_eq!(quote["approved_by"], json!("maria@crm.test"));
+    // The number approved is the number that goes out.
+    let quote = anna.update("Quotation", q, json!({"discount_percent": "30"})).await;
+    assert!(quote["approved_by"].is_null(), "another discount is another decision");
+    refused(anna.k.submit(&anna.ctx, "Quotation", q, None).await, "approval");
+    maria.action("Quotation", q, "approve_quotation", json!({})).await;
+    assert_eq!(anna.submit("Quotation", q).await["docstatus"], json!(1), "approved, and unchanged");
+
     crm_alone(&k).await;
 }
 

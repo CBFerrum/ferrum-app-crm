@@ -60,6 +60,11 @@
     - {name: campaign, type: link, to: Campaign, in_filter: true}
     - {name: assigned_to, type: email, default_expr: "user.email", label: Quotation Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the quotation"}
     - {name: terms, type: text}
+    - {name: needs_approval, type: check, read_only: true, no_copy: true, in_filter: true}
+    - {name: approved_by, type: email, read_only: true, no_copy: true}
+    - {name: approved_at, type: datetime, read_only: true, no_copy: true}
+    - {name: approved_total, type: currency, read_only: true, no_copy: true, hidden: true}
+    - {name: approved_discount, type: percent, read_only: true, no_copy: true, hidden: true}
   form:
     - {label: Quotation, fields: [company, party_type, customer, lead, party_name, contact, opportunity, posting_date, valid_till, assigned_to]}
     - {label: Currency and Price List, collapsible: true, fields: [currency, conversion_rate, price_list]}
@@ -71,5 +76,6 @@
     - {name: validity_after_date, check: "doc.valid_till == null || doc.valid_till >= doc.posting_date", message: "Valid till cannot be before the quotation date"}
     - {name: has_items, check: "size(doc.items) > 0", message: "Add at least one item", on: submit}
   actions:
+    - {name: approve_quotation, label: Approve, docstatus: [0], permission: write, condition: "doc.needs_approval && doc.approved_by == null"}
     - {name: mark_lost, label: Mark as Lost, docstatus: [1], permission: submit, condition: "doc.status == 'Open' || doc.status == 'Expired'"}
   list: {columns: [number, party_name, posting_date, valid_till, grand_total, status], sort: posting_date desc}

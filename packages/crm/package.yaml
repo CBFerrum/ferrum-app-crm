@@ -23,8 +23,8 @@ modules:
     label: CRM
     icon: handshake
     order: 35
-    items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, Address, Customer, Item, Campaign, SalesStage, Territory, LostReason,
-            report:sales_pipeline, report:lead_funnel, report:campaign_performance, report:quotation_register]
+    items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, Address, Customer, Item, Campaign, SalesStage, Territory, LostReason, QuotationApprovalRule,
+            report:sales_pipeline, report:sales_forecast, report:lead_funnel, report:campaign_performance, report:quotation_register]
 
 roles:
   - name: Sales User
@@ -53,6 +53,7 @@ roles:
       - {entity: Address, read: true, write: true, create: true, delete: true, export: true, import: true}
       - {entity: Campaign, read: true, write: true, create: true, delete: true, export: true}
       - {entity: SalesStage, read: true, write: true, create: true, delete: true}
+      - {entity: QuotationApprovalRule, read: true, write: true, create: true, delete: true}
       - {entity: Territory, read: true, write: true, create: true, delete: true}
       - {entity: LostReason, read: true, write: true, create: true, delete: true}
       - {entity: Customer, read: true, write: true, create: true, export: true}
