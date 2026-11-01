@@ -126,3 +126,9 @@ seed:
     key: [territory_name]
     records:
       - {territory_name: All Territories, is_group: true}
+handover:
+  - {entity: Lead, field: assigned_to, where: {status: [New, Contacted, Qualified]}}
+  - {entity: Opportunity, field: assigned_to, where: {status: Open}}
+  - {entity: Activity, field: assigned_to, where: {status: Open}}
+  - {entity: Quotation, field: assigned_to, where: {status: [Draft, Open]}}
+  - {entity: Prospect, field: assigned_to}
