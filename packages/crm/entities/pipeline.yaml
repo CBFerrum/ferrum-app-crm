@@ -3,6 +3,8 @@
   kind: document
   module: crm
   title_field: lead_name
+  mergeable: true
+  duplicate_fields: [email, mobile, phone]
   company_scoped: true
   numbering: {template: "LEAD-{YYYY}-{seq:5}"}
   search_fields: [organization_name, email, phone, mobile]

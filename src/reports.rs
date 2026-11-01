@@ -25,6 +25,8 @@ impl ReportSource for CrmReports {
             json!({"name": "sales_pipeline", "label": "Sales Pipeline", "module": "crm", "entity": "Opportunity", "params": [
                 param_def("company"), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"},
                 date("from_date", "Expected Close From"), date("to_date", "Expected Close To")]}),
+            json!({"name": "sales_forecast", "label": "Sales Forecast", "module": "crm", "entity": "Opportunity", "params": [
+                param_def("company"), param_def("from_date"), param_def("to_date"), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"}]}),
             json!({"name": "lead_funnel", "label": "Lead Funnel and Conversion", "module": "crm", "entity": "Lead", "params": [
                 param_def("company"), param_def("from_date"), param_def("to_date"),
                 {"name": "group_by", "label": "Group By", "type": "select", "options": ["Source", "Campaign", "Territory", "Lead Owner"], "default": "Source"}]}),
@@ -42,6 +44,7 @@ impl ReportSource for CrmReports {
         let co = resolve_company(&mut tx, ctx, &p).await?;
         let mut out = match name {
             "sales_pipeline" => pipeline(k, ctx, &mut tx, &co, &p).await?,
+            "sales_forecast" => forecast(k, ctx, &mut tx, &co, &p).await?,
             "lead_funnel" => funnel(k, ctx, &mut tx, &co, &p).await?,
             "campaign_performance" => campaigns(k, ctx, &mut tx, &co, &p).await?,
             "quotation_register" => quotations(k, ctx, &mut tx, &co, &p).await?,
@@ -70,6 +73,47 @@ pub(crate) fn pct(part: Decimal, whole: Decimal) -> Decimal {
 
 fn next_day(d: NaiveDate) -> NaiveDate {
     d.succ_opt().unwrap_or(d)
+}
+
+/// Open deals by the month they should close, at their value and weighted by their probability,
+/// beside what was won in that month. Deals with no expected date are not forecast: they are counted
+/// apart, so nobody takes them for nothing.
+async fn forecast(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
+    let (from, to) = period(p, co)?;
+    let mut qb = QueryBuilder::new(
+        "select to_char(o.expected_close_date, 'YYYY-MM'), count(*) filter (where o.status = 'Open'), \
+         coalesce(sum(o.base_amount) filter (where o.status = 'Open'), 0), coalesce(sum(o.base_weighted_amount) filter (where o.status = 'Open'), 0), \
+         coalesce(sum(o.base_amount) filter (where o.status = 'Won'), 0) \
+         from e_opportunity o where o.status in ('Open', 'Won') and o.tenant_id = ",
+    );
+    qb.push_bind(ctx.tenant).push(" and o.company = ").push_bind(co.id);
+    qb.push(" and o.expected_close_date >= ").push_bind(from).push(" and o.expected_close_date <= ").push_bind(to);
+    if let Some(owner) = p.str("assigned_to") {
+        qb.push(" and o.assigned_to = ").push_bind(owner.to_lowercase());
+    }
+    scope(k, ctx, "Opportunity", &mut qb, "o")?;
+    qb.push(" group by 1 order by 1");
+    let data: Vec<(String, i64, Decimal, Decimal, Decimal)> = qb.build_query_as().fetch_all(&mut **tx).await?;
+    let mut undated = QueryBuilder::new("select count(*) from e_opportunity o where o.status = 'Open' and o.expected_close_date is null and o.tenant_id = ");
+    undated.push_bind(ctx.tenant).push(" and o.company = ").push_bind(co.id);
+    scope(k, ctx, "Opportunity", &mut undated, "o")?;
+    let undated: i64 = undated.build_query_scalar().fetch_one(&mut **tx).await?;
+    let (mut amount, mut weighted, mut won) = (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO);
+    let rows: Vec<Value> = data
+        .into_iter()
+        .map(|(month, count, a, w, x)| {
+            amount += a;
+            weighted += w;
+            won += x;
+            json!({"month": month, "count": count, "amount": money(a), "weighted": money(w), "won": money(x)})
+        })
+        .collect();
+    Ok(json!({
+        "columns": [col("month", "Month", "data"), col("count", "Open Deals", "int"), col("amount", "Amount", "currency"), col("weighted", "Weighted", "currency"), col("won", "Won", "currency")],
+        "rows": rows,
+        "totals": {"amount": money(amount), "weighted": money(weighted), "won": money(won)},
+        "meta": {"from_date": from, "to_date": to, "without_a_date": undated},
+    }))
 }
 
 async fn pipeline(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
@@ -379,7 +423,7 @@ mod tests {
     #[test]
     fn catalog_names_entities_and_params() {
         let c = CrmReports.catalog();
-        assert_eq!(c.len(), 4);
+        assert_eq!(c.len(), 5);
         assert!(c.iter().all(|r| r["entity"].is_string() && r["params"].as_array().is_some_and(|p| p.iter().any(|x| x["name"] == "company"))));
     }
 }
