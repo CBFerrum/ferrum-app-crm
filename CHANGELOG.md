@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.1
+
+Rebuilt with Ferrum-Frontend 80ff179: a field's label names its control for assistive technology, and a record whose title is a link shows that record's title, not its id.
+
 ## 0.4.0
 
 - The pipeline is a board: drag a deal between stages, see what each is worth, drop it on Won or Lost. Touch
