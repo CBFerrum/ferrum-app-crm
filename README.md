@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.5.1** | A draft quotation that breaks the product rules has an action, Add What the Rules Need: it adds each item a line requires and the shortfall of one needed per … |
 | **0.5.0** | Campaign attribution and product rules |
 | **0.4.3** | Personal-data requests find lead records by the person's phone number as well as their email, and list the lead records holding their name apart, for an … |
 | **0.4.2** | Rebuilt with Ferrum-Frontend daeadda: after an action runs, a record page shows what the action said it did rather than only that it is done. |
