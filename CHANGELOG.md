@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.3
+
+Personal-data requests find lead records by the person's phone number as well as their email, and list the lead records holding their name apart, for an administrator to judge (never erased for the name alone) (Ferrum's FERRUM-PRIVACY-002).
+
 ## 0.4.2
 
 Rebuilt with Ferrum-Frontend daeadda: after an action runs, a record page shows what the action said it did rather than only that it is done.

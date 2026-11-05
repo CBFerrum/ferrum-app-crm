@@ -99,7 +99,7 @@ roles:
 
 # What a personal-data request exports and erases for a person (their email).
 personal_data:
-  - {entity: Lead, match: email, erase: [first_name, last_name, lead_name, job_title, email, phone, mobile]}
+  - {entity: Lead, match: email, phone: phone, name: lead_name, erase: [first_name, last_name, lead_name, job_title, email, phone, mobile]}
 seed:
   - entity: SalesStage
     key: [stage_name]
