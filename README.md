@@ -197,17 +197,19 @@ erDiagram
 
 | Role | What it is for | Entities |
 |---|---|---|
-| **Sales User** | Works the leads, opportunities and activities they own, and their quotations. | 11 |
-| **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 22 |
+| **Sales User** | Works the leads, opportunities and activities they own, and their quotations. | 12 |
+| **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 24 |
 | **Marketing Manager** | Campaigns and lead generation. | 12 |
 | **CRM Viewer** | Read-only access to CRM records and reports. | 11 |
 
 <details>
-<summary><b>Reports (4)</b></summary>
+<summary><b>Reports (6)</b></summary>
 
 - Sales Pipeline
+- Sales Forecast
 - Lead Funnel
 - Campaign Performance
+- Campaign Attribution (linear, first or last touch)
 - Quotation Register
 
 </details>
@@ -287,6 +289,8 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.5.0** | Campaign attribution and product rules |
+| **0.4.3** | Personal-data requests find lead records by the person's phone number as well as their email, and list the lead records holding their name apart, for an … |
 | **0.4.2** | Rebuilt with Ferrum-Frontend daeadda: after an action runs, a record page shows what the action said it did rather than only that it is done. |
 | **0.4.1** | Rebuilt with Ferrum-Frontend 80ff179: a field's label names its control for assistive technology, and a record whose title is a link shows that record's title, … |
 | **0.4.0** | The pipeline is a board: drag a deal between stages, see what each is worth, drop it on Won or Lost. Touch screens and keyboards have the same moves from each … |
