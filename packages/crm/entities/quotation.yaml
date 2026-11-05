@@ -54,7 +54,7 @@
     - {name: base_grand_total, type: currency, read_only: true}
     - {name: base_rounded_total, type: currency, read_only: true}
     - {name: per_ordered, type: percent, read_only: true, no_copy: true}
-    - {name: status, type: select, options: [Draft, Open, Partially Ordered, Ordered, Lost, Expired, Cancelled], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: status, type: select, options: [Draft, Open, Partially Ordered, Ordered, Lost, Expired, Cancelled], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "Ordered once ERP makes sales orders from it: a submitted quotation offers Create Sales Order where ERP and the CRM and ERP connector are installed"}
     - {name: lost_reason, type: link, to: LostReason, read_only: true, no_copy: true}
     - {name: lost_detail, type: text, read_only: true, no_copy: true}
     - {name: campaign, type: link, to: Campaign, in_filter: true}
