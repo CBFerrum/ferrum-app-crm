@@ -737,6 +737,14 @@ async fn scenario() {
     assert!(issues.contains("Two kits hold each widget (6 of Mounting Kit for 3 of Widget, not 0)"), "{issues}");
     let q = uid(&quote);
     refused(anna.k.submit(&anna.ctx, "Quotation", q, None).await, "product rules");
+    // What the rules need can be added for you, priced like any line.
+    let added = anna.action("Quotation", q, "add_rule_needs", json!({})).await;
+    let said = added["message"].as_str().unwrap_or_default();
+    assert!(said.starts_with("Added ") && said.contains("Mounting Kit × 6") && said.contains("Installation × 1"), "{added}");
+    let quote = anna.get("Quotation", q).await;
+    assert!(quote["rule_issues"].is_null(), "nothing left broken: {quote:?}");
+    assert_eq!(quote["items"].as_array().map(Vec::len), Some(3));
+    assert!(quote["items"].as_array().unwrap().iter().all(|l| dec(&l["rate"]) > Decimal::ZERO), "each line priced");
     let all = json!([{"item": widget, "qty": "3"}, {"item": service, "qty": "1"}, {"item": kit, "qty": "6"}, {"item": guide, "qty": "1"}]);
     let quote = anna.update("Quotation", q, lines(all)).await;
     assert_eq!(quote["rule_issues"], json!("Installed or self-fitted, not both (Installation is not quoted with Self-fit Guide)"));
