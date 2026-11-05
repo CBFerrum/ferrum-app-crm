@@ -61,6 +61,7 @@
     - {name: assigned_to, type: email, default_expr: "user.email", label: Quotation Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the quotation"}
     - {name: terms, type: text}
     - {name: needs_approval, type: check, read_only: true, no_copy: true, in_filter: true}
+    - {name: rule_issues, type: text, read_only: true, no_copy: true, visible_if: "doc.rule_issues != null && doc.rule_issues != ''", label: Product Rules Broken, description: What the lines break of the product rules; it is not submitted until none are}
     - {name: approved_by, type: email, read_only: true, no_copy: true}
     - {name: approved_at, type: datetime, read_only: true, no_copy: true}
     - {name: approved_total, type: currency, read_only: true, no_copy: true, hidden: true}

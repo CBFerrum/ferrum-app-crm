@@ -15,6 +15,7 @@ use ferrum_kernel::value::parse_date;
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, Filter, HookCtx, Kernel, Op, Result, Tx};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 /// Validity of a quotation when none is given.
@@ -79,6 +80,9 @@ impl DocHook for QuotationHook {
         let rules = approval_rules(hc).await?;
         let needed = !applicable(&rules, doc).is_empty();
         set(doc, "needs_approval", needed);
+        // A draft may be incomplete; it says what it breaks, and submitting waits until nothing.
+        let broken = product_rule_issues(hc, doc).await?;
+        set(doc, "rule_issues", if broken.is_empty() { Value::Null } else { json!(broken.join("\n")) });
         // What was approved is these numbers: other numbers have not been.
         if s(doc, "approved_by").is_some() && (d(doc, "approved_total") != d(doc, "grand_total") || d(doc, "approved_discount") != d(doc, "discount_percent")) {
             for f in ["approved_by", "approved_at", "approved_total", "approved_discount"] {
@@ -95,6 +99,10 @@ impl DocHook for QuotationHook {
     async fn before_submit(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
         if b(doc, "needs_approval") && s(doc, "approved_by").is_none() {
             return Err(Error::invalid("this quotation is past what can go out without approval; ask for it first"));
+        }
+        let broken = product_rule_issues(hc, doc).await?;
+        if !broken.is_empty() {
+            return Err(Error::field("items", format!("the lines break the product rules: {}", broken.join("; "))));
         }
         ferrum_app_erp::localization::check(hc, doc, Side::Selling).await
     }
@@ -138,6 +146,59 @@ async fn approval_rules(hc: &mut HookCtx<'_>) -> Result<Vec<ApprovalRule>> {
             .fetch_all(&mut **hc.tx)
             .await?;
     Ok(rows.into_iter().map(|(discount_over, total_over, approver_role)| ApprovalRule { discount_over, total_over, approver_role }).collect())
+}
+
+/// What the quotation's lines break of the product rules, one sentence each: an item without the
+/// one it requires, two that exclude each other, or too few of another per unit (in stock units).
+async fn product_rule_issues(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Vec<String>> {
+    let mut qty: HashMap<Uuid, Decimal> = HashMap::new();
+    let mut names: HashMap<Uuid, String> = HashMap::new();
+    for line in rows(doc, "items") {
+        let Some(item) = id(&line, "item") else { continue };
+        let stock = d(&line, "stock_qty");
+        *qty.entry(item).or_default() += if stock.is_zero() { d(&line, "qty") } else { stock };
+        if let Some(n) = s(&line, "item_name") {
+            names.insert(item, n.to_string());
+        }
+    }
+    if qty.is_empty() {
+        return Ok(vec![]);
+    }
+    let items: Vec<Uuid> = qty.keys().copied().collect();
+    let rules: Vec<(Uuid, String, Uuid, Option<Decimal>, String)> = sqlx::query_as(
+        "select item, rule, other_item, qty_per_unit, description from e_product_rule \
+         where tenant_id = $1 and not coalesce(disabled, false) and item = any($2) order by description, id",
+    )
+    .bind(hc.ctx.tenant)
+    .bind(&items)
+    .fetch_all(&mut **hc.tx)
+    .await?;
+    let unnamed: Vec<Uuid> = rules.iter().map(|r| r.2).filter(|o| !names.contains_key(o)).collect();
+    if !unnamed.is_empty() {
+        let found: Vec<(Uuid, String)> = sqlx::query_as("select id, item_name from e_item where tenant_id = $1 and id = any($2)")
+            .bind(hc.ctx.tenant)
+            .bind(&unnamed)
+            .fetch_all(&mut **hc.tx)
+            .await?;
+        names.extend(found);
+    }
+    let name = |i: &Uuid| names.get(i).cloned().unwrap_or_else(|| i.to_string());
+    let mut out = Vec::new();
+    for (item, rule, other, per, why) in rules {
+        let (mine, theirs) = (qty.get(&item).copied().unwrap_or_default(), qty.get(&other).copied().unwrap_or_default());
+        match rule.as_str() {
+            "Requires" if theirs.is_zero() => out.push(format!("{why} ({} needs {})", name(&item), name(&other))),
+            "Excludes" if !theirs.is_zero() => out.push(format!("{why} ({} is not quoted with {})", name(&item), name(&other))),
+            "At least per unit" => {
+                let need = (mine * per.unwrap_or_default()).normalize();
+                if theirs < need {
+                    out.push(format!("{why} ({need} of {} for {} of {}, not {})", name(&other), mine.normalize(), name(&item), theirs.normalize()));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 /// The rules a quotation is past. Its total is compared in the company's currency.

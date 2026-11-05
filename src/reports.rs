@@ -1,5 +1,6 @@
 //! CRM reports: the open pipeline by stage, the lead funnel with conversion rates, campaign
-//! performance and the quotation register (quoted vs ordered vs lost). Each report sees only the
+//! performance, the revenue each campaign brought in by an attribution model, and the quotation
+//! register (quoted vs ordered vs lost). Each report sees only the
 //! records the caller may read (own records for a sales user), like lists do.
 
 use async_trait::async_trait;
@@ -32,6 +33,9 @@ impl ReportSource for CrmReports {
                 {"name": "group_by", "label": "Group By", "type": "select", "options": ["Source", "Campaign", "Territory", "Lead Owner"], "default": "Source"}]}),
             json!({"name": "campaign_performance", "label": "Campaign Performance", "module": "crm", "entity": "Campaign", "params": [
                 param_def("company"), date("from_date", "Running From"), date("to_date", "Running To")]}),
+            json!({"name": "campaign_attribution", "label": "Campaign Attribution", "module": "crm", "entity": "Opportunity", "params": [
+                param_def("company"), date("from_date", "Won From"), date("to_date", "Won To"),
+                {"name": "model", "label": "Model", "type": "select", "options": ["Linear", "First Touch", "Last Touch"], "default": "Linear"}]}),
             json!({"name": "quotation_register", "label": "Quotation Register", "module": "crm", "entity": "Quotation", "params": [
                 param_def("company"), param_def("from_date"), param_def("to_date"), param_def("customer"),
                 {"name": "status", "label": "Status", "type": "select", "options": ["Open", "Partially Ordered", "Ordered", "Lost", "Expired"]}]}),
@@ -47,6 +51,7 @@ impl ReportSource for CrmReports {
             "sales_forecast" => forecast(k, ctx, &mut tx, &co, &p).await?,
             "lead_funnel" => funnel(k, ctx, &mut tx, &co, &p).await?,
             "campaign_performance" => campaigns(k, ctx, &mut tx, &co, &p).await?,
+            "campaign_attribution" => attribution(k, ctx, &mut tx, &co, &p).await?,
             "quotation_register" => quotations(k, ctx, &mut tx, &co, &p).await?,
             _ => return Err(Error::NotFound(format!("report {name}"))),
         };
@@ -296,6 +301,134 @@ async fn campaigns(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &P
     }))
 }
 
+/// How a won deal's revenue is shared among the campaigns that touched it on its way: the lead's,
+/// the opportunity's and its submitted quotations', in the order they were made.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Model {
+    /// All of it to the campaign that brought the deal in.
+    First,
+    /// All of it to the last campaign before it was won.
+    Last,
+    /// Equal parts to every campaign that touched it, each counted once.
+    Linear,
+}
+
+/// One deal's `amount` shared among the campaigns of its `touches` (in the order they happened) by
+/// `model`, to `precision` places; the last share takes what rounding leaves, so the parts add up.
+fn split(amount: Decimal, touches: &[Uuid], model: Model, precision: u32) -> Vec<(Uuid, Decimal, Decimal)> {
+    let mut distinct: Vec<Uuid> = Vec::new();
+    for t in touches {
+        if !distinct.contains(t) {
+            distinct.push(*t);
+        }
+    }
+    let chosen: Vec<Uuid> = match model {
+        Model::First => distinct.first().copied().into_iter().collect(),
+        Model::Last => touches.last().copied().into_iter().collect(),
+        Model::Linear => distinct,
+    };
+    let n = Decimal::from(chosen.len());
+    let mut left = amount;
+    chosen
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let part = if i + 1 == chosen.len() { left } else { (amount / n).round_dp(precision) };
+            left -= part;
+            (*c, Decimal::ONE / n, part)
+        })
+        .collect()
+}
+
+/// Won deals' revenue by the campaigns that brought them in, by an attribution model; deals no
+/// campaign touched are a line of their own, so the campaigns' share is never overstated.
+async fn attribution(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
+    let (from, to) = period(p, co)?;
+    let model = match p.str("model").unwrap_or("Linear") {
+        "First Touch" => Model::First,
+        "Last Touch" => Model::Last,
+        "Linear" => Model::Linear,
+        other => return Err(Error::field("model", format!("{other} is not a model: Linear, First Touch or Last Touch"))),
+    };
+    let mut qb = QueryBuilder::new(
+        "select o.id, coalesce(o.base_amount, 0), o.created_at, o.campaign, l.created_at, l.campaign from e_opportunity o \
+         left join e_lead l on l.tenant_id = o.tenant_id and l.id = o.lead where o.status = 'Won' and o.tenant_id = ",
+    );
+    qb.push_bind(ctx.tenant).push(" and o.company = ").push_bind(co.id);
+    qb.push(" and o.closed_on >= ").push_bind(from).push(" and o.closed_on <= ").push_bind(to);
+    scope(k, ctx, "Opportunity", &mut qb, "o")?;
+    qb.push(" order by o.id limit ").push_bind(MAX_ROWS + 1);
+    type Deal = (Uuid, Decimal, chrono::DateTime<chrono::Utc>, Option<Uuid>, Option<chrono::DateTime<chrono::Utc>>, Option<Uuid>);
+    let deals: Vec<Deal> = qb.build_query_as().fetch_all(&mut **tx).await?;
+    let truncated = deals.len() as i64 > MAX_ROWS;
+    let ids: Vec<Uuid> = deals.iter().map(|d| d.0).collect();
+    let quoted: Vec<(Uuid, chrono::DateTime<chrono::Utc>, Uuid)> = sqlx::query_as(
+        "select q.opportunity, q.created_at, q.campaign from e_quotation q where q.tenant_id = $1 and q.opportunity = any($2) \
+         and q.campaign is not null and q.docstatus = 1",
+    )
+    .bind(ctx.tenant)
+    .bind(&ids)
+    .fetch_all(&mut **tx)
+    .await?;
+    // campaign -> (deals touched, attributed deals, revenue); None for deals no campaign touched.
+    let mut by: HashMap<Option<Uuid>, (i64, Decimal, Decimal)> = HashMap::new();
+    let (mut won, mut revenue) = (0i64, Decimal::ZERO);
+    for (id, amount, made, own, lead_made, lead_campaign) in deals.into_iter().take(MAX_ROWS as usize) {
+        let mut touches: Vec<(chrono::DateTime<chrono::Utc>, Uuid)> = Vec::new();
+        touches.extend(lead_made.zip(lead_campaign));
+        touches.extend(own.map(|c| (made, c)));
+        touches.extend(quoted.iter().filter(|q| q.0 == id).map(|q| (q.1, q.2)));
+        touches.sort();
+        let order: Vec<Uuid> = touches.into_iter().map(|t| t.1).collect();
+        won += 1;
+        revenue += amount;
+        let parts = split(amount, &order, model, co.precision);
+        if parts.is_empty() {
+            let e = by.entry(None).or_default();
+            e.0 += 1;
+            e.1 += Decimal::ONE;
+            e.2 += amount;
+        }
+        for (campaign, share, part) in parts {
+            let e = by.entry(Some(campaign)).or_default();
+            e.0 += 1;
+            e.1 += share;
+            e.2 += part;
+        }
+    }
+    let named: Vec<Uuid> = by.keys().flatten().copied().collect();
+    let names: HashMap<Uuid, String> = sqlx::query_as::<_, (Uuid, String)>("select id, campaign_name from e_campaign where tenant_id = $1 and id = any($2)")
+        .bind(ctx.tenant)
+        .bind(&named)
+        .fetch_all(&mut **tx)
+        .await?
+        .into_iter()
+        .collect();
+    let mut lines: Vec<(Option<Uuid>, (i64, Decimal, Decimal))> = by.into_iter().collect();
+    // The most revenue first; deals no campaign touched last.
+    lines.sort_by(|a, b| a.0.is_none().cmp(&b.0.is_none()).then(b.1.2.cmp(&a.1.2)));
+    let rows: Vec<Value> = lines
+        .into_iter()
+        .map(|(c, (touched, deals, amount))| {
+            json!({"campaign": c.map(|c| names.get(&c).cloned().unwrap_or_else(|| c.to_string())).unwrap_or_else(|| "No campaign".into()),
+                   "campaign_id": c, "deals_touched": touched, "attributed_deals": money(deals.round_dp(2)), "revenue": money(amount),
+                   "share_pct": money(pct(amount, revenue))})
+        })
+        .collect();
+    let model_name = match model {
+        Model::First => "First Touch",
+        Model::Last => "Last Touch",
+        Model::Linear => "Linear",
+    };
+    Ok(json!({
+        "columns": [col("campaign", "Campaign", "data"), col("deals_touched", "Won Deals Touched", "int"), col("attributed_deals", "Attributed Deals", "decimal"),
+            col("revenue", "Attributed Revenue", "currency"), col("share_pct", "Share %", "decimal")],
+        "rows": rows,
+        "totals": {"won_deals": won, "revenue": money(revenue)},
+        "meta": {"from_date": from, "to_date": to, "model": model_name, "truncated": truncated},
+    }))
+}
+
 /// One campaign line: counts, money, cost per lead and return on the money spent.
 fn campaign_row(
     mut head: Value,
@@ -421,9 +554,26 @@ mod tests {
     }
 
     #[test]
+    fn attribution_models() {
+        let (a, b, c) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3));
+        let touches = [a, b, a, c];
+        let parts = |m| split(Decimal::from(100), &touches, m, 2);
+        assert_eq!(parts(Model::First), vec![(a, Decimal::ONE, Decimal::from(100))]);
+        assert_eq!(parts(Model::Last), vec![(c, Decimal::ONE, Decimal::from(100))], "the last touch, a repeat or not");
+        let linear = parts(Model::Linear);
+        assert_eq!(linear.iter().map(|p| p.0).collect::<Vec<_>>(), vec![a, b, c], "each campaign once, in the order it first touched");
+        assert_eq!(
+            linear.iter().map(|p| p.2).collect::<Vec<_>>(),
+            vec![Decimal::new(3333, 2), Decimal::new(3333, 2), Decimal::new(3334, 2)],
+            "the parts add up"
+        );
+        assert!(split(Decimal::from(100), &[], Model::Linear, 2).is_empty(), "no campaign, no share");
+    }
+
+    #[test]
     fn catalog_names_entities_and_params() {
         let c = CrmReports.catalog();
-        assert_eq!(c.len(), 5);
+        assert_eq!(c.len(), 6);
         assert!(c.iter().all(|r| r["entity"].is_string() && r["params"].as_array().is_some_and(|p| p.iter().any(|x| x["name"] == "company"))));
     }
 }
