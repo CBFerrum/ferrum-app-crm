@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+A draft quotation that breaks the product rules has an action, Add What the Rules Need: it adds each
+item a line requires and the shortfall of one needed per unit, priced like any line, and says what it
+added. Two items that exclude each other are left for a person to choose between.
+
 ## 0.5.0: campaign attribution and product rules
 
 A Campaign Attribution report: the revenue of the deals won in a period, shared among the campaigns
