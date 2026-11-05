@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.0: email clicks as attribution touches
+
+Where the Campaigns app and its CRM link (Campaigns' `campaigns_crm`) are installed, an email
+campaign can belong to one of CRM's campaigns, and Campaign Attribution counts a click on it from the
+address of a won deal's lead or contact, before the deal was won, as a touch of that campaign in the
+order it happened. Opens are not touches: mail clients and their privacy proxies open mail by
+themselves (FERRUM-CRM-002).
+
 ## 0.5.1
 
 A draft quotation that breaks the product rules has an action, Add What the Rules Need: it adds each
