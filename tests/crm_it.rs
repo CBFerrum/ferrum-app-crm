@@ -551,6 +551,34 @@ async fn scenario() {
     assert_eq!(dec(&row["cost_per_lead"]), n("800"));
     assert_eq!(dec(&row["roi_pct"]), n("150"), "(2000 won - 800 spent) / 800");
 
+    // Attribution: Jane's deal (her lead, its opportunity and its quotation all Expo's) is Expo's
+    // under every model. A webinar's lead whose deal Expo then took on is shared by the model.
+    let webinar =
+        maria.insert("Campaign", json!({"campaign_name": "Webinar", "campaign_type": "Webinar", "status": "Active", "start_date": today().to_string()})).await;
+    let l4 = anna
+        .insert("Lead", json!({"first_name": "Dev", "last_name": "Rao", "organization_name": "Rao Works", "email": "dev@rao.test", "campaign": webinar["id"]}))
+        .await;
+    let o4 = vid(&anna.action("Lead", uid(&l4), "make_opportunity", json!({})).await);
+    anna.update("Opportunity", o4, json!({"campaign": expo["id"], "amount": "300"})).await;
+    let won = anna.update("Opportunity", o4, json!({"sales_stage": stage("Won")})).await;
+    assert_eq!((won["status"].clone(), dec(&won["base_amount"])), (json!("Won"), n("300")));
+    let attributed = |r: &Value, name: &str| {
+        r["rows"].as_array().unwrap().iter().find(|x| x["campaign"] == json!(name)).map(|x| (x["deals_touched"].as_i64().unwrap(), dec(&x["revenue"])))
+    };
+    for (model, expo_gets, webinar_gets) in [("Linear", "2150", Some("150")), ("First Touch", "2000", Some("300")), ("Last Touch", "2300", None)] {
+        let r = maria.report("campaign_attribution", &[company_param.clone(), ("model", model.into())]).await;
+        assert_eq!(attributed(&r, "Expo 2026").map(|a| a.1), Some(n(expo_gets)), "{model}: {r}");
+        assert_eq!(attributed(&r, "Webinar").map(|a| a.1), webinar_gets.map(n), "{model}: {r}");
+        assert_eq!(r["meta"]["model"], json!(model));
+    }
+    let linear = maria.report("campaign_attribution", std::slice::from_ref(&company_param)).await;
+    assert_eq!(attributed(&linear, "Expo 2026").map(|a| a.0), Some(2), "both deals touched by Expo");
+    let total: rust_decimal::Decimal = linear["rows"].as_array().unwrap().iter().map(|x| dec(&x["revenue"])).sum();
+    assert_eq!(total, dec(&linear["totals"]["revenue"]), "the shares add up to what was won");
+    assert!(ben.k.get(&ben.ctx, "Opportunity", o4, false).await.is_err(), "Ben reads none of these deals");
+    let bens = ben.report("campaign_attribution", std::slice::from_ref(&company_param)).await;
+    assert_eq!(bens["totals"]["won_deals"], json!(0), "and his report counts none of them");
+
     let reg = maria.report("quotation_register", std::slice::from_ref(&company_param)).await;
     let t = &reg["totals"];
     assert_eq!(t["count"], json!(5), "Q1, Q3, Q6, the expired and the backdated one");
@@ -676,6 +704,45 @@ async fn scenario() {
     refused(anna.k.submit(&anna.ctx, "Quotation", q, None).await, "approval");
     maria.action("Quotation", q, "approve_quotation", json!({})).await;
     assert_eq!(anna.submit("Quotation", q).await["docstatus"], json!(1), "approved, and unchanged");
+
+    // ───────────── product rules ─────────────
+    // What may be quoted together: an item that needs another, two that exclude each other, so many
+    // of one per unit of another. A draft says what it breaks, and is not submitted until nothing.
+    let item = |code: &str, name: &str, rate: &str| {
+        let (admin, group, uom) = (&admin, products["id"].clone(), nos["id"].clone());
+        let body = json!({"item_code": code, "item_name": name, "item_group": group, "stock_uom": uom, "standard_rate": rate});
+        async move { uid(&admin.insert("Item", body).await).to_string() }
+    };
+    let (kit, guide) = (item("KIT", "Mounting Kit", "20").await, item("GUIDE", "Self-fit Guide", "5").await);
+    refused(
+        anna.k.insert(&anna.ctx, "ProductRule", obj(json!({"item": widget, "rule": "Requires", "other_item": service, "description": "x"}))).await,
+        "not permitted",
+    );
+    refused(
+        maria.k.insert(&maria.ctx, "ProductRule", obj(json!({"item": widget, "rule": "Requires", "other_item": widget, "description": "x"}))).await,
+        "two different items",
+    );
+    maria.insert("ProductRule", json!({"item": widget, "rule": "Requires", "other_item": service, "description": "Widgets are installed"})).await;
+    maria
+        .insert(
+            "ProductRule",
+            json!({"item": widget, "rule": "At least per unit", "other_item": kit, "qty_per_unit": "2", "description": "Two kits hold each widget"}),
+        )
+        .await;
+    maria.insert("ProductRule", json!({"item": service, "rule": "Excludes", "other_item": guide, "description": "Installed or self-fitted, not both"})).await;
+    let lines = |l: Value| json!({"company": cid, "party_type": "Customer", "customer": acme, "items": l});
+    let quote = anna.insert("Quotation", lines(json!([{"item": widget, "qty": "3"}]))).await;
+    let issues = quote["rule_issues"].as_str().unwrap_or_default().to_string();
+    assert!(issues.contains("Widgets are installed (Widget needs Installation)"), "{issues}");
+    assert!(issues.contains("Two kits hold each widget (6 of Mounting Kit for 3 of Widget, not 0)"), "{issues}");
+    let q = uid(&quote);
+    refused(anna.k.submit(&anna.ctx, "Quotation", q, None).await, "product rules");
+    let all = json!([{"item": widget, "qty": "3"}, {"item": service, "qty": "1"}, {"item": kit, "qty": "6"}, {"item": guide, "qty": "1"}]);
+    let quote = anna.update("Quotation", q, lines(all)).await;
+    assert_eq!(quote["rule_issues"], json!("Installed or self-fitted, not both (Installation is not quoted with Self-fit Guide)"));
+    let quote = anna.update("Quotation", q, lines(json!([{"item": widget, "qty": "3"}, {"item": service, "qty": "1"}, {"item": kit, "qty": "6"}]))).await;
+    assert!(quote["rule_issues"].is_null(), "nothing broken: {quote:?}");
+    assert_eq!(anna.submit("Quotation", q).await["docstatus"], json!(1));
 
     crm_alone(&k).await;
 }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.5.0: campaign attribution and product rules
+
+A Campaign Attribution report: the revenue of the deals won in a period, shared among the campaigns
+that touched each one on its way (its lead's, its opportunity's and its submitted quotations', in
+the order they were made) by a model you choose: Linear (equal parts, each campaign once), First
+Touch or Last Touch. Deals no campaign touched are a line of their own, the shares add up to what
+was won, and a sales user's report counts only the deals they may read (FERRUM-CRM-002).
+
+Product Rules say what may be quoted together: an item that requires another on the same
+quotation, two that exclude each other, or one that needs so many of another per unit (in stock
+units). A draft quotation lists the rules its lines break as they change, and is not submitted until
+none are. Sales managers keep the rules; sales users read them.
+
 ## 0.4.3
 
 Personal-data requests find lead records by the person's phone number as well as their email, and list the lead records holding their name apart, for an administrator to judge (never erased for the name alone) (Ferrum's FERRUM-PRIVACY-002).
