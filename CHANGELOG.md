@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.1
+
+Rebuilt with Ferrum-Frontend 00dea07: in a workflow state that names what may change, the other fields show read-only, and the fields the state needs show required.
+
 ## 0.6.0: email clicks as attribution touches
 
 Where the Campaigns app and its CRM link (Campaigns' `campaigns_crm`) are installed, an email
