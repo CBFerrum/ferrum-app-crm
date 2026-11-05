@@ -302,7 +302,8 @@ async fn campaigns(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &P
 }
 
 /// How a won deal's revenue is shared among the campaigns that touched it on its way: the lead's,
-/// the opportunity's and its submitted quotations', in the order they were made.
+/// the opportunity's and its submitted quotations', in the order they were made, and where the
+/// Campaigns app's CRM link is installed, the clicks on its emails ([`email_touches`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Model {
     /// All of it to the campaign that brought the deal in.
@@ -340,6 +341,17 @@ fn split(amount: Decimal, touches: &[Uuid], model: Model, precision: u32) -> Vec
         .collect()
 }
 
+/// The Campaigns app's tables a click is read from, where its CRM link (`campaigns_crm`) is installed:
+/// an email campaign tied to one of CRM's campaigns, clicked by a marketing contact whose address is
+/// the deal's lead's or contact's, before the deal was won, is a touch of that campaign. Opens are
+/// not: mail clients and their privacy proxies open mail by themselves.
+fn email_touches(ctx: &Ctx) -> Option<(String, String, String)> {
+    let campaign = ctx.schema.entity("EmailCampaign")?;
+    campaign.field("crm_campaign")?;
+    let (recipient, contact) = (ctx.schema.entity("CampaignRecipient")?, ctx.schema.entity("MarketingContact")?);
+    Some((campaign.table.clone(), recipient.table.clone(), contact.table.clone()))
+}
+
 /// Won deals' revenue by the campaigns that brought them in, by an attribution model; deals no
 /// campaign touched are a line of their own, so the campaigns' share is never overstated.
 async fn attribution(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
@@ -370,6 +382,24 @@ async fn attribution(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: 
     .bind(&ids)
     .fetch_all(&mut **tx)
     .await?;
+    let clicked: Vec<(Uuid, chrono::DateTime<chrono::Utc>, Uuid)> = match email_touches(ctx) {
+        Some((campaigns, recipients, contacts)) => {
+            sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                "select o.id, r.clicked_at, ec.crm_campaign from e_opportunity o \
+                 left join e_lead l on l.tenant_id = o.tenant_id and l.id = o.lead \
+                 left join e_contact ct on ct.tenant_id = o.tenant_id and ct.id = o.contact \
+                 join {contacts} mc on mc.tenant_id = o.tenant_id and lower(mc.email::text) in (lower(l.email::text), lower(ct.email::text)) \
+                 join {recipients} r on r.tenant_id = mc.tenant_id and r.contact = mc.id and r.clicked_at is not null \
+                 join {campaigns} ec on ec.tenant_id = r.tenant_id and ec.id = r.campaign and ec.crm_campaign is not null \
+                 where o.tenant_id = $1 and o.id = any($2) and r.clicked_at < (o.closed_on + 1)::timestamptz"
+            )))
+            .bind(ctx.tenant)
+            .bind(&ids)
+            .fetch_all(&mut **tx)
+            .await?
+        }
+        None => vec![],
+    };
     // campaign -> (deals touched, attributed deals, revenue); None for deals no campaign touched.
     let mut by: HashMap<Option<Uuid>, (i64, Decimal, Decimal)> = HashMap::new();
     let (mut won, mut revenue) = (0i64, Decimal::ZERO);
@@ -378,6 +408,7 @@ async fn attribution(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: 
         touches.extend(lead_made.zip(lead_campaign));
         touches.extend(own.map(|c| (made, c)));
         touches.extend(quoted.iter().filter(|q| q.0 == id).map(|q| (q.1, q.2)));
+        touches.extend(clicked.iter().filter(|c| c.0 == id).map(|c| (c.1, c.2)));
         touches.sort();
         let order: Vec<Uuid> = touches.into_iter().map(|t| t.1).collect();
         won += 1;
