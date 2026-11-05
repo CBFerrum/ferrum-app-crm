@@ -126,6 +126,7 @@ impl DocHook for QuotationHook {
         match name {
             "make_sales_order" => make_sales_order(hc, doc).await.map(Some),
             "mark_lost" => mark_lost(hc, doc, params).await.map(Some),
+            "add_rule_needs" => add_rule_needs(hc, doc).await.map(Some),
             "approve_quotation" => approve(hc, doc).await.map(Some),
             _ => Ok(None),
         }
@@ -151,37 +152,7 @@ async fn approval_rules(hc: &mut HookCtx<'_>) -> Result<Vec<ApprovalRule>> {
 /// What the quotation's lines break of the product rules, one sentence each: an item without the
 /// one it requires, two that exclude each other, or too few of another per unit (in stock units).
 async fn product_rule_issues(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Vec<String>> {
-    let mut qty: HashMap<Uuid, Decimal> = HashMap::new();
-    let mut names: HashMap<Uuid, String> = HashMap::new();
-    for line in rows(doc, "items") {
-        let Some(item) = id(&line, "item") else { continue };
-        let stock = d(&line, "stock_qty");
-        *qty.entry(item).or_default() += if stock.is_zero() { d(&line, "qty") } else { stock };
-        if let Some(n) = s(&line, "item_name") {
-            names.insert(item, n.to_string());
-        }
-    }
-    if qty.is_empty() {
-        return Ok(vec![]);
-    }
-    let items: Vec<Uuid> = qty.keys().copied().collect();
-    let rules: Vec<(Uuid, String, Uuid, Option<Decimal>, String)> = sqlx::query_as(
-        "select item, rule, other_item, qty_per_unit, description from e_product_rule \
-         where tenant_id = $1 and not coalesce(disabled, false) and item = any($2) order by description, id",
-    )
-    .bind(hc.ctx.tenant)
-    .bind(&items)
-    .fetch_all(&mut **hc.tx)
-    .await?;
-    let unnamed: Vec<Uuid> = rules.iter().map(|r| r.2).filter(|o| !names.contains_key(o)).collect();
-    if !unnamed.is_empty() {
-        let found: Vec<(Uuid, String)> = sqlx::query_as("select id, item_name from e_item where tenant_id = $1 and id = any($2)")
-            .bind(hc.ctx.tenant)
-            .bind(&unnamed)
-            .fetch_all(&mut **hc.tx)
-            .await?;
-        names.extend(found);
-    }
+    let (qty, names, rules) = product_rules(hc, doc).await?;
     let name = |i: &Uuid| names.get(i).cloned().unwrap_or_else(|| i.to_string());
     let mut out = Vec::new();
     for (item, rule, other, per, why) in rules {
@@ -199,6 +170,87 @@ async fn product_rule_issues(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Vec<Stri
         }
     }
     Ok(out)
+}
+
+type Rules = Vec<(Uuid, String, Uuid, Option<Decimal>, String)>;
+
+/// The quotation's quantity of each item (in stock units), the items' names, and the enabled
+/// product rules of the items on it.
+async fn product_rules(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<(HashMap<Uuid, Decimal>, HashMap<Uuid, String>, Rules)> {
+    let mut qty: HashMap<Uuid, Decimal> = HashMap::new();
+    let mut names: HashMap<Uuid, String> = HashMap::new();
+    for line in rows(doc, "items") {
+        let Some(item) = id(&line, "item") else { continue };
+        let stock = d(&line, "stock_qty");
+        *qty.entry(item).or_default() += if stock.is_zero() { d(&line, "qty") } else { stock };
+        if let Some(n) = s(&line, "item_name") {
+            names.insert(item, n.to_string());
+        }
+    }
+    if qty.is_empty() {
+        return Ok((qty, names, vec![]));
+    }
+    let items: Vec<Uuid> = qty.keys().copied().collect();
+    let rules: Rules = sqlx::query_as(
+        "select item, rule, other_item, qty_per_unit, description from e_product_rule \
+         where tenant_id = $1 and not coalesce(disabled, false) and item = any($2) order by description, id",
+    )
+    .bind(hc.ctx.tenant)
+    .bind(&items)
+    .fetch_all(&mut **hc.tx)
+    .await?;
+    let unnamed: Vec<Uuid> = rules.iter().map(|r| r.2).filter(|o| !names.contains_key(o)).collect();
+    if !unnamed.is_empty() {
+        let found: Vec<(Uuid, String)> = sqlx::query_as("select id, item_name from e_item where tenant_id = $1 and id = any($2)")
+            .bind(hc.ctx.tenant)
+            .bind(&unnamed)
+            .fetch_all(&mut **hc.tx)
+            .await?;
+        names.extend(found);
+    }
+    Ok((qty, names, rules))
+}
+
+/// What the rules need that the lines lack, as lines to add: each required item once, and the
+/// shortfall of one needed per unit (in stock units). Two items that exclude each other are a
+/// person's choice and stay as they are.
+fn rule_needs(qty: &HashMap<Uuid, Decimal>, rules: &Rules) -> Vec<(Uuid, Decimal)> {
+    let mut need: Vec<(Uuid, Decimal)> = Vec::new();
+    for (item, rule, other, per, _) in rules {
+        let mine = qty.get(item).copied().unwrap_or_default();
+        let wanted = match rule.as_str() {
+            "Requires" => Decimal::ONE,
+            "At least per unit" => mine * per.unwrap_or_default(),
+            _ => continue,
+        };
+        match need.iter_mut().find(|n| n.0 == *other) {
+            Some(n) => n.1 = n.1.max(wanted),
+            None => need.push((*other, wanted)),
+        }
+    }
+    need.into_iter()
+        .map(|(item, wanted)| (item, (wanted - qty.get(&item).copied().unwrap_or_default()).normalize()))
+        .filter(|(_, short)| *short > Decimal::ZERO)
+        .collect()
+}
+
+/// Adds the lines the product rules need, priced like any line, and says what it added.
+async fn add_rule_needs(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
+    let quotation = id(doc, "id").ok_or_else(|| Error::internal("quotation without id"))?;
+    let (qty, names, rules) = product_rules(hc, doc).await?;
+    let needs = rule_needs(&qty, &rules);
+    if needs.is_empty() {
+        return Ok(json!({"added": [], "message": "Nothing to add: what is left is a choice between items that exclude each other"}));
+    }
+    let mut lines: Vec<Value> = rows(doc, "items").into_iter().map(Value::Object).collect();
+    lines.extend(needs.iter().map(|(item, short)| json!({"item": item.to_string(), "qty": short.to_string()})));
+    let mut patch = Doc::new();
+    patch.insert("items".into(), Value::Array(lines));
+    hc.kernel.update_tx(hc.ctx, hc.tx, "Quotation", quotation, patch, None).await?;
+    let said: Vec<String> = needs.iter().map(|(item, short)| format!("{} × {short}", names.get(item).cloned().unwrap_or_else(|| item.to_string()))).collect();
+    Ok(
+        json!({"added": needs.iter().map(|(i, q)| json!({"item": i, "qty": q.to_string()})).collect::<Vec<_>>(), "message": format!("Added {}", said.join(", "))}),
+    )
 }
 
 /// The rules a quotation is past. Its total is compared in the company's currency.
@@ -377,6 +429,24 @@ async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn what_the_rules_need() {
+        use std::collections::HashMap;
+        let (widget, kit, install, guide) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(3), Uuid::from_u128(4));
+        let qty = HashMap::from([(widget, Decimal::from(3)), (kit, Decimal::from(2))]);
+        let rule = |item, kind: &str, other, per: Option<i64>| (item, kind.to_string(), other, per.map(Decimal::from), String::new());
+        let rules = vec![
+            rule(widget, "Requires", install, None),
+            rule(widget, "At least per unit", kit, Some(2)),
+            rule(widget, "Excludes", guide, None),
+            rule(widget, "Requires", kit, None),
+        ];
+        let mut needs = rule_needs(&qty, &rules);
+        needs.sort();
+        assert_eq!(needs, vec![(kit, Decimal::from(4)), (install, Decimal::ONE)], "six kits less the two quoted; an exclusion adds nothing");
+        assert!(rule_needs(&HashMap::from([(widget, Decimal::from(3)), (install, Decimal::ONE), (kit, Decimal::from(6))]), &rules).is_empty());
+    }
     use super::*;
 
     #[test]
