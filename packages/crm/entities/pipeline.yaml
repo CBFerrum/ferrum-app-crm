@@ -68,7 +68,14 @@
   rules:
     - {name: converted_via_action, check: "(doc.status == 'Converted') == (doc.customer != null)", message: "Use 'Convert to Customer' to convert a lead; a converted lead stays Converted"}
   actions:
-    - {name: convert_to_customer, label: Convert to Customer, permission: write, condition: "doc.status != 'Converted' && doc.status != 'Lost' && doc.status != 'Junk'", confirm: "Create a customer, contact and address from this lead?"}
+    - name: convert_to_customer
+      label: Convert to Customer
+      permission: write
+      condition: "doc.status != 'Converted' && doc.status != 'Lost' && doc.status != 'Junk'"
+      confirm: "Create a customer, contact and address from this lead?"
+      params:
+        - {name: customer, type: link, to: Customer, label: Existing Customer, description: "A new customer is made from the lead when empty"}
+        - {name: customer_group, type: link, to: CustomerGroup, label: Customer Group, description: "For a new customer"}
     - {name: make_opportunity, label: Create Opportunity, permission: read, condition: "doc.status != 'Lost' && doc.status != 'Junk'"}
   list: {columns: [number, lead_name, organization_name, status, assigned_to, next_follow_up], sort: created_at desc}
 
@@ -145,7 +152,13 @@
   actions:
     - {name: make_quotation, label: Create Quotation, permission: read, condition: "doc.status == 'Open'"}
     - {name: mark_won, label: Mark as Won, permission: write, condition: "doc.status == 'Open'"}
-    - {name: mark_lost, label: Mark as Lost, permission: write, condition: "doc.status == 'Open'"}
+    - name: mark_lost
+      label: Mark as Lost
+      permission: write
+      condition: "doc.status == 'Open'"
+      params:
+        - {name: lost_reason, type: link, to: LostReason, label: Lost Reason, required: true}
+        - {name: lost_detail, type: text, label: Detail}
   list: {columns: [number, title, party_name, sales_stage, amount, expected_close_date, status], sort: expected_close_date asc}
 
 - name: Activity

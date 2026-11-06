@@ -79,5 +79,12 @@
   actions:
     - {name: approve_quotation, label: Approve, docstatus: [0], permission: write, condition: "doc.needs_approval && doc.approved_by == null"}
     - {name: add_rule_needs, label: Add What the Rules Need, docstatus: [0], permission: write, condition: "doc.rule_issues != null && doc.rule_issues != ''"}
-    - {name: mark_lost, label: Mark as Lost, docstatus: [1], permission: submit, condition: "doc.status == 'Open' || doc.status == 'Expired'"}
+    - name: mark_lost
+      label: Mark as Lost
+      docstatus: [1]
+      permission: submit
+      condition: "doc.status == 'Open' || doc.status == 'Expired'"
+      params:
+        - {name: lost_reason, type: link, to: LostReason, label: Lost Reason, required: true}
+        - {name: lost_detail, type: text, label: Detail}
   list: {columns: [number, party_name, posting_date, valid_till, grand_total, status], sort: posting_date desc}
