@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.4
+
+Dates are the workspace's: a lead's qualified and converted days, an opportunity's close date, a quotation's expiry, an activity's day and today's exchange rate were UTC's, while reports run to the workspace's today. In the hours between the two midnights a deal won that day fell outside the day's report and its campaign's attribution, and the lead funnel left out the day's leads (found when Campaigns' suite ran just after midnight UTC for a New York workspace). The lead funnel's days and the attribution's end of the won day are the workspace's too. The suite runs in a zone whose date is not UTC's.
+
 ## 0.6.3
 
 The actions ask for what they read: a quotation's Mark as Lost needs a lost reason and never asked for one, so it could not work from its page; an opportunity's needed the same; Convert to Customer could not be pointed at a customer who already exists. They now declare their lost reason and detail, and the existing customer and customer group.

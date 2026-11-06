@@ -43,8 +43,14 @@ fn vid(v: &Value) -> Uuid {
     v["id"].as_str().unwrap().parse().unwrap()
 }
 
+/// The workspace's zone: one whose date is not UTC's while the suite runs (UTC+14 from 11:00 UTC,
+/// UTC-12 before), at least an hour from its midnight, so every date the app stamps must be the
+/// workspace's to pass.
+static ZONE: std::sync::LazyLock<&str> =
+    std::sync::LazyLock::new(|| if chrono::Timelike::hour(&chrono::Utc::now()) >= 11 { "Pacific/Kiritimati" } else { "Etc/GMT+12" });
+
 fn today() -> chrono::NaiveDate {
-    chrono::Utc::now().date_naive()
+    ferrum_kernel::ctx::local_now(&ZONE).date_naive()
 }
 
 /// A refusal of the expected kind whose text mentions `needle` (field errors: field or message).
@@ -139,7 +145,7 @@ async fn scenario() {
             admin_name: None,
             // With ERP: the connector brings taxes and sales orders.
             packages: vec!["crm".into(), "crm_erp".into()],
-            settings: Some(json!({"fiscal_year_start_month": 4})),
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": *ZONE})),
         })
         .await
         .expect("tenant");
@@ -462,7 +468,13 @@ async fn scenario() {
     assert_eq!(anna.get("Quotation", q4).await["status"], json!("Open"), "valid through its last day");
     // A day passes.
     let mut tx = k.db.tenant_tx(tenant).await.unwrap();
-    sqlx::query("update e_quotation set valid_till = current_date - 1 where tenant_id = $1 and id = $2").bind(tenant).bind(q4).execute(&mut *tx).await.unwrap();
+    sqlx::query("update e_quotation set valid_till = $3 where tenant_id = $1 and id = $2")
+        .bind(tenant)
+        .bind(q4)
+        .bind(today() - chrono::Duration::days(1))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
     tx.commit().await.unwrap();
     refused(anna.k.run_action(&anna.ctx, "Quotation", q4, "make_sales_order", json!({})).await, "expired");
     ferrum_app_crm::maintenance(&k).await.expect("maintenance");

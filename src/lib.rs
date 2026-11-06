@@ -12,7 +12,6 @@ mod opportunity;
 mod quotation;
 mod reports;
 
-use chrono::NaiveDate;
 use ferrum_domain::reports::ReportSource;
 use ferrum_domain::util::{find, id, s, sys};
 use ferrum_kernel::{Doc, Error, Filter, HookCtx, HookRegistry, Kernel, Result};
@@ -44,10 +43,6 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
 /// Periodic upkeep (every few minutes on every replica; must be idempotent and safe to run concurrently).
 pub async fn maintenance(k: &Kernel) -> Result<()> {
     quotation::expire_all(k).await
-}
-
-pub(crate) fn today() -> NaiveDate {
-    chrono::Utc::now().date_naive()
 }
 
 /// "First Last" from the parts that are present.
