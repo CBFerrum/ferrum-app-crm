@@ -2,7 +2,7 @@
 //! contacts. Completing one with a lead records the contact on the lead and moves a new lead on
 //! to Contacted.
 
-use crate::{check_assignee, lookup, today};
+use crate::{check_assignee, lookup};
 use async_trait::async_trait;
 use chrono::{SecondsFormat, Utc};
 use ferrum_domain::util::{get, id, s, set, sys};
@@ -55,7 +55,9 @@ impl DocHook for ActivityHook {
             && let Some(lead) = id(doc, "lead")
         {
             // A past call logged today counts on the day it happened.
-            let on = s(doc, "due_at").and_then(|t| parse_datetime(t).ok()).map(|t| t.date_naive()).filter(|d| *d <= today()).unwrap_or_else(today);
+            let (today, offset) = (hc.ctx.today(), *hc.ctx.now_local().offset());
+            let on =
+                s(doc, "due_at").and_then(|t| parse_datetime(t).ok()).map(|t| t.with_timezone(&offset).date_naive()).filter(|d| *d <= today).unwrap_or(today);
             let sctx = sys(hc.ctx);
             let l = get(hc.kernel, hc.ctx, hc.tx, "Lead", lead).await?;
             let mut v = Doc::new();

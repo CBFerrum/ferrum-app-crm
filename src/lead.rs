@@ -1,7 +1,7 @@
 //! Leads: one lead per email address, qualification, conversion into a customer with its contact
 //! and address, and opportunities created from a lead.
 
-use crate::{check_assignee, lookup, person_name, today};
+use crate::{check_assignee, lookup, person_name};
 use async_trait::async_trait;
 use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::created;
@@ -25,7 +25,7 @@ impl DocHook for LeadHook {
         set(doc, "lead_name", name);
         let status = s(doc, "status").unwrap_or("New").to_string();
         if matches!(status.as_str(), "Qualified" | "Converted") && s(doc, "qualified_on").is_none() {
-            set(doc, "qualified_on", today().to_string());
+            set(doc, "qualified_on", hc.ctx.today().to_string());
             set(doc, "qualified_by", hc.ctx.email.clone());
         }
         if status != "Lost" {
@@ -78,7 +78,7 @@ fn copy(from: &Doc, to: &mut Doc, fields: &[&str]) {
 /// Marks the lead qualified (an opportunity or a conversion proves it), keeping the first date.
 fn qualify(lead: &Doc, hc: &HookCtx<'_>, values: &mut Doc) {
     if s(lead, "qualified_on").is_none() {
-        values.insert("qualified_on".into(), json!(today().to_string()));
+        values.insert("qualified_on".into(), json!(hc.ctx.today().to_string()));
         values.insert("qualified_by".into(), json!(hc.ctx.email));
     }
 }
@@ -172,7 +172,7 @@ async fn convert(hc: &mut HookCtx<'_>, lead: &Doc, params: &Value) -> Result<Val
     v.insert("status".into(), json!("Converted"));
     v.insert("customer".into(), json!(cid.to_string()));
     v.insert("contact".into(), json!(contact.as_ref().and_then(|c| s(c, "id"))));
-    v.insert("converted_on".into(), json!(today().to_string()));
+    v.insert("converted_on".into(), json!(hc.ctx.today().to_string()));
     qualify(lead, hc, &mut v);
     hc.kernel.set_values_tx(&sctx, hc.tx, "Lead", lead_id, v).await?;
     if let Some(p) = prospect.as_ref().filter(|p| id(p, "customer").is_none()).and_then(|p| id(p, "id")) {
