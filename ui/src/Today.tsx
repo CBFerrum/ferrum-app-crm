@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { api, docPath, errorMessage } from "@ferrum/client";
+import { api, docPath, errorMessage, formatMoment } from "@ferrum/client";
 import { Badge, EmptyState, ErrorState, Icon, Spinner, toast, useShellTitle } from "@ferrum/kit";
 import { useMe } from "@ferrum/records";
 import { Tabs } from "./Tabs";
@@ -33,8 +33,7 @@ interface FollowUp {
 const rows = <T,>(entity: string, query: Record<string, string | number | boolean>) => api.get<{ rows: T[] }>(`/api/v1/${entity}`, query).then((r) => r.rows);
 
 function dueText(due?: string | null) {
-  if (!due) return "";
-  return new Date(due).toLocaleString(undefined, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
+  return formatMoment(due, { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 }
 
 function Row({ task, onDone, onSnooze }: { task: Task; onDone: () => void; onSnooze: (days: number) => void }) {
@@ -132,7 +131,7 @@ export function Today() {
       <header className="crm-head">
         <div>
           <Tabs />
-          <p className="page-sub">{new Date().toLocaleDateString(undefined, { weekday: "long", day: "numeric", month: "long" })}</p>
+          <p className="page-sub">{formatMoment(new Date(), { weekday: "long", day: "numeric", month: "long" })}</p>
         </div>
       </header>
       <form className="crm-add" onSubmit={add}>

@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, ApiError, docPath, errorMessage, shell } from "@ferrum/client";
+import { api, ApiError, docPath, errorMessage, formatMoment, shell } from "@ferrum/client";
 import { Badge, Button, ErrorState, Icon, PageLoading, statusTone, toast, useCanIntent, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, CollabPanel, type Doc, type EntityMeta, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
 import { LostDialog } from "./Lost";
@@ -14,7 +14,7 @@ import { type Activity, type AuditEvent, type Item, type Mail, timeline } from "
 
 const ICONS: Record<Item["kind"], string> = { call: "phone", meeting: "calendar", email: "mail", mail: "mail", task: "check", note: "file", change: "refresh" };
 
-const when = (at: string) => (at ? new Date(at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "");
+const when = (at: string) => formatMoment(at, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
 function Row({ item, onDone }: { item: Item; onDone?: (id: string) => void }) {
   return (
