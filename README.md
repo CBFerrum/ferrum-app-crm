@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.6.5** | Rebuilt with Ferrum-Frontend bb60115: empty numbers read as the server reads them; settings open as their record. |
 | **0.6.4** | Dates are the workspace's, not UTC's. |
 | **0.6.3** | Mark as Lost asks for its reason, Convert to Customer for an existing customer. |
 | **0.6.2** | A quotation's status says it becomes an order through ERP and the CRM and ERP connector. |
