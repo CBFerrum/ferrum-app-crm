@@ -2,7 +2,7 @@
 //! amounts in the company currency, quotations made from them, and winning (or reopening) them
 //! as their quotations are ordered (or those orders cancelled).
 
-use crate::{check_assignee, lookup, lost_reason, stored, today};
+use crate::{check_assignee, lookup, lost_reason, stored};
 use async_trait::async_trait;
 use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::created;
@@ -28,7 +28,7 @@ impl DocHook for OpportunityHook {
         if status == "Open" {
             set(doc, "closed_on", Value::Null);
         } else if s(doc, "closed_on").is_none() || old.as_ref().is_some_and(|o| s(o, "status") != Some(&status)) {
-            set(doc, "closed_on", today().to_string());
+            set(doc, "closed_on", hc.ctx.today().to_string());
         }
         if status != "Lost" {
             set(doc, "lost_reason", Value::Null);
@@ -175,7 +175,7 @@ async fn amounts(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Resu
         if given > Decimal::ZERO && given != Decimal::ONE && (!currency_changed || rate_changed) {
             given
         } else {
-            exchange_rate(hc.kernel, hc.ctx, hc.tx, currency_id, co.currency_id, today()).await?
+            exchange_rate(hc.kernel, hc.ctx, hc.tx, currency_id, co.currency_id, hc.ctx.today()).await?
         }
     };
     set(doc, "conversion_rate", money(rate));
