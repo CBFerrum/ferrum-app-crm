@@ -193,7 +193,10 @@ async fn funnel(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Para
          from e_lead l{join} where l.tenant_id = "
     ));
     qb.push_bind(ctx.tenant).push(" and l.company = ").push_bind(co.id);
-    qb.push(" and l.created_at >= ").push_bind(from).push(" and l.created_at < ").push_bind(next_day(to));
+    // Days are the workspace's, not the database's.
+    let zone = &ctx.schema.timezone;
+    qb.push(" and l.created_at >= (").push_bind(from).push("::timestamp at time zone ").push_bind(zone);
+    qb.push(") and l.created_at < (").push_bind(next_day(to)).push("::timestamp at time zone ").push_bind(zone).push(")");
     scope(k, ctx, "Lead", &mut qb, "l")?;
     qb.push(" group by 1 order by 2 desc, 1");
     let data: Vec<(String, i64, i64, i64, i64, i64)> = qb.build_query_as().fetch_all(&mut **tx).await?;
@@ -391,10 +394,11 @@ async fn attribution(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: 
                  join {contacts} mc on mc.tenant_id = o.tenant_id and lower(mc.email::text) in (lower(l.email::text), lower(ct.email::text)) \
                  join {recipients} r on r.tenant_id = mc.tenant_id and r.contact = mc.id and r.clicked_at is not null \
                  join {campaigns} ec on ec.tenant_id = r.tenant_id and ec.id = r.campaign and ec.crm_campaign is not null \
-                 where o.tenant_id = $1 and o.id = any($2) and r.clicked_at < (o.closed_on + 1)::timestamptz"
+                 where o.tenant_id = $1 and o.id = any($2) and r.clicked_at < ((o.closed_on + 1)::timestamp at time zone $3)"
             )))
             .bind(ctx.tenant)
             .bind(&ids)
+            .bind(&ctx.schema.timezone)
             .fetch_all(&mut **tx)
             .await?
         }

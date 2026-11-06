@@ -4,7 +4,7 @@
 //! back on cancel.
 
 use crate::opportunity::{follow_orders, lose_with_quotation};
-use crate::{check_assignee, lookup, lost_reason, today};
+use crate::{check_assignee, lookup, lost_reason};
 use async_trait::async_trait;
 use chrono::NaiveDate;
 use ferrum_app_erp::pricing::{Side, calculate};
@@ -48,7 +48,7 @@ pub(crate) async fn refresh(k: &Kernel, ctx: &Ctx, tx: &mut Tx, quotation: Uuid)
     let docstatus = q.get("docstatus").and_then(Value::as_i64).unwrap_or(0);
     let mut v = Doc::new();
     v.insert("per_ordered".into(), money(pct));
-    v.insert("status".into(), json!(status(docstatus, pct, id(&q, "lost_reason").is_some(), valid_till, today())));
+    v.insert("status".into(), json!(status(docstatus, pct, id(&q, "lost_reason").is_some(), valid_till, ctx.today())));
     k.set_values_tx(&sctx, tx, "Quotation", quotation, v).await?;
     Ok(q)
 }
@@ -291,7 +291,7 @@ async fn make_sales_order(hc: &mut HookCtx<'_>, q: &Doc) -> Result<Value> {
     let qid = id(q, "id").ok_or_else(|| Error::internal("quotation without id"))?;
     let number = s(q, "number").unwrap_or_default().to_string();
     if let Some(v) = s(q, "valid_till").and_then(|v| parse_date(v).ok())
-        && v < today()
+        && v < hc.ctx.today()
     {
         return Err(Error::invalid(format!("quotation {number} expired on {v}; cancel and amend it with a new validity date to take the order")));
     }
@@ -401,7 +401,7 @@ async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
     }
     let ctx = Ctx::system(tenant, schema);
     let filters =
-        [Filter::eq("docstatus", 1), Filter::eq("status", "Open"), Filter { field: "valid_till".into(), op: Op::Lt, value: json!(today().to_string()) }];
+        [Filter::eq("docstatus", 1), Filter::eq("status", "Open"), Filter { field: "valid_till".into(), op: Op::Lt, value: json!(ctx.today().to_string()) }];
     let mut tx = k.db.tenant_tx(tenant).await?;
     let mine: bool =
         sqlx::query_scalar("select pg_try_advisory_xact_lock(hashtext($1))").bind(format!("ferrum:crm:expire:{tenant}")).fetch_one(&mut *tx).await?;
