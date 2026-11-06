@@ -406,6 +406,19 @@ async fn scenario() {
     assert_eq!(anna.get("Quotation", q3).await["status"], json!("Ordered"));
 
     // ───────────── losing ─────────────
+    // What the actions read, their pages ask for: a quotation cannot be lost without a reason, and
+    // a lead can be converted into a customer who exists.
+    let asks = |entity: &str, action: &str| -> Vec<String> {
+        let ent = anna.ctx.schema.entity(entity).unwrap();
+        ent.def.actions.iter().find(|a| a.name == action).unwrap().params.iter().map(|p| p.name.clone()).collect()
+    };
+    for (entity, action, names) in [
+        ("Quotation", "mark_lost", &["lost_reason", "lost_detail"][..]),
+        ("Opportunity", "mark_lost", &["lost_reason", "lost_detail"]),
+        ("Lead", "convert_to_customer", &["customer", "customer_group"]),
+    ] {
+        assert_eq!(asks(entity, action), names, "{entity}.{action}");
+    }
     let o2 = vid(&anna.action("Lead", l2_id, "make_opportunity", json!({})).await);
     refused(anna.k.run_action(&anna.ctx, "Opportunity", o2, "mark_lost", json!({})).await, "lost_reason");
     refused(anna.k.run_action(&anna.ctx, "Opportunity", o2, "mark_lost", json!({"lost_reason": "Too Expensive"})).await, "lost_reason");
