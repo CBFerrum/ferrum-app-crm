@@ -101,7 +101,7 @@ export function timeline(activities: Activity[], events: AuditEvent[], mail: Mai
       kind: "mail",
       title: m.subject || t("(no subject)"),
       detail: m.text_content?.slice(0, 280),
-      who: incoming ? (m.sender_name ?? m.sender) : (m.recipients ? `to ${m.recipients}` : null),
+      who: incoming ? (m.sender_name ?? m.sender) : (m.recipients ? t("to {recipients}", { recipients: m.recipients }) : null),
     });
   }
   for (const e of events) {
