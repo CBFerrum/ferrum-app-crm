@@ -7,7 +7,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type DragEvent, useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { api, docPath, errorMessage } from "@ferrum/client";
+import { api, docPath, errorMessage, t as tr } from "@ferrum/client";
 import { confirmDialog, EmptyState, ErrorState, Icon, Spinner, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@ferrum/kit/primitives";
 import { useMe } from "@ferrum/records";
@@ -74,12 +74,12 @@ function Card({ deal, stages, day, held, onHold, onMove, onWon, onLost }: {
               .filter((s) => s.id !== deal.sales_stage)
               .map((s) => (
                 <DropdownMenuItem key={s.id} onSelect={() => onMove(deal, s)}>
-                  Move to {s.stage_name}
+                  {tr("Move to {stage_name}", { stage_name: s.stage_name })}
                 </DropdownMenuItem>
               ))}
             <DropdownMenuSeparator />
-            <DropdownMenuItem onSelect={() => onWon(deal)}>Won</DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => onLost(deal)}>Lost…</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onWon(deal)}>{tr("Won")}</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => onLost(deal)}>{tr("Lost…")}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -95,7 +95,7 @@ function Card({ deal, stages, day, held, onHold, onMove, onWon, onLost }: {
           {initials(deal.assigned_to)}
         </span>
       </div>
-      {flag === "follow-up" ? <div className="crm-card-next crm-late">Follow up due</div> : deal.next_step && <div className="crm-card-next">{deal.next_step}</div>}
+      {flag === "follow-up" ? <div className="crm-card-next crm-late">{tr("Follow up due")}</div> : deal.next_step && <div className="crm-card-next">{deal.next_step}</div>}
     </article>
   );
 }
@@ -129,7 +129,7 @@ function StageColumn({ column, ...card }: { column: Column; onDrop: (id: string,
           <strong>{stage?.stage_name ?? "No stage"}</strong>
           <span className="faint">{column.deals.length}</span>
           {stage && (
-            <Link className="crm-column-add" to={`e/Opportunity/new?sales_stage=${stage.id}`} aria-label={`New deal in ${stage.stage_name}`} title="New deal here">
+            <Link className="crm-column-add" to={`e/Opportunity/new?sales_stage=${stage.id}`} aria-label={`New deal in ${stage.stage_name}`} title={tr("New deal here")}>
               <Icon name="plus" size={14} />
             </Link>
           )}
@@ -210,13 +210,13 @@ export function Board() {
   const body = q.error ? (
     <ErrorState error={q.error} onRetry={() => void q.refetch()} />
   ) : !q.data ? (
-    <Spinner label="Loading the pipeline" />
+    <Spinner label={tr("Loading the pipeline")} />
   ) : !stages.length ? (
-    <EmptyState title="No sales stages yet" icon="file">
-      <Link to="e/SalesStage">Set up your stages</Link>
+    <EmptyState title={tr("No sales stages yet")} icon="file">
+      <Link to="e/SalesStage">{tr("Set up your stages")}</Link>
     </EmptyState>
   ) : (
-    <div className="crm-board" role="group" aria-label="Pipeline by sales stage">
+    <div className="crm-board" role="group" aria-label={tr("Pipeline by sales stage")}>
       {columns.map((c) => (
         <StageColumn key={c.stage?.id ?? "none"} column={c} stages={stages} day={day} held={held} onHold={setHeld} onMove={(d, t) => void move(d, t)} onWon={(d) => void won(d)} onLost={setLosing} onDrop={onDrop} />
       ))}
@@ -233,18 +233,18 @@ export function Board() {
           </p>
         </div>
         <div className="crm-tools">
-          <div className="segmented" role="group" aria-label="Whose deals">
+          <div className="segmented" role="group" aria-label={tr("Whose deals")}>
             <button type="button" aria-pressed={!mine} onClick={() => setSp({}, { replace: true })}>
-              Everyone
+              {tr("Everyone")}
             </button>
             <button type="button" aria-pressed={mine} onClick={() => setSp({ owner: "me" }, { replace: true })}>
-              Mine
+              {tr("Mine")}
             </button>
           </div>
-          <input className="input crm-search" type="search" placeholder="Find a deal…" aria-label="Find a deal" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className="input crm-search" type="search" placeholder={tr("Find a deal…")} aria-label={tr("Find a deal")} value={search} onChange={(e) => setSearch(e.target.value)} />
           <Link className="btn btn-primary btn-md" to="e/Opportunity/new">
             <Icon name="plus" />
-            New deal
+            {tr("New deal")}
           </Link>
         </div>
       </header>
@@ -252,10 +252,10 @@ export function Board() {
       {held && (
         <div className="crm-outcomes" aria-hidden="true">
           <div className="crm-outcome crm-outcome-won" onDragOver={(e) => e.preventDefault()} onDrop={dropOn("won")}>
-            Won
+            {tr("Won")}
           </div>
           <div className="crm-outcome crm-outcome-lost" onDragOver={(e) => e.preventDefault()} onDrop={dropOn("lost")}>
-            Lost
+            {tr("Lost")}
           </div>
         </div>
       )}
@@ -266,7 +266,7 @@ export function Board() {
           onDone={() => {
             dropDeal(losing.id);
             setLosing(null);
-            toast("Marked as lost");
+            toast(tr("Marked as lost"));
           }}
         />
       )}

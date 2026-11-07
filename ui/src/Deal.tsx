@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, ApiError, docPath, errorMessage, formatMoment, shell } from "@ferrum/client";
+import { api, ApiError, docPath, errorMessage, formatMoment, shell, t } from "@ferrum/client";
 import { Badge, Button, ErrorState, Icon, PageLoading, statusTone, toast, useCanIntent, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, CollabPanel, type Doc, type EntityMeta, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
 import { LostDialog } from "./Lost";
@@ -32,7 +32,7 @@ function Row({ item, onDone }: { item: Item; onDone?: (id: string) => void }) {
       </div>
       {item.activity && onDone && (
         <button type="button" className="btn btn-default btn-sm" onClick={() => onDone(item.activity!)}>
-          Done
+          {t("Done")}
         </button>
       )}
     </li>
@@ -79,7 +79,7 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
 
   return (
     <form className="crm-composer" onSubmit={submit}>
-      <div className="crm-composer-tabs" role="tablist" aria-label="Log">
+      <div className="crm-composer-tabs" role="tablist" aria-label={t("Log")}>
         {(["Note", "Call", "Task"] as const).map((k) => (
           <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}>
             {k}
@@ -88,12 +88,12 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
         <span className="spacer" />
         {canMail && (
           <button type="button" onClick={() => void shell().intent({ action: "compose", type: "email", data: { record: { entity: "Opportunity", id: deal.id } } })}>
-            Email
+            {t("Email")}
           </button>
         )}
         {canMeet && (
           <button type="button" onClick={() => void shell().intent({ action: "schedule", type: "event", data: { record: { entity: "Opportunity", id: deal.id } } })}>
-            Schedule
+            {t("Schedule")}
           </button>
         )}
       </div>
@@ -109,10 +109,10 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
         }}
       />
       <div className="crm-composer-foot">
-        {kind === "Task" && <input className="input" type="datetime-local" aria-label="Due" value={due} onChange={(e) => setDue(e.target.value)} />}
+        {kind === "Task" && <input className="input" type="datetime-local" aria-label={t("Due")} value={due} onChange={(e) => setDue(e.target.value)} />}
         <span className="spacer" />
         <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!text.trim()}>
-          Save
+          {t("Save")}
         </Button>
       </div>
     </form>
@@ -123,7 +123,7 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
 function StageStrip({ stages, current, open, onMove }: { stages: Stage[]; current: unknown; open: boolean; onMove: (s: Stage) => void }) {
   const at = stages.findIndex((s) => s.id === current);
   return (
-    <ol className="crm-strip" aria-label="Sales stage">
+    <ol className="crm-strip" aria-label={t("Sales stage")}>
       {stages.map((s, i) => (
         <li key={s.id} data-state={i < at ? "past" : i === at ? "current" : undefined}>
           <button type="button" disabled={!open || i === at} aria-current={i === at ? "step" : undefined} onClick={() => onMove(s)}>
@@ -200,7 +200,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
   const won = async () => {
     try {
       await api.post(docPath("Opportunity", id, "actions", "mark_won"), {});
-      toast("Won");
+      toast(t("Won"));
       refresh();
     } catch (e) {
       toast(errorMessage(e), "error");
@@ -218,7 +218,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
   return (
     <div className="crm-page crm-deal-page">
       <div className="crumbs">
-        <Link to="/">Pipeline</Link>
+        <Link to="/">{t("Pipeline")}</Link>
         <Icon name="chevronRight" size={12} />
       </div>
       <header className="crm-deal-head">
@@ -230,27 +230,27 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
         </div>
         <div className="page-actions">
           {!isOpen && <Badge tone={statusTone(doc.status)}>{String(doc.status)}</Badge>}
-          {isOpen && writable && <Button onClick={() => void won()}>Won</Button>}
-          {isOpen && writable && <Button onClick={() => setLosing(true)}>Lost</Button>}
+          {isOpen && writable && <Button onClick={() => void won()}>{t("Won")}</Button>}
+          {isOpen && writable && <Button onClick={() => setLosing(true)}>{t("Lost")}</Button>}
           {isOpen && (
             <Button variant="primary" icon="file" onClick={() => void quote()}>
-              Create quotation
+              {t("Create quotation")}
             </Button>
           )}
-          <Link className="icon-btn" to={`/e/Opportunity/${id}`} title="Open the full form" aria-label="Open the full form">
+          <Link className="icon-btn" to={`/e/Opportunity/${id}`} title={t("Open the full form")} aria-label={t("Open the full form")}>
             <Icon name="expand" size={15} />
           </Link>
         </div>
       </header>
       {open.length > 0 && <StageStrip stages={open} current={doc.sales_stage} open={isOpen && writable} onMove={(s) => void save("sales_stage", s.id).then(refresh)} />}
       <div className="crm-deal-body">
-        <section className="crm-deal-main" aria-label="Deal history">
+        <section className="crm-deal-main" aria-label={t("Deal history")}>
           <div className="crm-switch" role="tablist">
             <button type="button" role="tab" aria-selected={view === "story"} onClick={() => setView("story")}>
-              Story
+              {t("Story")}
             </button>
             <button type="button" role="tab" aria-selected={view === "discussion"} onClick={() => setView("discussion")}>
-              Discussion
+              {t("Discussion")}
             </button>
           </div>
           {view === "discussion" ? (
@@ -266,7 +266,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
                 <>
                   {told.upcoming.length > 0 && (
                     <>
-                      <h2 className="crm-group">Coming up</h2>
+                      <h2 className="crm-group">{t("Coming up")}</h2>
                       <ol className="crm-events">
                         {told.upcoming.map((i) => (
                           <Row key={i.key} item={i} onDone={writable ? (a) => void done(a) : undefined} />
@@ -274,7 +274,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
                       </ol>
                     </>
                   )}
-                  <h2 className="crm-group">What happened</h2>
+                  <h2 className="crm-group">{t("What happened")}</h2>
                   {told.past.length ? (
                     <ol className="crm-events">
                       {told.past.map((i) => (
@@ -282,14 +282,14 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
                       ))}
                     </ol>
                   ) : (
-                    <p className="muted">Nothing yet. Log the first call above.</p>
+                    <p className="muted">{t("Nothing yet. Log the first call above.")}</p>
                   )}
                 </>
               )}
             </>
           )}
         </section>
-        <aside className="crm-deal-side" aria-label="Deal details">
+        <aside className="crm-deal-side" aria-label={t("Deal details")}>
           <RecordFields meta={meta} doc={doc} save={(n, v) => save(n, v).then(refresh)} only={["Opportunity", "Pipeline", "Value"]} />
         </aside>
       </div>
