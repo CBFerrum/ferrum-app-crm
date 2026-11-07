@@ -57,6 +57,7 @@
   "Whose deals": "صفقات مَن",
   "Won": "رابحة",
   "Won: {value}?": "رابحة: {value}؟",
+  "to {recipients}": "إلى {recipients}",
   "{count} open {value} · {value2} · {value3} weighted": "{count} {value} مفتوحة · {value2} · {value3} مرجّحة",
   "{value} once weighted by probability": "{value} بعد الترجيح بالاحتمال",
   "{value} won": "{value} رابحة"
