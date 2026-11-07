@@ -1,3 +1,4 @@
+import { t } from "@ferrum/client";
 // One deal's story: what is coming up, then everything that happened, newest first, from the
 // records that hold it. Pure, so it is tested without a browser.
 
@@ -85,7 +86,7 @@ export function timeline(activities: Activity[], events: AuditEvent[], mail: Mai
       // An open activity is told by when it is due, or not at all: when it was written down is not that.
       at: (open ? a.due_at : (a.completed_at ?? a.due_at ?? a.created_at)) ?? "",
       kind,
-      title: a.subject ?? a.activity_type ?? "Activity",
+      title: a.subject ?? a.activity_type ?? t("Activity"),
       detail: a.details,
       who: a.assigned_to,
       activity: open ? a.id : undefined,
@@ -98,14 +99,14 @@ export function timeline(activities: Activity[], events: AuditEvent[], mail: Mai
       key: `m-${m.id}`,
       at: m.communication_date ?? m.sent_at ?? m.created_at ?? "",
       kind: "mail",
-      title: m.subject || "(no subject)",
+      title: m.subject || t("(no subject)"),
       detail: m.text_content?.slice(0, 280),
       who: incoming ? (m.sender_name ?? m.sender) : (m.recipients ? `to ${m.recipients}` : null),
     });
   }
   for (const e of events) {
     const told = changes(e, name);
-    if (e.action === "create") past.push({ key: `e-${e.id ?? e.at}`, at: e.at, kind: "change", title: "Deal created", who: e.actor_name ?? e.actor });
+    if (e.action === "create") past.push({ key: `e-${e.id ?? e.at}`, at: e.at, kind: "change", title: t("Deal created"), who: e.actor_name ?? e.actor });
     else if (told.length) past.push({ key: `e-${e.id ?? e.at}`, at: e.at, kind: "change", title: told.join(" · "), who: e.actor_name ?? e.actor });
   }
   // What has no date yet comes last among what is coming.

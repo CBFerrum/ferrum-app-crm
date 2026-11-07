@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, ApiError, docPath, errorMessage, formatMoment, shell, t } from "@ferrum/client";
+import { api, ApiError, docPath, errorMessage, formatMoment, shell, t, isolate } from "@ferrum/client";
 import { Badge, Button, ErrorState, Icon, PageLoading, statusTone, toast, useCanIntent, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, CollabPanel, type Doc, type EntityMeta, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
 import { LostDialog } from "./Lost";
@@ -24,11 +24,11 @@ function Row({ item, onDone }: { item: Item; onDone?: (id: string) => void }) {
       </span>
       <div className="crm-event-body">
         <div className="crm-event-line">
-          <strong>{item.title}</strong>
-          <time className="faint">{when(item.at)}</time>
+          <strong>{isolate(item.title)}</strong>
+          <time className="faint">{isolate(when(item.at))}</time>
         </div>
-        {item.detail && <p className="crm-event-detail">{item.detail}</p>}
-        {item.who && <div className="faint crm-event-who">{item.who}</div>}
+        {item.detail && <p className="crm-event-detail">{isolate(item.detail)}</p>}
+        {item.who && <div className="faint crm-event-who">{isolate(item.who)}</div>}
       </div>
       {item.activity && onDone && (
         <button type="button" className="btn btn-default btn-sm" onClick={() => onDone(item.activity!)}>
@@ -49,7 +49,7 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
   const [busy, setBusy] = useState(false);
   const canMail = useCanIntent("compose", "email");
   const canMeet = useCanIntent("schedule", "event");
-  const placeholder = kind === "Note" ? "What should the team know?" : kind === "Call" ? "How did the call go?" : "What needs doing?";
+  const placeholder = kind === "Note" ? t("What should the team know?") : kind === "Call" ? t("How did the call go?") : t("What needs doing?");
 
   const submit = async (e?: FormEvent) => {
     e?.preventDefault();
@@ -82,7 +82,7 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
       <div className="crm-composer-tabs" role="tablist" aria-label={t("Log")}>
         {(["Note", "Call", "Task"] as const).map((k) => (
           <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}>
-            {k}
+            {isolate(k)}
           </button>
         ))}
         <span className="spacer" />
@@ -127,7 +127,7 @@ function StageStrip({ stages, current, open, onMove }: { stages: Stage[]; curren
       {stages.map((s, i) => (
         <li key={s.id} data-state={i < at ? "past" : i === at ? "current" : undefined}>
           <button type="button" disabled={!open || i === at} aria-current={i === at ? "step" : undefined} onClick={() => onMove(s)}>
-            {s.stage_name}
+            {isolate(s.stage_name)}
           </button>
         </li>
       ))}
@@ -223,13 +223,13 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
       </div>
       <header className="crm-deal-head">
         <div className="crm-deal-title">
-          <h1 className="page-title">{String(doc.title ?? "Deal")}</h1>
+          <h1 className="page-title">{isolate(String(doc.title ?? "Deal"))}</h1>
           <p className="page-sub">
-            {[doc.party_name, doc.base_amount != null ? money(Number(doc.base_amount)) : null, doc.expected_close_date ? `closes ${doc.expected_close_date}` : null].filter(Boolean).join(" · ")}
+            {isolate([doc.party_name, doc.base_amount != null ? money(Number(doc.base_amount)) : null, doc.expected_close_date ? `closes ${doc.expected_close_date}` : null].filter(Boolean).join(" · "))}
           </p>
         </div>
         <div className="page-actions">
-          {!isOpen && <Badge tone={statusTone(doc.status)}>{String(doc.status)}</Badge>}
+          {!isOpen && <Badge tone={statusTone(doc.status)}>{isolate(String(doc.status))}</Badge>}
           {isOpen && writable && <Button onClick={() => void won()}>{t("Won")}</Button>}
           {isOpen && writable && <Button onClick={() => setLosing(true)}>{t("Lost")}</Button>}
           {isOpen && (

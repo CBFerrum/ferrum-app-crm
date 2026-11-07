@@ -1,7 +1,7 @@
 // Losing a deal: the server wants the reason, and the team wants to remember what happened.
 
 import { type FormEvent, useState } from "react";
-import { api, docPath, errorMessage, t } from "@ferrum/client";
+import { api, docPath, errorMessage, t, isolate } from "@ferrum/client";
 import { Alert, Button, Dialog, Field } from "@ferrum/kit";
 import { LinkInput } from "@ferrum/records";
 import type { Deal } from "./pipeline";
@@ -24,9 +24,9 @@ export function LostDialog({ deal, onClose, onDone }: { deal: Deal; onClose: () 
     }
   };
   return (
-    <Dialog open onClose={onClose} title={`Lost: ${deal.title ?? "this deal"}`}>
+    <Dialog open onClose={onClose} title={t("Lost: {value}", { value: deal.title ?? "this deal" })}>
       <form className="stack" onSubmit={submit}>
-        {error && <Alert tone="error">{error}</Alert>}
+        {error && <Alert tone="error">{isolate(error)}</Alert>}
         <Field label={t("Reason")} htmlFor="lost-reason" required>
           <LinkInput to="LostReason" id="lost-reason" value={reason} required onChange={setReason} />
         </Field>
