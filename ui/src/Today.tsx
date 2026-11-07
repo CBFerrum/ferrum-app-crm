@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { api, docPath, errorMessage, formatMoment } from "@ferrum/client";
+import { api, docPath, errorMessage, formatMoment, t as tr } from "@ferrum/client";
 import { Badge, EmptyState, ErrorState, Icon, Spinner, toast, useShellTitle } from "@ferrum/kit";
 import { useMe } from "@ferrum/records";
 import { Tabs } from "./Tabs";
@@ -50,11 +50,11 @@ function Row({ task, onDone, onSnooze }: { task: Task; onDone: () => void; onSno
       </div>
       <time className="faint">{dueText(task.due_at)}</time>
       <div className="crm-snooze">
-        <button type="button" className="btn btn-ghost btn-sm" title="Move to tomorrow" onClick={() => onSnooze(1)}>
-          Tomorrow
+        <button type="button" className="btn btn-ghost btn-sm" title={tr("Move to tomorrow")} onClick={() => onSnooze(1)}>
+          {tr("Tomorrow")}
         </button>
-        <button type="button" className="btn btn-ghost btn-sm" title="Move a week on" onClick={() => onSnooze(7)}>
-          Next week
+        <button type="button" className="btn btn-ghost btn-sm" title={tr("Move a week on")} onClick={() => onSnooze(7)}>
+          {tr("Next week")}
         </button>
       </div>
     </li>
@@ -136,15 +136,15 @@ export function Today() {
       </header>
       <form className="crm-add" onSubmit={add}>
         <Icon name="plus" size={15} />
-        <input aria-label="Add a task for today" placeholder="Add a task for today…" value={text} onChange={(e) => setText(e.target.value)} />
+        <input aria-label={tr("Add a task for today")} placeholder={tr("Add a task for today…")} value={text} onChange={(e) => setText(e.target.value)} />
       </form>
       {q.error ? (
         <ErrorState error={q.error} onRetry={() => void q.refetch()} />
       ) : !q.data ? (
-        <Spinner label="Loading your day" />
+        <Spinner label={tr("Loading your day")} />
       ) : nothing ? (
-        <EmptyState title="Nothing to chase" icon="check">
-          Everything open is taken care of.
+        <EmptyState title={tr("Nothing to chase")} icon="check">
+          {tr("Everything open is taken care of.")}
         </EmptyState>
       ) : (
         <>
@@ -161,15 +161,15 @@ export function Today() {
             </section>
           ))}
           {q.data.deals.length + q.data.leads.length > 0 && (
-            <section aria-label="To follow up">
-              <h2 className="crm-group">To follow up</h2>
+            <section aria-label={tr("To follow up")}>
+              <h2 className="crm-group">{tr("To follow up")}</h2>
               <ul className="crm-tasks">
                 {q.data.deals.map((d) => (
                   <li key={d.id} className="crm-task">
                     <span className="crm-dot" aria-hidden="true" />
                     <div className="crm-task-body">
                       <Link to={`/d/${d.id}`}>{d.title || "Deal"}</Link>
-                      <div className="faint">Deal</div>
+                      <div className="faint">{tr("Deal")}</div>
                     </div>
                     <time className="faint">{d.next_follow_up}</time>
                   </li>
@@ -179,7 +179,7 @@ export function Today() {
                     <span className="crm-dot" aria-hidden="true" />
                     <div className="crm-task-body">
                       <Link to={`/e/Lead/${l.id}`}>{l.lead_name || l.organization_name || "Lead"}</Link>
-                      <div className="faint">Lead</div>
+                      <div className="faint">{tr("Lead")}</div>
                     </div>
                     <time className="faint">{l.next_follow_up}</time>
                   </li>
