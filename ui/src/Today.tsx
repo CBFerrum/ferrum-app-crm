@@ -5,7 +5,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router";
-import { api, docPath, errorMessage, formatMoment, t as tr } from "@ferrum/client";
+import { api, docPath, errorMessage, formatMoment, t as tr, isolate } from "@ferrum/client";
 import { Badge, EmptyState, ErrorState, Icon, Spinner, toast, useShellTitle } from "@ferrum/kit";
 import { useMe } from "@ferrum/records";
 import { Tabs } from "./Tabs";
@@ -41,14 +41,14 @@ function Row({ task, onDone, onSnooze }: { task: Task; onDone: () => void; onSno
   const to = task.opportunity ? `/d/${task.opportunity}` : task.lead ? `/e/Lead/${task.lead}` : `/e/Activity/${task.id}`;
   return (
     <li className="crm-task">
-      <button type="button" className="crm-tick" aria-label={`Done: ${task.subject ?? "activity"}`} onClick={onDone}>
+      <button type="button" className="crm-tick" aria-label={tr("Done: {value}", { value: task.subject ?? "activity" })} onClick={onDone}>
         <Icon name="check" size={12} />
       </button>
       <div className="crm-task-body">
-        <Link to={to}>{task.subject || task.activity_type || "Activity"}</Link>
-        <div className="faint">{[task.activity_type, about].filter(Boolean).join(" · ")}</div>
+        <Link to={to}>{task.subject || task.activity_type || tr("Activity")}</Link>
+        <div className="faint">{isolate([task.activity_type, about].filter(Boolean).join(" · "))}</div>
       </div>
-      <time className="faint">{dueText(task.due_at)}</time>
+      <time className="faint">{isolate(dueText(task.due_at))}</time>
       <div className="crm-snooze">
         <button type="button" className="btn btn-ghost btn-sm" title={tr("Move to tomorrow")} onClick={() => onSnooze(1)}>
           {tr("Tomorrow")}
@@ -62,7 +62,7 @@ function Row({ task, onDone, onSnooze }: { task: Task; onDone: () => void; onSno
 }
 
 export function Today() {
-  useShellTitle("Today");
+  useShellTitle(tr("Today"));
   const qc = useQueryClient();
   const me = useMe().data;
   const email = me?.user.email;
@@ -131,7 +131,7 @@ export function Today() {
       <header className="crm-head">
         <div>
           <Tabs />
-          <p className="page-sub">{formatMoment(new Date(), { weekday: "long", day: "numeric", month: "long" })}</p>
+          <p className="page-sub">{isolate(formatMoment(new Date(), { weekday: "long", day: "numeric", month: "long" }))}</p>
         </div>
       </header>
       <form className="crm-add" onSubmit={add}>
@@ -151,7 +151,7 @@ export function Today() {
           {groups.map(([h, tasks]) => (
             <section key={h} aria-label={h}>
               <h2 className="crm-group">
-                {h} {h === "Overdue" && <Badge tone="red">{tasks.length}</Badge>}
+                {isolate(h)} {h === "Overdue" && <Badge tone="red">{tasks.length}</Badge>}
               </h2>
               <ul className="crm-tasks">
                 {tasks.map((t) => (
@@ -168,20 +168,20 @@ export function Today() {
                   <li key={d.id} className="crm-task">
                     <span className="crm-dot" aria-hidden="true" />
                     <div className="crm-task-body">
-                      <Link to={`/d/${d.id}`}>{d.title || "Deal"}</Link>
+                      <Link to={`/d/${d.id}`}>{d.title || tr("Deal")}</Link>
                       <div className="faint">{tr("Deal")}</div>
                     </div>
-                    <time className="faint">{d.next_follow_up}</time>
+                    <time className="faint">{isolate(d.next_follow_up ?? "")}</time>
                   </li>
                 ))}
                 {q.data.leads.map((l) => (
                   <li key={l.id} className="crm-task">
                     <span className="crm-dot" aria-hidden="true" />
                     <div className="crm-task-body">
-                      <Link to={`/e/Lead/${l.id}`}>{l.lead_name || l.organization_name || "Lead"}</Link>
+                      <Link to={`/e/Lead/${l.id}`}>{l.lead_name || l.organization_name || tr("Lead")}</Link>
                       <div className="faint">{tr("Lead")}</div>
                     </div>
-                    <time className="faint">{l.next_follow_up}</time>
+                    <time className="faint">{isolate(l.next_follow_up ?? "")}</time>
                   </li>
                 ))}
               </ul>

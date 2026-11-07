@@ -7,7 +7,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type DragEvent, useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
-import { api, docPath, errorMessage, t as tr } from "@ferrum/client";
+import { api, docPath, errorMessage, t as tr, isolate } from "@ferrum/client";
 import { confirmDialog, EmptyState, ErrorState, Icon, Spinner, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@ferrum/kit/primitives";
 import { useMe } from "@ferrum/records";
@@ -61,11 +61,11 @@ function Card({ deal, stages, day, held, onHold, onMove, onWon, onLost }: {
     >
       <div className="crm-card-top">
         <Link className="crm-card-title" to={`d/${deal.id}`}>
-          {deal.title || deal.party_name || "Deal"}
+          {deal.title || deal.party_name || tr("Deal")}
         </Link>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button type="button" className="crm-card-menu" aria-label={`Move ${deal.title ?? "deal"}`}>
+            <button type="button" className="crm-card-menu" aria-label={tr("Move {value}", { value: deal.title ?? "deal" })}>
               <Icon name="chevronDown" size={14} />
             </button>
           </DropdownMenuTrigger>
@@ -83,19 +83,19 @@ function Card({ deal, stages, day, held, onHold, onMove, onWon, onLost }: {
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      {deal.party_name && deal.title !== deal.party_name && <div className="crm-card-party">{deal.party_name}</div>}
+      {deal.party_name && deal.title !== deal.party_name && <div className="crm-card-party">{isolate(deal.party_name)}</div>}
       <div className="crm-card-facts">
-        <strong>{money(Number(deal.base_amount ?? 0))}</strong>
+        <strong>{isolate(money(Number(deal.base_amount ?? 0)))}</strong>
         {deal.expected_close_date && (
-          <span className={flag === "overdue" ? "crm-late" : "faint"} title={flag === "overdue" ? "Past its expected close" : "Expected close"}>
-            {new Date(`${deal.expected_close_date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" })}
+          <span className={flag === "overdue" ? "crm-late" : "faint"} title={flag === "overdue" ? tr("Past its expected close") : tr("Expected close")}>
+            {isolate(new Date(`${deal.expected_close_date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short" }))}
           </span>
         )}
         <span className="crm-avatar" title={deal.assigned_to ?? undefined}>
-          {initials(deal.assigned_to)}
+          {isolate(initials(deal.assigned_to))}
         </span>
       </div>
-      {flag === "follow-up" ? <div className="crm-card-next crm-late">{tr("Follow up due")}</div> : deal.next_step && <div className="crm-card-next">{deal.next_step}</div>}
+      {flag === "follow-up" ? <div className="crm-card-next crm-late">{tr("Follow up due")}</div> : deal.next_step && <div className="crm-card-next">{isolate(deal.next_step)}</div>}
     </article>
   );
 }
@@ -114,7 +114,7 @@ function StageColumn({ column, ...card }: { column: Column; onDrop: (id: string,
     <section
       className="crm-column"
       data-over={over || undefined}
-      aria-label={stage?.stage_name ?? "No stage"}
+      aria-label={stage?.stage_name ?? tr("No stage")}
       onDragOver={(e) => {
         if (!stage || !card.held) return;
         e.preventDefault();
@@ -126,16 +126,16 @@ function StageColumn({ column, ...card }: { column: Column; onDrop: (id: string,
     >
       <header className="crm-column-head">
         <div className="crm-column-name">
-          <strong>{stage?.stage_name ?? "No stage"}</strong>
+          <strong>{stage?.stage_name ?? tr("No stage")}</strong>
           <span className="faint">{column.deals.length}</span>
           {stage && (
-            <Link className="crm-column-add" to={`e/Opportunity/new?sales_stage=${stage.id}`} aria-label={`New deal in ${stage.stage_name}`} title={tr("New deal here")}>
+            <Link className="crm-column-add" to={`e/Opportunity/new?sales_stage=${stage.id}`} aria-label={tr("New deal in {stage_name}", { stage_name: stage.stage_name })} title={tr("New deal here")}>
               <Icon name="plus" size={14} />
             </Link>
           )}
         </div>
-        <div className="crm-column-sum" title={`${money(column.weighted)} once weighted by probability`}>
-          {money(column.amount)}
+        <div className="crm-column-sum" title={tr("{value} once weighted by probability", { value: money(column.weighted) })}>
+          {isolate(money(column.amount))}
           {stage?.probability != null && <span className="faint"> · {Number(stage.probability)}%</span>}
         </div>
       </header>
@@ -149,7 +149,7 @@ function StageColumn({ column, ...card }: { column: Column; onDrop: (id: string,
 }
 
 export function Board() {
-  useShellTitle("Pipeline");
+  useShellTitle(tr("Pipeline"));
   const qc = useQueryClient();
   const me = useMe().data;
   const [sp, setSp] = useSearchParams();
@@ -184,12 +184,12 @@ export function Board() {
     }
   };
   const won = async (deal: Deal) => {
-    const ok = await confirmDialog({ title: `Won: ${deal.title ?? "this deal"}?`, message: "It leaves the pipeline. Cancelling its order reopens it.", confirmLabel: "Mark as won" });
+    const ok = await confirmDialog({ title: tr("Won: {value}?", { value: deal.title ?? "this deal" }), message: tr("It leaves the pipeline. Cancelling its order reopens it."), confirmLabel: tr("Mark as won") });
     if (!ok) return;
     try {
       await api.post(docPath("Opportunity", deal.id, "actions", "mark_won"), {});
       dropDeal(deal.id);
-      toast(`${deal.title ?? "Deal"} won`);
+      toast(tr("{value} won", { value: deal.title ?? "Deal" }));
     } catch (e) {
       toast(errorMessage(e), "error");
     }
@@ -229,7 +229,7 @@ export function Board() {
         <div>
           <Tabs />
           <p className="page-sub" aria-live="polite">
-            {q.data ? `${total.count} open ${total.count === 1 ? "deal" : "deals"} · ${money(total.amount)} · ${money(total.weighted)} weighted` : " "}
+            {q.data ? tr("{count} open {value} · {value2} · {value3} weighted", { count: total.count, value: total.count === 1 ? "deal" : "deals", value2: money(total.amount), value3: money(total.weighted) }) : " "}
           </p>
         </div>
         <div className="crm-tools">
