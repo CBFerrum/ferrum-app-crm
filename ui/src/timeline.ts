@@ -52,7 +52,7 @@ const KINDS: Record<string, Item["kind"]> = { Call: "call", Meeting: "meeting", 
 /** Field changes people care about in a deal's story; the rest stays in the record's history. */
 const TOLD = new Set(["sales_stage", "status", "assigned_to", "expected_close_date", "amount"]);
 
-const LABELS: Record<string, string> = { sales_stage: "Stage", status: "Status", assigned_to: "Owner", expected_close_date: "Expected close", amount: "Amount" };
+const LABELS: Record<string, string> = { get sales_stage() { return t("Stage"); }, status: "Status", get assigned_to() { return t("Owner"); }, get expected_close_date() { return t("Expected close"); }, get amount() { return t("Amount"); } };
 
 function changed(diff: unknown): [unknown, unknown] | null {
   if (Array.isArray(diff) && diff.length === 2) return [diff[0], diff[1]];

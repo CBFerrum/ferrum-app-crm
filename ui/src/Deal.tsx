@@ -225,7 +225,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
         <div className="crm-deal-title">
           <h1 className="page-title">{isolate(String(doc.title ?? "Deal"))}</h1>
           <p className="page-sub">
-            {isolate([doc.party_name, doc.base_amount != null ? money(Number(doc.base_amount)) : null, doc.expected_close_date ? `closes ${doc.expected_close_date}` : null].filter(Boolean).join(" · "))}
+            {isolate([doc.party_name, doc.base_amount != null ? money(Number(doc.base_amount)) : null, doc.expected_close_date ? t("closes {expected_close_date}", { expected_close_date: String(doc.expected_close_date) }) : null].filter(Boolean).join(" · "))}
           </p>
         </div>
         <div className="page-actions">

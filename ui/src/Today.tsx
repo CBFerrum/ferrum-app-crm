@@ -149,7 +149,7 @@ export function Today() {
       ) : (
         <>
           {groups.map(([h, tasks]) => (
-            <section key={h} aria-label={h}>
+            <section key={h} aria-label={isolate(h)}>
               <h2 className="crm-group">
                 {isolate(h)} {h === "Overdue" && <Badge tone="red">{tasks.length}</Badge>}
               </h2>
