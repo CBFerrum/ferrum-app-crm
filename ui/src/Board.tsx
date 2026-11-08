@@ -184,7 +184,7 @@ export function Board() {
     }
   };
   const won = async (deal: Deal) => {
-    const ok = await confirmDialog({ title: tr("Won: {value}?", { value: deal.title ?? "this deal" }), message: tr("It leaves the pipeline. Cancelling its order reopens it."), confirmLabel: tr("Mark as won") });
+    const ok = await confirmDialog({ title: tr("Won: {value}?", { value: deal.title ?? tr("this deal") }), message: tr("It leaves the pipeline. Cancelling its order reopens it."), confirmLabel: tr("Mark as won") });
     if (!ok) return;
     try {
       await api.post(docPath("Opportunity", deal.id, "actions", "mark_won"), {});
@@ -229,7 +229,7 @@ export function Board() {
         <div>
           <Tabs />
           <p className="page-sub" aria-live="polite">
-            {q.data ? tr("{count} open {value} · {value2} · {value3} weighted", { count: total.count, value: total.count === 1 ? "deal" : "deals", value2: money(total.amount), value3: money(total.weighted) }) : " "}
+            {q.data ? (total.count === 1 ? tr("{count} open deal · {value2} · {value3} weighted", { count: total.count, value2: money(total.amount), value3: money(total.weighted) }) : tr("{count} open deals · {value2} · {value3} weighted", { count: total.count, value2: money(total.amount), value3: money(total.weighted) })) : " "}
           </p>
         </div>
         <div className="crm-tools">

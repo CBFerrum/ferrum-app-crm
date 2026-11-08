@@ -24,7 +24,7 @@ export function LostDialog({ deal, onClose, onDone }: { deal: Deal; onClose: () 
     }
   };
   return (
-    <Dialog open onClose={onClose} title={t("Lost: {value}", { value: deal.title ?? "this deal" })}>
+    <Dialog open onClose={onClose} title={t("Lost: {value}", { value: deal.title ?? t("this deal") })}>
       <form className="stack" onSubmit={submit}>
         {error && <Alert tone="error">{isolate(error)}</Alert>}
         <Field label={t("Reason")} htmlFor="lost-reason" required>
