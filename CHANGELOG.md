@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0
+
+A quotation's approval is of its terms (FEO-025), kept as Approved As:
+- the party;
+- each line as quoted (item, unit, quantity, price, discount and rate);
+- the additional discount, taxes, currency, terms and validity.
+
+Any of them changed, it is approved again: a later validity or other terms are another decision, as another total or discount was before. A draft approved before this release is still held to its total and discount alone.
+
+What is made from a quotation keeps what it quoted:
+- A sales order made from one is refused at submission when a line's item, unit or price, or the order's additional discount, currency or taxes, is not what the quotation quoted. Fewer may be ordered, as before.
+- An invoice line made from such an order keeps the quoted price too.
+- A credit note gives back what was billed.
+
+Rebuilt with Ferrum-Frontend 9f5a466, with Approved As named in Arabic and Hindi.
+
 ## 0.6.17
 
 The reports it defines in code (their titles and parameters) have names in Arabic and Hindi too, with its models' and manifest's (324 each in ui/src/locales/names). Translated by the model, to be reviewed by native speakers.

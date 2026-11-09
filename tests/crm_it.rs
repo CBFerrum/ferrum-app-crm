@@ -730,6 +730,49 @@ async fn scenario() {
     maria.action("Quotation", q, "approve_quotation", json!({})).await;
     assert_eq!(anna.submit("Quotation", q).await["docstatus"], json!(1), "approved, and unchanged");
 
+    // ── an approval is of the terms, and what is ordered and billed keeps them (FEO-025) ──
+    let rush = uid(&anna
+        .insert(
+            "Quotation",
+            json!({"company": cid, "party_type": "Customer", "customer": acme, "items": [{"item": widget, "qty": "10", "rate": "100"}], "discount_percent": "20"}),
+        )
+        .await);
+    maria.action("Quotation", rush, "approve_quotation", json!({})).await;
+    assert!(anna.get("Quotation", rush).await["approved_digest"].as_str().is_some_and(|d| d.len() == 64), "approved as its terms");
+    // The same total and discount on other terms is another decision.
+    let later = (today() + chrono::Duration::days(60)).to_string();
+    assert!(anna.update("Quotation", rush, json!({"valid_till": later})).await["approved_by"].is_null(), "another validity");
+    maria.action("Quotation", rush, "approve_quotation", json!({})).await;
+    assert!(anna.update("Quotation", rush, json!({"terms": "Delivered within 2 days"})).await["approved_by"].is_null(), "other terms");
+    maria.action("Quotation", rush, "approve_quotation", json!({})).await;
+    anna.submit("Quotation", rush).await;
+    // The order keeps the quoted price: another is refused until it is the quoted one again.
+    let order = vid(&anna.action("Quotation", rush, "make_sales_order", json!({})).await);
+    let line = anna.get("SalesOrder", order).await["items"][0].clone();
+    anna.update("SalesOrder", order, json!({"items": [{"id": line["id"], "discount_percent": "50"}]})).await;
+    refused(anna.k.submit(&anna.ctx, "SalesOrder", order, None).await, "not what quotation");
+    anna.update("SalesOrder", order, json!({"items": [{"id": line["id"], "discount_percent": line["discount_percent"]}], "discount_percent": "25"})).await;
+    refused(anna.k.submit(&anna.ctx, "SalesOrder", order, None).await, "additional discount");
+    anna.update("SalesOrder", order, json!({"discount_percent": "20"})).await;
+    anna.submit("SalesOrder", order).await;
+    assert_eq!(anna.get("Quotation", rush).await["status"], json!("Ordered"));
+    // So does its invoice; a partial credit note gives back what was billed, at what was billed.
+    let accountant = user("accountant@crm.test", "Ada Accountant", &["Accounts Manager"]).await;
+    let invoice = vid(&accountant.action("SalesOrder", order, "make_sales_invoice", json!({})).await);
+    let line = accountant.get("SalesInvoice", invoice).await["items"][0].clone();
+    accountant.update("SalesInvoice", invoice, json!({"items": [{"id": line["id"], "discount_percent": "50"}]})).await;
+    refused(accountant.k.submit(&accountant.ctx, "SalesInvoice", invoice, None).await, "not what quotation");
+    accountant.update("SalesInvoice", invoice, json!({"items": [{"id": line["id"], "discount_percent": line["discount_percent"]}]})).await;
+    let billed = dec(&accountant.submit("SalesInvoice", invoice).await["grand_total"]);
+    let quoted = dec(&anna.get("Quotation", rush).await["grand_total"]);
+    assert_eq!(billed, quoted, "billed as quoted: 10 at the item's rate, less 20%, with 10% VAT");
+    let credit = vid(&accountant.action("SalesInvoice", invoice, "make_credit_note", json!({})).await);
+    let line = accountant.get("SalesInvoice", credit).await["items"][0].clone();
+    accountant.update("SalesInvoice", credit, json!({"items": [{"id": line["id"], "qty": "-3"}]})).await;
+    let returned = dec(&accountant.submit("SalesInvoice", credit).await["grand_total"]);
+    assert_eq!(billed + returned, quoted * n("0.7"), "7 kept, at the quoted price, discount and taxes");
+    assert_eq!(anna.get("Quotation", rush).await["status"], json!("Ordered"), "a return is not an order taken back");
+
     // ───────────── product rules ─────────────
     // What may be quoted together: an item that needs another, two that exclude each other, so many
     // of one per unit of another. A draft says what it breaks, and is not submitted until nothing.
