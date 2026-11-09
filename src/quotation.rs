@@ -1,7 +1,8 @@
 //! Quotations: priced by the selling engine, submitted to a customer or a lead, turned into sales
 //! orders for the quantities still open, declared lost, and expired once past their validity.
 //! Sales orders made from a quotation add their quantities to its lines on submit and take them
-//! back on cancel.
+//! back on cancel. An approval is of the quotation's terms, and what is ordered or billed from it
+//! keeps them (FEO-025).
 
 use crate::opportunity::{follow_orders, lose_with_quotation};
 use crate::{check_assignee, lookup, lost_reason};
@@ -16,6 +17,7 @@ use ferrum_kernel::{Ctx, Doc, DocHook, Error, Filter, HookCtx, Kernel, Op, Resul
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use uuid::Uuid;
 
 /// Validity of a quotation when none is given.
@@ -83,9 +85,14 @@ impl DocHook for QuotationHook {
         // A draft may be incomplete; it says what it breaks, and submitting waits until nothing.
         let broken = product_rule_issues(hc, doc).await?;
         set(doc, "rule_issues", if broken.is_empty() { Value::Null } else { json!(broken.join("\n")) });
-        // What was approved is these numbers: other numbers have not been.
-        if s(doc, "approved_by").is_some() && (d(doc, "approved_total") != d(doc, "grand_total") || d(doc, "approved_discount") != d(doc, "discount_percent")) {
-            for f in ["approved_by", "approved_at", "approved_total", "approved_discount"] {
+        // What was approved is these terms: other terms have not been. One approved before the terms
+        // were kept is held to its total and discount, as it was then.
+        let moved = match s(doc, "approved_digest") {
+            Some(approved) => approved != approval_digest(doc),
+            None => d(doc, "approved_total") != d(doc, "grand_total") || d(doc, "approved_discount") != d(doc, "discount_percent"),
+        };
+        if s(doc, "approved_by").is_some() && moved {
+            for f in ["approved_by", "approved_at", "approved_total", "approved_discount", "approved_digest"] {
                 set(doc, f, Value::Null);
             }
         }
@@ -131,6 +138,24 @@ impl DocHook for QuotationHook {
             _ => Ok(None),
         }
     }
+}
+
+/// What an approval is of: the party, each line as quoted (item, unit, quantity, price, discount and
+/// rate), the additional discount, taxes, currency, terms and validity. Any of them changed is another
+/// decision. A lead's quotation stays the lead's when the lead becomes a customer.
+pub(crate) fn approval_digest(doc: &Doc) -> String {
+    let n = |v: Decimal| v.normalize().to_string();
+    let party = if s(doc, "party_type") == Some("Lead") { s(doc, "lead") } else { s(doc, "customer") };
+    let lines: Vec<Value> = rows(doc, "items")
+        .iter()
+        .map(|l| json!([s(l, "item"), s(l, "uom"), n(d(l, "qty")), n(d(l, "price_list_rate")), n(d(l, "discount_percent")), n(d(l, "rate"))]))
+        .collect();
+    ferrum_kernel::receipt::digest(
+        "quotation approval",
+        None,
+        &json!({"party": [s(doc, "party_type"), party], "lines": lines, "discount": n(d(doc, "discount_percent")), "taxes": s(doc, "tax_template"),
+                "currency": s(doc, "currency"), "terms": s(doc, "terms"), "valid_till": s(doc, "valid_till")}),
+    )
 }
 
 /// A limit past which a quotation needs someone else's approval.
@@ -280,6 +305,7 @@ async fn approve(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     v.insert("approved_at".into(), json!(chrono::Utc::now().to_rfc3339()));
     v.insert("approved_total".into(), doc.get("grand_total").cloned().unwrap_or(Value::Null));
     v.insert("approved_discount".into(), doc.get("discount_percent").cloned().unwrap_or(Value::Null));
+    v.insert("approved_digest".into(), json!(approval_digest(doc)));
     let quotation = id(doc, "id").ok_or_else(|| Error::internal("quotation without id"))?;
     hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Quotation", quotation, v).await?;
     Ok(json!({"approved_by": hc.ctx.email}))
@@ -342,11 +368,33 @@ async fn mark_lost(hc: &mut HookCtx<'_>, q: &Doc, params: &Value) -> Result<Valu
     Ok(json!({"status": "Lost"}))
 }
 
-/// Keeps quotations' ordered quantities in step with the sales orders made from them.
+/// Keeps quotations' ordered quantities in step with the sales orders made from them, and an order
+/// made from a quotation to what it quoted.
 pub struct SalesOrderHook;
 
 #[async_trait]
 impl DocHook for SalesOrderHook {
+    async fn before_submit(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
+        let mut quotes = HashMap::new();
+        if let Some(q) = id(doc, "crm_quotation") {
+            let quote = quotation(hc, &mut quotes, q).await?;
+            if d(doc, "discount_percent") != d(&quote, "discount_percent")
+                || s(doc, "currency") != s(&quote, "currency")
+                || s(doc, "tax_template") != s(&quote, "tax_template")
+            {
+                let number = s(&quote, "number").unwrap_or_default();
+                return Err(Error::invalid(format!(
+                    "this order's additional discount, currency or taxes are not what quotation {number} quoted: make the order from a quotation approved for them"
+                )));
+            }
+        }
+        for (n, line) in rows(doc, "items").iter().enumerate() {
+            let (Some(q), Some(from)) = (id(line, "crm_quotation"), s(line, "crm_quotation_line")) else { continue };
+            as_quoted(hc, &mut quotes, n + 1, line, q, from, "make the order from a quotation approved for it").await?;
+        }
+        Ok(())
+    }
+
     async fn on_submit(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
         track_orders(hc, doc, Decimal::ONE).await
     }
@@ -354,6 +402,51 @@ impl DocHook for SalesOrderHook {
     async fn on_cancel(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
         track_orders(hc, doc, -Decimal::ONE).await
     }
+}
+
+/// Bills an order made from a quotation at what the quotation quoted: an invoice line from such an
+/// order keeps its item, unit and price. A credit note carries no order lines, and gives back what
+/// was billed.
+pub struct SalesInvoiceHook;
+
+#[async_trait]
+impl DocHook for SalesInvoiceHook {
+    async fn before_submit(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
+        let (mut quotes, mut orders) = (HashMap::new(), HashMap::new());
+        for (n, line) in rows(doc, "items").iter().enumerate() {
+            let (Some(order), Some(order_line)) = (id(line, "sales_order"), s(line, "so_line")) else { continue };
+            if let Entry::Vacant(e) = orders.entry(order) {
+                e.insert(hc.kernel.get_tx(&sys(hc.ctx), hc.tx, "SalesOrder", order, false).await?);
+            }
+            let from = rows(&orders[&order], "items").into_iter().find(|l| s(l, "id") == Some(order_line));
+            let Some((q, quoted)) = from.and_then(|l| Some((id(&l, "crm_quotation")?, s(&l, "crm_quotation_line")?.to_string()))) else { continue };
+            as_quoted(hc, &mut quotes, n + 1, line, q, &quoted, "bill what was quoted, or quote it again and order that").await?;
+        }
+        Ok(())
+    }
+}
+
+async fn quotation(hc: &mut HookCtx<'_>, quotes: &mut HashMap<Uuid, Doc>, q: Uuid) -> Result<Doc> {
+    if let Entry::Vacant(e) = quotes.entry(q) {
+        e.insert(hc.kernel.get_tx(&sys(hc.ctx), hc.tx, "Quotation", q, false).await?);
+    }
+    Ok(quotes[&q].clone())
+}
+
+/// Refuses a line that is not what quotation `q`'s line `from` quoted: another item, unit or price.
+/// Fewer may be ordered or billed than were quoted.
+async fn as_quoted(hc: &mut HookCtx<'_>, quotes: &mut HashMap<Uuid, Doc>, n: usize, line: &Doc, q: Uuid, from: &str, then: &str) -> Result<()> {
+    let quote = quotation(hc, quotes, q).await?;
+    let number = s(&quote, "number").unwrap_or_default();
+    let Some(quoted) = rows(&quote, "items").into_iter().find(|l| s(l, "id") == Some(from)) else {
+        return Err(Error::invalid(format!("line {n} came from a line quotation {number} no longer has")));
+    };
+    if s(line, "item") != s(&quoted, "item") || s(line, "uom") != s(&quoted, "uom") || d(line, "rate") != d(&quoted, "rate") {
+        let name = s(&quoted, "item_name").or(s(&quoted, "item")).unwrap_or_default();
+        let unit = s(&quoted, "uom").map(|u| format!(" a {u}")).unwrap_or_default();
+        return Err(Error::invalid(format!("line {n} is not what quotation {number} quoted ({name} at {}{unit}): {then}", d(&quoted, "rate").normalize())));
+    }
+    Ok(())
 }
 
 /// Adds (`sign` +1) or takes back (−1) an order's quantities on the quotation lines they came
