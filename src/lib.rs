@@ -19,8 +19,8 @@ use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// Registers this app's document hooks. The connector's `SalesOrder` hook runs only where
-/// `crm_erp` is installed, after the selling hooks.
+/// Registers this app's document hooks. The connector's `SalesOrder` and `SalesInvoice` hooks run
+/// only where `crm_erp` is installed, after the selling hooks.
 pub fn register(hooks: &mut HookRegistry) {
     hooks
         .register("Lead", Arc::new(lead::LeadHook))
@@ -28,7 +28,7 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("Quotation", Arc::new(quotation::QuotationHook))
         .register("Activity", Arc::new(activity::ActivityHook));
     hooks.scoped(&[CONNECTOR_PACKAGE.to_string()], |h| {
-        h.register("SalesOrder", Arc::new(quotation::SalesOrderHook));
+        h.register("SalesOrder", Arc::new(quotation::SalesOrderHook)).register("SalesInvoice", Arc::new(quotation::SalesInvoiceHook));
     });
 }
 

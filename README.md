@@ -62,7 +62,7 @@ Calls, meetings, emails and tasks on the lead, deal or customer they concern, wi
 <td width="50%" valign="top">
 
 ### 🧾 Quotations that become orders
-Priced and taxed by the selling engine; ordered quantities flow back to the quotation.
+Priced and taxed by the selling engine. An approval is of the quotation's terms, and the orders and invoices made from it keep them; ordered quantities flow back to the quotation.
 
 </td>
 </tr>
@@ -289,6 +289,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.7.0** | An approval is of a quotation's terms; the orders and invoices made from it keep what it quoted. |
 | **0.6.17** | Its reports' names in Arabic and Hindi. |
 | **0.6.16** | Its names in Arabic and Hindi; the last English sentences translated. |
 | **0.6.15** | Sentences built in code are words too, in Arabic and Hindi. |

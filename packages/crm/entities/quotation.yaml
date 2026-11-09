@@ -66,6 +66,8 @@
     - {name: approved_at, type: datetime, read_only: true, no_copy: true}
     - {name: approved_total, type: currency, read_only: true, no_copy: true, hidden: true}
     - {name: approved_discount, type: percent, read_only: true, no_copy: true, hidden: true}
+    - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
+       description: "What was approved: the party, each line as quoted, the additional discount, taxes, currency, terms and validity. Any of them changed, it is approved again"}
   form:
     - {label: Quotation, fields: [company, party_type, customer, lead, party_name, contact, opportunity, posting_date, valid_till, assigned_to]}
     - {label: Currency and Price List, collapsible: true, fields: [currency, conversion_rate, price_list]}
