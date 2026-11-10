@@ -5,7 +5,7 @@
   <img alt="Ferrum CRM" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.9.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.10.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -18,21 +18,22 @@
 ## Overview
 
 Ferrum CRM takes a lead from first contact to a priced, taxed quotation and on to a sales
-order, without leaving Ferrum. Deals move through stages you define, weighted by probability;
+order, without leaving Ferrum. Deals move through the stages of pipelines you define (new
+business, renewals…), weighted by probability;
 calls, meetings and tasks hang off the record they belong to; and quotations are priced by the
 same selling engine that invoices them, so what sales promises is what accounting books.
 
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.9.0` |
+| 📦 Version | `0.10.0` |
 | 🧱 Platform | Ferrum `>=0.3.2, <0.4` |
 | 🔗 Requires | nothing else |
 | 🖥️ Interface | its own, at `/crm/` |
-| 🗃️ Records | 15 entities in 2 packages |
+| 🗃️ Records | 18 entities in 2 packages |
 | 👥 Roles | 4: Sales User, Sales Manager, Marketing Manager, CRM Viewer |
 | 📊 Reports | 10 |
-| 🧪 Tests | 17 Rust tests, 2 interface test files |
+| 🧪 Tests | 20 Rust tests, 2 interface test files |
 
 
 ## Highlights
@@ -48,7 +49,7 @@ One open lead per email or phone, however it is written; enquiries from forms an
 <td width="50%" valign="top">
 
 ### 📈 A pipeline you can trust
-Configurable stages and probabilities, a weighted pipeline, competitors and won or lost reasons; deals for a lead, a prospect or a customer, and a closed deal reopened where it stood.
+Several pipelines, each with its own stages, probabilities and forecast categories, and what a deal must have before it enters a stage; a weighted pipeline, competitors and won or lost reasons; deals for a lead, a prospect or a customer, with their people and buying roles, lines priced from a price list, and a closed deal reopened where it stood.
 
 </td>
 </tr>
@@ -62,7 +63,7 @@ Calls, meetings, emails and tasks on the lead, deal or customer they concern, wi
 <td width="50%" valign="top">
 
 ### 🧾 Quotations that become orders
-Priced and taxed by the selling engine. An approval is of the quotation's terms, and the orders and invoices made from it keep them; ordered quantities flow back to the quotation.
+Priced and taxed by the selling engine. Sent, accepted or rejected with a reason, and revised with the next revision number. An approval is of the quotation's terms, and the orders and invoices made from it keep them; ordered quantities flow back to the quotation.
 
 </td>
 </tr>
@@ -70,7 +71,7 @@ Priced and taxed by the selling engine. An approval is of the quotation's terms,
 <td width="50%" valign="top">
 
 ### 📊 Reports that answer questions
-Sales pipeline and forecast, lead funnel and conversion, campaign performance and attribution, a quotation register, win rate, sales cycle, lost reasons and activity by person.
+Sales pipeline, and a forecast by owner with commit, best case and pipeline; lead funnel and conversion, campaign performance and attribution, a quotation register, win rate, sales cycle, lost reasons and activity by person.
 
 </td>
 <td width="50%" valign="top">
@@ -103,7 +104,7 @@ flowchart LR
     L["🧲 Lead<br/><small>captured, deduplicated</small>"] -->|qualify| Q{{"Qualified?"}}
     Q -->|yes, convert| C["🏢 Customer + contact<br/>+ address<br/><small>new or existing; undoable</small>"]
     Q -->|no| X["Lost · reason kept"]
-    C --> O["💼 Opportunity<br/><small>stage · probability · amount</small>"]
+    C --> O["💼 Opportunity<br/><small>pipeline · stage · probability · amount</small>"]
     O -->|quote| QT["🧾 Quotation<br/><small>selling engine prices and taxes</small>"]
     QT -->|order| SO["📦 Sales order<br/><small>(ERP)</small>"]
     O -.->|activities| A["📞 Calls · meetings · tasks"]
@@ -122,7 +123,7 @@ flowchart LR
     subgraph Server["Ferrum server"]
         API["REST · MCP · live"]
         K["Kernel<br/><small>permissions · row-level security · audit</small>"]
-        APP["CRM<br/><small>15 entities · 4 roles</small>"]
+        APP["CRM<br/><small>18 entities · 4 roles</small>"]
         OB[("Outbox")]
     end
     DB[("PostgreSQL")]
@@ -154,7 +155,7 @@ with them under the same rules as people.
 
 ## Data model
 
-The main records and how they connect (15 entities in all; `packages/` has every field).
+The main records and how they connect (18 entities in all; `packages/` has every field).
 
 ```mermaid
 erDiagram
@@ -178,6 +179,15 @@ erDiagram
     Prospect {
         string prospect_name PK
     }
+    SalesPipeline {
+        string pipeline_name PK
+        bool is_default
+    }
+    SalesStage {
+        string stage_name PK
+        string outcome
+        string forecast_category
+    }
     Campaign {
         string campaign_name PK
         string status
@@ -191,6 +201,12 @@ erDiagram
     Customer ||--o{ Opportunity : "customer"
     Prospect ||--o{ Opportunity : "prospect"
     Contact ||--o{ Opportunity : "contact"
+    SalesPipeline ||--|{ SalesStage : "pipeline"
+    SalesPipeline ||--o{ Opportunity : "pipeline"
+    SalesStage ||--o{ Opportunity : "sales_stage"
+    Opportunity ||--|{ OpportunityContact : "contacts"
+    Contact ||--o{ OpportunityContact : "contact"
+    BuyingRole ||--o{ OpportunityContact : "role"
     Opportunity ||--|{ OpportunityItem : "items"
     Opportunity ||--|{ OpportunityCompetitor : "competitors"
     Campaign ||--o{ Opportunity : "campaign"
@@ -198,6 +214,8 @@ erDiagram
     Customer ||--o{ Quotation : "customer"
     Lead ||--o{ Quotation : "lead"
     Prospect ||--o{ Quotation : "prospect"
+    Opportunity ||--o{ Quotation : "opportunity"
+    Quotation ||--o| Quotation : "revision_of"
     Lead ||--o{ Lead : "duplicate_of"
 ```
 
@@ -205,16 +223,16 @@ erDiagram
 
 | Role | What it is for | Entities |
 |---|---|---|
-| **Sales User** | Works the leads, opportunities and activities they own, and their quotations. | 14 |
-| **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 26 |
-| **Marketing Manager** | Campaigns and lead generation. | 13 |
-| **CRM Viewer** | Read-only access to CRM records and reports. | 11 |
+| **Sales User** | Works the leads, opportunities and activities they own, and their quotations. | 18 |
+| **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 28 |
+| **Marketing Manager** | Campaigns and lead generation. | 14 |
+| **CRM Viewer** | Read-only access to CRM records and reports. | 13 |
 
 <details>
 <summary><b>Reports (10)</b></summary>
 
-- Sales Pipeline
-- Sales Forecast
+- Sales Pipeline (one pipeline, or all)
+- Sales Forecast (by owner or month: closed, commit, best case, pipeline and weighted)
 - Lead Funnel
 - Campaign Performance
 - Campaign Attribution (linear, first or last touch)
@@ -301,6 +319,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.10.0** | Several pipelines; what a stage asks of a deal entering it; a deal's people with buying roles; deal lines priced from a price list, with units and discounts; quotations sent, accepted or rejected, and revised; a forecast by owner and category. |
 | **0.9.0** | Leads shared out by assignment rules; reminders and My work; days in stage and last activity; call outcomes; win rate, sales cycle, lost reasons and activity reports. |
 | **0.8.0** | Duplicates by email or phone, kept or refused; conversion onto existing contacts, and undone; deals reopened, and for prospects. |
 | **0.7.0** | An approval is of a quotation's terms; the orders and invoices made from it keep what it quoted. |

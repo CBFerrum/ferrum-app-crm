@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.10.0
+
+For a sales team switching CRMs: their pipelines, quotations and forecast as they kept them.
+
+Pipelines:
+- A workspace has several pipelines (CRM's menu, Pipelines), New Business and Renewals say, each with its own stages, probabilities and won and lost stages; a stage's name is unique within its pipeline, so both can have a Proposal. One pipeline is the default: making another the default makes it the only one.
+- A deal is in one pipeline, and its stage is one of that pipeline's. A deal made with neither goes to the default's first open stage; one made in a stage is in that stage's pipeline. Another pipeline chosen for a deal puts it at that pipeline's first open stage, unless a stage of it is chosen with it; the deal's story says so.
+- The board shows one pipeline at a time, with a way to switch where there are several, and remembers the one last shown on the device. The Sales Pipeline, Sales Forecast, Win Rate, Sales Cycle and Lost Reasons reports take a pipeline; without one, stages are named with their pipeline.
+- Won, lost, Reopen, an order winning a deal and its cancellation reopening it keep to the deal's pipeline.
+- A pipeline or a stage that deals stand in is neither disabled nor deleted, and the refusal says how many (open ones, for disabling). The default pipeline is not disabled or deleted. A pipeline no deal stands in is deleted with its stages.
+
+What a stage asks:
+- A manager can tick, on a stage, what a deal must have before it enters: an amount, an expected close date, a primary contact, a next step, at least one line, a submitted quotation. Moving a deal forward into it, from the board as from the form, or making one in it, without them is refused, naming what is missing. Moving back in its pipeline, losing it, reopening it and an order winning it are never held up.
+
+A deal's people and lines:
+- A deal has contacts with their buying roles (Decision Maker, Influencer, User, Finance, Legal, or the workspace's own Buying Roles) and one primary, which stays the deal's Contact, so its quotations and reports read it as before. A contact can be on many deals. The deal's page lists them, the primary first.
+- A deal has a price list (its customer's, else the first selling price list, as a quotation's), and its lines a unit and a discount. A line's rate is the item's price in that list, in the deal's currency (through the company's currency from a list in another), when the item is chosen, or its unit, the list or the currency changes while its rate was left as it was; a rate a person types stays theirs. Create Quotation carries the price list, units, rates and discounts over unchanged (no pricing rule changes what was discussed).
+
+Quotations:
+- A submitted quotation can be marked Sent, then Accepted, or Rejected with a reason, by whoever records the customer's answer (who and when are kept). A sent quotation expires past its validity as an open one does; an answer stands past it. An order is made from an open, sent or accepted one as before; a rejected one is refused, saying when and why it was rejected, as an expired one says when it expired. Rejecting a deal's only live quotation leaves the deal open: another revision may follow. Mark as Lost still loses the deal with its last live quotation.
+- Cancelling and amending a quotation makes its next revision: Revision 2, 3…, Revises the one it replaces, which shows Replaced By. Lists and the deal's page show the latest revision first. A revision is approved again where an approval rule asks, as 0.7.0 requires.
+- E-mailing a quotation from its record does not mark it Sent: the platform only writes a comment on the record then, which an app cannot tell from one a person typed. Mark it as Sent when it goes out.
+
+Forecast:
+- A deal has a Forecast Category (Pipeline, Best Case, Commit, Omitted): its stage's unless a person sets one. A manager sets each stage's; won deals count as Closed.
+- Sales Forecast gives, for a period, by owner (or by month) and in total: what was won in it (Closed, by the day it was won), and the open deals expected to close in it under Commit, Best Case and Pipeline, with their weighted amount; Omitted deals are left out. Open deals with no expected close date are counted apart, as before.
+
+For data already there:
+- Each workspace gets one pipeline, Sales Pipeline, its default, holding every stage it has and every deal (sql/004_pipelines.sql); nothing else changes. A stage's name is unique within its pipeline from now on.
+- Stages already there have no forecast category, and count as Pipeline until a manager sets one; new workspaces' Proposal is Best Case and Negotiation Commit.
+- Requirements apply from when a manager sets them, and only to moves made then; deals standing in a stage already are left there.
+- A deal keeps its contact; it joins the deal's contacts as the primary the next time the deal is saved. Its lines keep their rates, and its price list is filled when it is next saved.
+- Quotations already there are numbered from the amendments the platform recorded: revision 1, then one more for each amendment, each linked to the one it revises and the one that replaced it (sql/005_quotation_revisions.sql). Their statuses stay as they are.
+- The Sales Forecast report is by owner unless asked by month; it counts won deals by the day they were won, not their expected close date.
+
+Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (64 names and 5 words each), translated by the model, to be reviewed by native speakers.
+
 ## 0.9.0
 
 For a sales team switching CRMs: leads shared out by rules, reminders so nothing slips, and the reports a manager asks for at the end of the month.
