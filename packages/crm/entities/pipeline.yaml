@@ -57,6 +57,8 @@
     - {name: converted_on, type: date, read_only: true, no_copy: true}
     - {name: unsubscribed, type: check, in_filter: true, description: Do not send marketing communication}
     - {name: allow_duplicate, type: check, no_copy: true, description: "Save it although an open lead has the same email or phone; it is linked to that lead, to merge later"}
+    - {name: phone_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The phone's national part, by which the same person is found"}
+    - {name: mobile_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The mobile's national part, by which the same person is found"}
     - {name: duplicate_of, type: link, to: Lead, read_only: true, no_copy: true, in_filter: true, description: "An earlier lead with the same email or phone, to merge with or keep apart"}
     - {name: conversion, type: json, read_only: true, hidden: true, no_copy: true, description: "What converting it made and changed, so that it can be undone"}
     - {name: notes, type: text}

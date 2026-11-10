@@ -106,7 +106,7 @@ roles:
 # What a personal-data request exports and erases for a person (their email).
 personal_data:
   - {entity: Lead, match: email, phone: phone, name: lead_name,
-     erase: [first_name, last_name, lead_name, organization_name, job_title, email, phone, mobile, address_line1, address_line2, postal_code, need, notes]}
+     erase: [first_name, last_name, lead_name, organization_name, job_title, email, phone, mobile, phone_key, mobile_key, address_line1, address_line2, postal_code, need, notes]}
   # An organization's own email and phone can be a person's (a sole trader's); its name stays, as a company customer's does.
   - {entity: Prospect, match: email, phone: phone, erase: [email, phone, notes]}
   # What was written down about the person on their lead or contact: calls, meetings and notes.

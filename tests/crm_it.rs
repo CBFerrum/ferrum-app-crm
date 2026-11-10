@@ -904,6 +904,20 @@ async fn crm_alone(k: &Arc<Kernel>) {
     assert_eq!(sol.get("Customer", vid(&made)).await["customer_name"], json!("Lia Studio"));
 }
 
+/// After a refused undo nothing moved: the lead is still converted onto the customer, its deal and
+/// quotation are still the customer's, and the customer, contact and address the conversion made stand.
+async fn unmoved(admin: &U, lead: Uuid, made: &Value, deal: Uuid, quotation: Uuid) {
+    let customer = made["id"].clone();
+    let l = admin.get("Lead", lead).await;
+    assert_eq!((l["status"].clone(), l["customer"].clone(), l["contact"].clone()), (json!("Converted"), customer.clone(), made["contact"].clone()), "{l:?}");
+    assert!(l["conversion"].is_object(), "still knows what it made");
+    assert_eq!(admin.get("Opportunity", deal).await["customer"], customer, "its deal");
+    assert_eq!(admin.get("Quotation", quotation).await["customer"], customer, "its quotation");
+    for (entity, rid) in [("Customer", &customer), ("Contact", &made["contact"]), ("Address", &made["address"])] {
+        admin.get(entity, vid(&json!({"id": rid}))).await;
+    }
+}
+
 /// A sales team's first days after switching CRMs: the same person entered again, enquiries from
 /// forms and mail, a conversion onto what exists and one taken back, a deal reopened, a prospect's
 /// deal, and what an erasure takes.
@@ -955,6 +969,10 @@ async fn day_one(k: &Arc<Kernel>) {
         json!({"first_name": "A", "mobile": "(+91) 9845000001"}),
         json!({"first_name": "A", "phone": "+91 98450 000 01"}),
         json!({"first_name": "A", "email": "Asha@Rao.TEST"}),
+        // A trunk zero, an international 00, no country code at all: the national part.
+        json!({"first_name": "A", "phone": "098450 00001"}),
+        json!({"first_name": "A", "mobile": "0091 9845000001"}),
+        json!({"first_name": "A", "phone": "9845000001"}),
     ] {
         let r = anna.k.insert(&anna.ctx, "Lead", obj(again.clone())).await;
         refused(r, "already exists");
@@ -964,6 +982,12 @@ async fn day_one(k: &Arc<Kernel>) {
         matches!(&said, Err(Error::Validation(e)) if e.iter().any(|f| f.message.contains(asha["number"].as_str().unwrap()) && f.message.contains("Asha Rao"))),
         "names the lead: {said:?}"
     );
+    // A seven-digit number matches only itself; numbers of another length that end alike do not.
+    let short = anna.insert("Lead", json!({"first_name": "Shop", "phone": "555 0123"})).await;
+    refused(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "S", "mobile": "555-0123"}))).await, "already exists");
+    assert!(anna.insert("Lead", json!({"first_name": "Far", "phone": "+1 415 555 0123"})).await["duplicate_of"].is_null(), "not {short:?}");
+    let sf = anna.insert("Lead", json!({"first_name": "Sam", "phone": "+1 415 555 0100"})).await;
+    assert!(anna.insert("Lead", json!({"first_name": "Lon", "phone": "+44 415 555 0100 9"})).await["duplicate_of"].is_null(), "not {sf:?}");
     // Blank values never match.
     for _ in 0..2 {
         assert!(anna.insert("Lead", json!({"first_name": "Walk-in"})).await["duplicate_of"].is_null());
@@ -988,6 +1012,13 @@ async fn day_one(k: &Arc<Kernel>) {
     let (a, b) = tokio::join!(anna.k.insert(&anna.ctx, "Lead", obj(twin.clone())), anna.k.insert(&anna.ctx, "Lead", obj(twin.clone())));
     assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(), 1, "{a:?} {b:?}");
     assert_eq!(anna.list("Lead", json!({"email": "tia@twin.test"})).await.len(), 1);
+    // A lead from before this release gets its phone keys from the release's backfill.
+    let mut tx = k.db.system_tx().await.unwrap();
+    sqlx::query("update e_lead set phone_key = null, mobile_key = null where id = $1").bind(uid(&asha)).execute(&mut *tx).await.unwrap();
+    sqlx::raw_sql(include_str!("../packages/crm/sql/002_lead_keys.sql")).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(admin.get("Lead", uid(&asha)).await["mobile_key"], json!("9845000001"));
+    refused(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "A", "phone": "0091 98450 00001"}))).await, "already exists");
 
     // ───────────── converting onto what exists ─────────────
     let rao = admin.insert("Customer", json!({"customer_name": "Rao Works"})).await;
@@ -1017,6 +1048,8 @@ async fn day_one(k: &Arc<Kernel>) {
         .await;
     let eve_deal = vid(&anna.action("Lead", uid(&eve), "make_opportunity", json!({})).await);
     let eve_call = anna.insert("Activity", json!({"activity_type": "Call", "subject": "Intro", "lead": eve["id"]})).await;
+    anna.update("Opportunity", eve_deal, json!({"items": [{"item": widget, "qty": "1", "rate": "100"}]})).await;
+    let eve_q = vid(&anna.action("Opportunity", eve_deal, "make_quotation", json!({})).await);
     let made = anna.action("Lead", uid(&eve), "convert_to_customer", json!({})).await;
     let eve_co = vid(&made);
     // Another lead converted onto that customer stands in the way, until it is undone itself.
@@ -1024,7 +1057,7 @@ async fn day_one(k: &Arc<Kernel>) {
     let joined = anna.action("Lead", uid(&gus), "convert_to_customer", json!({"customer": eve_co.to_string()})).await;
     let r = anna.k.run_action(&anna.ctx, "Lead", uid(&eve), "undo_conversion", json!({})).await;
     assert!(matches!(&r, Err(Error::Invalid(m)) if m.contains("the customer Eve Labs") && m.contains("Gus") && m.contains("nothing was undone")), "{r:?}");
-    assert_eq!(anna.get("Lead", uid(&eve)).await["status"], json!("Converted"), "nothing was undone");
+    unmoved(&admin, uid(&eve), &made, eve_deal, eve_q).await;
     // The customer existed before Gus's conversion: it stays, and the contact made for him goes.
     anna.action("Lead", uid(&gus), "undo_conversion", json!({})).await;
     let gus_now = anna.get("Lead", uid(&gus)).await;
@@ -1038,6 +1071,10 @@ async fn day_one(k: &Arc<Kernel>) {
     let eve_now = anna.get("Lead", uid(&eve)).await;
     assert_eq!((eve_now["status"].clone(), eve_now["customer"].clone(), eve_now["contact"].clone()), (json!("Qualified"), Value::Null, Value::Null));
     assert!(anna.get("Opportunity", eve_deal).await["customer"].is_null() && anna.get("Activity", uid(&eve_call)).await["customer"].is_null());
+    assert_eq!(
+        (anna.get("Quotation", eve_q).await["customer"].clone(), anna.get("Quotation", eve_q).await["party_type"].clone()),
+        (Value::Null, json!("Lead"))
+    );
     for (entity, rid) in [("Customer", made["id"].clone()), ("Contact", made["contact"].clone()), ("Address", made["address"].clone())] {
         refused(admin.k.get(&admin.ctx, entity, vid(&json!({"id": rid})), false).await, "not found");
     }
@@ -1051,13 +1088,14 @@ async fn day_one(k: &Arc<Kernel>) {
     let order = vid(&anna.action("Quotation", q, "make_sales_order", json!({})).await);
     anna.submit("SalesOrder", order).await;
     refused(anna.k.run_action(&anna.ctx, "Lead", uid(&eve), "undo_conversion", json!({})).await, "cancel its sales orders");
+    unmoved(&admin, uid(&eve), &again, eve_deal, q).await;
     // Its deal is won by the order, and reopening it waits for the order too.
     assert_eq!(anna.get("Opportunity", eve_deal).await["status"], json!("Won"));
     refused(anna.k.run_action(&anna.ctx, "Opportunity", eve_deal, "reopen", json!({})).await, "cancel its sales order");
     anna.cancel("SalesOrder", order).await;
     assert_eq!(anna.get("Opportunity", eve_deal).await["status"], json!("Open"), "cancelling the order reopens it");
     refused(anna.k.run_action(&anna.ctx, "Lead", uid(&eve), "undo_conversion", json!({})).await, "sales order");
-    admin.get("Customer", vid(&again)).await;
+    unmoved(&admin, uid(&eve), &again, eve_deal, q).await;
     // A lead converted before 0.8.0 kept no record of what was made: its records come back, the customer stays.
     let fay = anna.insert("Lead", json!({"first_name": "Fay", "email": "fay@old.test"})).await;
     let fays = anna.action("Lead", uid(&fay), "convert_to_customer", json!({})).await;
