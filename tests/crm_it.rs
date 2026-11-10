@@ -2190,6 +2190,9 @@ async fn accounts_and_teams(k: &Arc<Kernel>) {
         (back["customer"].clone(), back["is_primary"].clone(), back["title"].clone(), back["start_date"].clone()),
         (retail["id"].clone(), json!(true), json!("Buyer"), Value::Null)
     );
+    // A contact deleted takes its links along.
+    k.delete(&maria.ctx, "Contact", uid(&olga), None).await.expect("deleted with its link");
+    assert!(maria.list("AccountContact", json!({"contact": olga["id"]})).await.is_empty());
 
     // ───────────── sales teams and territories: whose records each sees ─────────────
     let north = maria.insert("SalesTeam", json!({"team_name": "North", "manager": "Mo@accts.test", "members": [{"person": "anna@accts.test"}]})).await;
