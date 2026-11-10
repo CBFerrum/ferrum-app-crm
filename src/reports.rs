@@ -39,6 +39,17 @@ impl ReportSource for CrmReports {
             json!({"name": "quotation_register", "label": "Quotation Register", "module": "crm", "entity": "Quotation", "params": [
                 param_def("company"), param_def("from_date"), param_def("to_date"), param_def("customer"),
                 {"name": "status", "label": "Status", "type": "select", "options": ["Open", "Partially Ordered", "Ordered", "Lost", "Expired"]}]}),
+            json!({"name": "win_rate", "label": "Win Rate", "module": "crm", "entity": "Opportunity", "params": [
+                param_def("company"), date("from_date", "Closed From"), date("to_date", "Closed To"),
+                {"name": "group_by", "label": "Group By", "type": "select", "options": ["Owner", "Source", "Month"], "default": "Owner"}]}),
+            json!({"name": "sales_cycle", "label": "Sales Cycle", "module": "crm", "entity": "Opportunity", "params": [
+                param_def("company"), date("from_date", "Won From"), date("to_date", "Won To"),
+                {"name": "group_by", "label": "Group By", "type": "select", "options": ["Owner", "Stage"], "default": "Owner"}]}),
+            json!({"name": "lost_reasons", "label": "Lost Reasons", "module": "crm", "entity": "Opportunity", "params": [
+                param_def("company"), date("from_date", "Lost From"), date("to_date", "Lost To"), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"}]}),
+            json!({"name": "activity_by_person", "label": "Activity by Person", "module": "crm", "entity": "Activity", "params": [
+                param_def("company"), date("from_date", "Done From"), date("to_date", "Done To"),
+                {"name": "period", "label": "Period", "type": "select", "options": ["Month", "Week", "Day"], "default": "Month"}]}),
         ]
     }
 
@@ -53,6 +64,10 @@ impl ReportSource for CrmReports {
             "campaign_performance" => campaigns(k, ctx, &mut tx, &co, &p).await?,
             "campaign_attribution" => attribution(k, ctx, &mut tx, &co, &p).await?,
             "quotation_register" => quotations(k, ctx, &mut tx, &co, &p).await?,
+            "win_rate" => win_rate(k, ctx, &mut tx, &co, &p).await?,
+            "sales_cycle" => sales_cycle(k, ctx, &mut tx, &co, &p).await?,
+            "lost_reasons" => lost_reasons(k, ctx, &mut tx, &co, &p).await?,
+            "activity_by_person" => activity_by_person(k, ctx, &mut tx, &co, &p).await?,
             _ => return Err(Error::NotFound(format!("report {name}"))),
         };
         tx.rollback().await?;
@@ -567,6 +582,244 @@ async fn quotations(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &
     }))
 }
 
+/// Won against lost deals closed in the period, by owner, source or month of closing, with what each
+/// side was worth. Deals closed without an outcome (Closed) are neither.
+async fn win_rate(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
+    let (from, to) = period(p, co)?;
+    let group_by = p.str("group_by").unwrap_or("Owner");
+    let label = match group_by {
+        "Owner" => "coalesce(o.assigned_to, '(unassigned)')",
+        "Source" => "coalesce(o.source, '(not set)')",
+        "Month" => "to_char(o.closed_on, 'YYYY-MM')",
+        other => return Err(Error::field("group_by", format!("cannot group by '{other}'"))),
+    };
+    let mut qb = QueryBuilder::new(format!(
+        "select {label}, count(*) filter (where o.status = 'Won'), count(*) filter (where o.status = 'Lost'), \
+         coalesce(sum(o.base_amount) filter (where o.status = 'Won'), 0), coalesce(sum(o.base_amount) filter (where o.status = 'Lost'), 0) \
+         from e_opportunity o where o.status in ('Won', 'Lost') and o.tenant_id = "
+    ));
+    qb.push_bind(ctx.tenant).push(" and o.company = ").push_bind(co.id);
+    qb.push(" and o.closed_on >= ").push_bind(from).push(" and o.closed_on <= ").push_bind(to);
+    scope(k, ctx, "Opportunity", &mut qb, "o")?;
+    qb.push(" group by 1 order by 1");
+    let data: Vec<(String, i64, i64, Decimal, Decimal)> = qb.build_query_as().fetch_all(&mut **tx).await?;
+    let row = |group: &str, won: i64, lost: i64, wa: Decimal, la: Decimal| {
+        let avg = if won == 0 { Decimal::ZERO } else { (wa / Decimal::from(won)).round_dp(co.precision) };
+        json!({"group": group, "won": won, "lost": lost, "win_rate_pct": money(pct(Decimal::from(won), Decimal::from(won + lost))),
+            "won_amount": money(wa), "lost_amount": money(la), "average_won": money(avg)})
+    };
+    let mut t = (0i64, 0i64, Decimal::ZERO, Decimal::ZERO);
+    let rows: Vec<Value> = data
+        .into_iter()
+        .map(|(g, w, l, wa, la)| {
+            t = (t.0 + w, t.1 + l, t.2 + wa, t.3 + la);
+            row(&g, w, l, wa, la)
+        })
+        .collect();
+    Ok(json!({
+        "columns": [col("group", group_by, "data"), col("won", "Won", "int"), col("lost", "Lost", "int"), col("win_rate_pct", "Win Rate %", "decimal"),
+            col("won_amount", "Won Amount", "currency"), col("lost_amount", "Lost Amount", "currency"), col("average_won", "Average Won Deal", "currency")],
+        "rows": rows,
+        "totals": row("Total", t.0, t.1, t.2, t.3),
+        "meta": {"from_date": from, "to_date": to, "group_by": group_by},
+    }))
+}
+
+/// Days each stage held a deal, from its history: a stage holds it from the change that brought it
+/// there to the next change; the last change (to the won stage) holds nothing. `events` are one
+/// deal's (when, the stage it went to), in order.
+pub(crate) fn stage_days(events: &[(chrono::DateTime<chrono::Utc>, Option<Uuid>)]) -> Vec<(Uuid, Decimal)> {
+    let mut out: Vec<(Uuid, Decimal)> = Vec::new();
+    for w in events.windows(2) {
+        let (Some(stage), secs) = (w[0].1, (w[1].0 - w[0].0).num_seconds().max(0)) else { continue };
+        let days = Decimal::from(secs) / Decimal::from(86_400);
+        match out.iter_mut().find(|(s, _)| *s == stage) {
+            Some(e) => e.1 += days,
+            None => out.push((stage, days)),
+        }
+    }
+    out
+}
+
+/// Won deals in the period: days from opening to winning by owner, or days spent in each stage on the
+/// way (from each deal's history).
+async fn sales_cycle(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
+    let (from, to) = period(p, co)?;
+    let group_by = p.str("group_by").unwrap_or("Owner");
+    let zone = &ctx.schema.timezone;
+    let mut qb = QueryBuilder::new("select o.id, coalesce(o.assigned_to, '(unassigned)'), (o.closed_on - (o.created_at at time zone ");
+    qb.push_bind(zone).push(")::date)::int from e_opportunity o where o.status = 'Won' and o.tenant_id = ").push_bind(ctx.tenant);
+    qb.push(" and o.company = ").push_bind(co.id);
+    qb.push(" and o.closed_on >= ").push_bind(from).push(" and o.closed_on <= ").push_bind(to);
+    scope(k, ctx, "Opportunity", &mut qb, "o")?;
+    qb.push(" limit ").push_bind(MAX_ROWS);
+    let deals: Vec<(Uuid, String, i32)> = qb.build_query_as().fetch_all(&mut **tx).await?;
+    // (group, deals, total days, shortest, longest)
+    let mut by: Vec<(String, i64, Decimal, Decimal, Decimal)> = Vec::new();
+    let mut add = |g: String, days: Decimal| match by.iter_mut().find(|e| e.0 == g) {
+        Some(e) => {
+            e.1 += 1;
+            e.2 += days;
+            e.3 = e.3.min(days);
+            e.4 = e.4.max(days);
+        }
+        None => by.push((g, 1, days, days, days)),
+    };
+    match group_by {
+        "Owner" => {
+            for (_, owner, days) in &deals {
+                add(owner.clone(), Decimal::from(*days));
+            }
+            by.sort_by(|a, b| a.0.cmp(&b.0));
+        }
+        "Stage" => {
+            let ids: Vec<Uuid> = deals.iter().map(|d| d.0).collect();
+            let events: Vec<(Uuid, chrono::DateTime<chrono::Utc>, Option<String>)> = sqlx::query_as(
+                "select record_id, at, diff->'sales_stage'->>1 from audit_event where tenant_id = $1 and entity = 'Opportunity' \
+                 and record_id = any($2) and diff ? 'sales_stage' order by record_id, id",
+            )
+            .bind(ctx.tenant)
+            .bind(&ids)
+            .fetch_all(&mut **tx)
+            .await?;
+            let stages: Vec<(Uuid, String)> = sqlx::query_as("select id, stage_name from e_sales_stage where tenant_id = $1 order by stage_order, stage_name")
+                .bind(ctx.tenant)
+                .fetch_all(&mut **tx)
+                .await?;
+            for deal in &ids {
+                let mine: Vec<_> = events.iter().filter(|e| e.0 == *deal).map(|e| (e.1, e.2.as_deref().and_then(|v| v.parse().ok()))).collect();
+                for (stage, days) in stage_days(&mine) {
+                    let name = stages.iter().find(|s| s.0 == stage).map_or_else(|| stage.to_string(), |s| s.1.clone());
+                    add(name, days);
+                }
+            }
+            by.sort_by_key(|e| stages.iter().position(|s| s.1 == e.0).unwrap_or(usize::MAX));
+        }
+        other => return Err(Error::field("group_by", format!("cannot group by '{other}'"))),
+    }
+    let one = |d: Decimal| money(d.round_dp(1));
+    let rows: Vec<Value> = by
+        .iter()
+        .map(|(g, n, total, low, high)| {
+            json!({"group": g, "deals": n, "average_days": one(*total / Decimal::from(*n)), "shortest_days": one(*low), "longest_days": one(*high)})
+        })
+        .collect();
+    let all: i32 = deals.iter().map(|d| d.2).sum();
+    let average = if deals.is_empty() { Decimal::ZERO } else { Decimal::from(all) / Decimal::from(deals.len()) };
+    Ok(json!({
+        "columns": [col("group", group_by, "data"), col("deals", "Won Deals", "int"), col("average_days", "Average Days", "decimal"),
+            col("shortest_days", "Shortest", "decimal"), col("longest_days", "Longest", "decimal")],
+        "rows": rows,
+        "totals": {"won_deals": deals.len(), "average_days": one(average)},
+        "meta": {"from_date": from, "to_date": to, "group_by": group_by},
+    }))
+}
+
+/// Deals lost in the period by their reason: how many, what they were worth, and the competitors
+/// named on them, most named first.
+async fn lost_reasons(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
+    let (from, to) = period(p, co)?;
+    let mut qb = QueryBuilder::new(
+        "select coalesce(r.reason, '(no reason)'), coalesce(o.base_amount, 0), coalesce((select array_agg(c.competitor order by c.competitor) \
+           from e_opportunity__competitors c where c.tenant_id = o.tenant_id and c.parent_id = o.id), '{}') \
+         from e_opportunity o left join e_lost_reason r on r.tenant_id = o.tenant_id and r.id = o.lost_reason where o.status = 'Lost' and o.tenant_id = ",
+    );
+    qb.push_bind(ctx.tenant).push(" and o.company = ").push_bind(co.id);
+    qb.push(" and o.closed_on >= ").push_bind(from).push(" and o.closed_on <= ").push_bind(to);
+    if let Some(owner) = p.str("assigned_to") {
+        qb.push(" and o.assigned_to = ").push_bind(owner.to_lowercase());
+    }
+    scope(k, ctx, "Opportunity", &mut qb, "o")?;
+    qb.push(" limit ").push_bind(MAX_ROWS);
+    let data: Vec<(String, Decimal, Vec<String>)> = qb.build_query_as().fetch_all(&mut **tx).await?;
+    // reason -> (deals, amount, competitor -> deals)
+    let mut by: Vec<(String, i64, Decimal, Vec<(String, i64)>)> = Vec::new();
+    let mut total = Decimal::ZERO;
+    for (reason, amount, competitors) in data.iter() {
+        total += amount;
+        let i = match by.iter().position(|e| e.0 == *reason) {
+            Some(i) => i,
+            None => {
+                by.push((reason.clone(), 0, Decimal::ZERO, vec![]));
+                by.len() - 1
+            }
+        };
+        let e = &mut by[i];
+        e.1 += 1;
+        e.2 += amount;
+        for c in competitors {
+            match e.3.iter_mut().find(|x| x.0.eq_ignore_ascii_case(c)) {
+                Some(x) => x.1 += 1,
+                None => e.3.push((c.clone(), 1)),
+            }
+        }
+    }
+    by.sort_by(|a, b| b.1.cmp(&a.1).then(b.2.cmp(&a.2)).then(a.0.cmp(&b.0)));
+    let rows: Vec<Value> = by
+        .iter_mut()
+        .map(|(reason, n, amount, comp)| {
+            comp.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            let named: Vec<String> = comp.iter().map(|(c, k)| format!("{c} ({k})")).collect();
+            json!({"reason": reason, "deals": n, "amount": money(*amount), "share_pct": money(pct(*amount, total)), "competitors": named.join(", ")})
+        })
+        .collect();
+    Ok(json!({
+        "columns": [col("reason", "Lost Reason", "data"), col("deals", "Deals", "int"), col("amount", "Amount", "currency"),
+            col("share_pct", "Share %", "decimal"), col("competitors", "Competitors", "data")],
+        "rows": rows,
+        "totals": {"deals": data.len(), "amount": money(total)},
+        "meta": {"from_date": from, "to_date": to},
+    }))
+}
+
+/// Activities done in the period by the person they were assigned to and the period they were done
+/// in: calls (how many reached someone, and their minutes), meetings, tasks and emails. Notes are
+/// not activity. Activities belong to no company: the company gives the report its period only.
+async fn activity_by_person(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
+    let (from, to) = period(p, co)?;
+    let period_by = p.str("period").unwrap_or("Month");
+    let format = match period_by {
+        "Month" => "YYYY-MM",
+        "Week" => "IYYY-\"W\"IW",
+        "Day" => "YYYY-MM-DD",
+        other => return Err(Error::field("period", format!("{other} is not a period: Month, Week or Day"))),
+    };
+    let zone = &ctx.schema.timezone;
+    let mut qb = QueryBuilder::new("select coalesce(a.assigned_to, '(nobody)'), to_char(a.completed_at at time zone ");
+    qb.push_bind(zone).push(", ").push_bind(format);
+    qb.push(
+        "), count(*) filter (where a.activity_type = 'Call'), count(*) filter (where a.activity_type = 'Call' and a.call_outcome = 'Reached'), \
+         coalesce(sum(a.duration_minutes) filter (where a.activity_type = 'Call'), 0)::bigint, count(*) filter (where a.activity_type = 'Meeting'), \
+         count(*) filter (where a.activity_type = 'Task'), count(*) filter (where a.activity_type = 'Email'), count(*) \
+         from e_activity a where a.status = 'Done' and a.activity_type <> 'Note' and a.tenant_id = ",
+    );
+    qb.push_bind(ctx.tenant);
+    qb.push(" and a.completed_at >= (").push_bind(from).push("::timestamp at time zone ").push_bind(zone);
+    qb.push(") and a.completed_at < (").push_bind(next_day(to)).push("::timestamp at time zone ").push_bind(zone).push(")");
+    scope(k, ctx, "Activity", &mut qb, "a")?;
+    qb.push(" group by 1, 2 order by 1, 2");
+    let data: Vec<(String, String, i64, i64, i64, i64, i64, i64, i64)> = qb.build_query_as().fetch_all(&mut **tx).await?;
+    let mut t = [0i64; 7];
+    let rows: Vec<Value> = data
+        .into_iter()
+        .map(|(who, when, calls, reached, minutes, meetings, tasks, emails, all)| {
+            for (x, v) in t.iter_mut().zip([calls, reached, minutes, meetings, tasks, emails, all]) {
+                *x += v;
+            }
+            json!({"person": who, "period": when, "calls": calls, "reached": reached, "call_minutes": minutes, "meetings": meetings,
+                "tasks": tasks, "emails": emails, "total": all})
+        })
+        .collect();
+    Ok(json!({
+        "columns": [col("person", "Person", "data"), col("period", period_by, "data"), col("calls", "Calls", "int"), col("reached", "Reached", "int"),
+            col("call_minutes", "Call Minutes", "int"), col("meetings", "Meetings", "int"), col("tasks", "Tasks", "int"), col("emails", "Emails", "int"),
+            col("total", "Total", "int")],
+        "rows": rows,
+        "totals": {"calls": t[0], "reached": t[1], "call_minutes": t[2], "meetings": t[3], "tasks": t[4], "emails": t[5], "total": t[6]},
+        "meta": {"from_date": from, "to_date": to, "period": period_by},
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,9 +859,19 @@ mod tests {
     }
 
     #[test]
+    fn days_in_each_stage() {
+        let at = |h: i64| chrono::DateTime::from_timestamp(h * 3600, 0).unwrap();
+        let (a, b, won) = (Uuid::from_u128(1), Uuid::from_u128(2), Uuid::from_u128(9));
+        // a for 2 days, b for 1, a again for half a day, then won.
+        let got = stage_days(&[(at(0), Some(a)), (at(48), Some(b)), (at(72), Some(a)), (at(84), Some(won))]);
+        assert_eq!(got, vec![(a, Decimal::new(25, 1)), (b, Decimal::ONE)]);
+        assert!(stage_days(&[(at(0), Some(won))]).is_empty(), "won as it was made: no stage held it");
+    }
+
+    #[test]
     fn catalog_names_entities_and_params() {
         let c = CrmReports.catalog();
-        assert_eq!(c.len(), 6);
+        assert_eq!(c.len(), 10);
         assert!(c.iter().all(|r| r["entity"].is_string() && r["params"].as_array().is_some_and(|p| p.iter().any(|x| x["name"] == "company"))));
     }
 }
