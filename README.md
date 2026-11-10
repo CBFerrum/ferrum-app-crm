@@ -32,7 +32,7 @@ same selling engine that invoices them, so what sales promises is what accountin
 | 🗃️ Records | 12 entities in 2 packages |
 | 👥 Roles | 4: Sales User, Sales Manager, Marketing Manager, CRM Viewer |
 | 📊 Reports | 6 |
-| 🧪 Tests | 11 Rust tests, 2 interface test files |
+| 🧪 Tests | 13 Rust tests, 2 interface test files |
 
 
 ## Highlights
