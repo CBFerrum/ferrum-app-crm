@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.8.0
+
+For a sales team arriving from another CRM: the everyday situations and the common corrections work.
+
+The same person entered again:
+- A lead whose email, phone or mobile is an open lead's is refused, naming that lead. Phones compare by their national part (digits only, leading zeros dropped, the last ten of a longer number), so 098450 00001, +91 98450 00001, 0091 9845000001 and 9845000001 are one number; a shorter number matches only itself, two countries' numbers that share their last ten digits match too, and blank values or fewer than six digits never match. Ticking Allow Duplicate saves it all the same (two people sharing one mailbox), linked to the lead it repeats as Duplicate Of, to merge later or keep apart.
+- A match with a converted, lost or junk lead never blocks: the person who comes back is saved as a new lead, linked to the old one.
+- An enquiry from a form or a mail is never dropped: it is saved and linked to the lead it repeats (a lead with a known address was refused before, and Comms and Forms only logged it). An integration calling the API as a person ticks Allow Duplicate to do the same.
+- A double submit still makes one lead, now for the phone numbers as well as the email.
+
+Converting a lead:
+- Convert to Customer takes an Existing Contact as well as an existing customer (the contact's customer when no customer is chosen). Onto an existing customer, one of its contacts with the lead's email or phone is taken rather than duplicated.
+- With neither chosen, a customer or contact that already holds the lead's email or phone refuses it, naming them: choose one, or tick Create New Anyway.
+- The lead's need and notes go on with it, as a note on the story of its latest deal.
+- Undo Conversion on a converted lead gives it back its earlier status, its deals, quotations, activities, contacts and addresses, and removes the note, customer, contact and address the conversion made. It is refused while a quotation of the lead or its deals is ordered, or while another record (an order, an invoice, a payment, another lead, another deal) refers to what it made, naming that record; nothing is undone then. A lead is undone once, and can be converted again.
+
+Deals:
+- Reopen on a won, lost or closed deal takes it back to the stage it last held open, with that stage's probability; its close date and loss reason leave the live fields and are written on its story as a note. It is refused while a quotation of the deal is ordered (cancelling the order reopens it, as before). The deal's page has Reopen; the board links to the won and the lost deals.
+- A deal and a quotation can be for a Prospect, an organization with or without leads. When one of its leads is converted, the prospect's deals and quotations move to the customer it became; until then a sales order waits for it.
+
+Placement and access:
+- CRM's menu lists Product Rules and Campaign Attribution; the create menu offers Contact, Quotation and Activity as well as Lead and Deal.
+- Sales User reads, edits and creates customers, and reads customer groups, as ERP's selling gives them: without ERP, a rep could neither open Customers in CRM's menu nor convert a lead.
+- A personal-data erasure also takes a lead's organization, address, need and notes, a prospect's email, phone and notes, and the subject and details of the activities on the person's lead or contact.
+
+For data already there:
+- Leads converted before this release kept no record of what converting them made: undoing one gives the lead back its records, and leaves its customer, contact and address in place.
+- Deals open when the release arrives remember the stage they stand at (sql/001_open_stage.sql); deals already won or lost reopen at the first open stage.
+- A lead keeps its phone's and mobile's national part (indexed, so the check stays quick for an import of many leads); leads already there get theirs from sql/002_lead_keys.sql.
+- Leads that already share an email or phone are left as they are; the check runs when a lead is created or its email or phone changes.
+
+Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (345 names and 71 words each), translated by the model, to be reviewed by native speakers.
+
 ## 0.7.0
 
 A quotation's approval is of its terms (FEO-025), kept as Approved As:

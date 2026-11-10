@@ -129,4 +129,16 @@ mod tests {
         assert!(UI.iter().any(|(p, _)| *p == "index.html") && !UI.iter().any(|(p, _)| p.starts_with('.')), "{}", ui.digest);
         ferrum_apps::AppManifest::parse(CONNECTOR_MANIFEST).expect("connectors/erp/app.yaml");
     }
+
+    #[test]
+    fn its_menu_and_create_menu_reach_everything() {
+        let m = ferrum_apps::AppManifest::parse(MANIFEST).expect("app.yaml");
+        let creates: Vec<&str> = m.contributes["shell.create"].iter().filter_map(|c| c["entity"].as_str()).collect();
+        assert_eq!(creates, ["Lead", "Opportunity", "Contact", "Quotation", "Activity"]);
+        let crm = packages().expect("packages").into_iter().find(|p| p.manifest.package == "crm").expect("crm");
+        let items = &crm.manifest.modules[0].items;
+        for item in ["ProductRule", "report:campaign_attribution", "Customer"] {
+            assert!(items.iter().any(|i| i == item), "{item} in CRM's menu");
+        }
+    }
 }
