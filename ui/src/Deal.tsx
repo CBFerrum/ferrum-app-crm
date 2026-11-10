@@ -1,6 +1,7 @@
 // One deal, whole: where it stands, what is coming up, everything that happened, and logging a
 // call, a note or a task without leaving it. Its fields change where they stand, against the version
-// on screen. The full form stays one click away for items and competitors.
+// on screen. Its people with their buying roles and its quotations, the latest revision first, sit
+// beside it. The full form stays one click away for lines, contacts and competitors.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useMemo, useState } from "react";
@@ -9,7 +10,7 @@ import { api, ApiError, docPath, errorMessage, formatMoment, shell, t, isolate }
 import { Badge, Button, ErrorState, Icon, PageLoading, statusTone, toast, useCanIntent, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, CollabPanel, type Doc, type EntityMeta, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
 import { LostDialog } from "./Lost";
-import { completion, type Deal, daysSince, isOpenStage, money, type Stage } from "./pipeline";
+import { completion, type Deal, type DealContact, daysSince, isOpenStage, money, people, type Pipeline, type Stage } from "./pipeline";
 import { type Activity, type AuditEvent, type Item, type Mail, timeline } from "./timeline";
 
 const ICONS: Record<Item["kind"], string> = { call: "phone", meeting: "calendar", email: "mail", mail: "mail", task: "check", note: "file", change: "refresh" };
@@ -177,7 +178,43 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
   const hasMail = !!index?.entities.some((e) => e.name === "Communication");
   const stages = useQuery({
     queryKey: ["crm", "stages"],
-    queryFn: () => api.get<{ rows: Stage[] }>("/api/v1/SalesStage", { filters: JSON.stringify({ disabled: false }), fields: "stage_name,stage_order,probability,outcome", limit: 100 }).then((r) => r.rows),
+    queryFn: () =>
+      api.get<{ rows: Stage[] }>("/api/v1/SalesStage", { filters: JSON.stringify({ disabled: false }), fields: "stage_name,stage_order,probability,outcome,pipeline", limit: 500 }).then((r) => r.rows),
+  });
+  const pipelines = useQuery({
+    queryKey: ["crm", "pipelines"],
+    queryFn: () => api.get<{ rows: Pipeline[] }>("/api/v1/SalesPipeline", { fields: "pipeline_name,is_default", limit: 100 }).then((r) => r.rows),
+  });
+  const rows = (doc?.contacts as DealContact[] | undefined) ?? [];
+  const contactIds = [...new Set([...rows.map((r) => r.contact), doc?.contact as string | undefined].filter((c): c is string => !!c))];
+  const roleIds = [...new Set(rows.map((r) => r.role).filter((r): r is string => !!r))];
+  const who = useQuery({
+    queryKey: ["crm", "people", id, contactIds.join(","), roleIds.join(",")],
+    enabled: contactIds.length > 0,
+    queryFn: async () => {
+      const [contacts, roles] = await Promise.all([
+        api.get<{ rows: { id: string; full_name?: string | null; email?: string | null }[] }>("/api/v1/Contact", { filters: JSON.stringify({ id: ["in", contactIds] }), fields: "full_name,email", limit: 100 }),
+        roleIds.length
+          ? api.get<{ rows: { id: string; role_name: string }[] }>("/api/v1/BuyingRole", { filters: JSON.stringify({ id: ["in", roleIds] }), fields: "role_name", limit: 100 })
+          : Promise.resolve({ rows: [] as { id: string; role_name: string }[] }),
+      ]);
+      return {
+        names: Object.fromEntries(contacts.rows.map((c) => [c.id, c.full_name || c.email || ""])),
+        roles: Object.fromEntries(roles.rows.map((r) => [r.id, r.role_name])),
+      };
+    },
+  });
+  const quotes = useQuery({
+    queryKey: ["crm", "quotes", id],
+    queryFn: () =>
+      api
+        .get<{ rows: { id: string; number?: string | null; revision?: number | null; status?: string | null; grand_total?: string | number | null }[] }>("/api/v1/Quotation", {
+          filters: JSON.stringify({ opportunity: id }),
+          fields: "number,revision,status,grand_total",
+          sort: "created_at desc",
+          limit: 50,
+        })
+        .then((r) => r.rows),
   });
   const story = useQuery({
     queryKey: ["crm", "story", id],
@@ -200,17 +237,27 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
     void qc.invalidateQueries({ queryKey: ["crm", "story", id] });
     void qc.invalidateQueries({ queryKey: ["peek", "Opportunity", id] });
     void qc.invalidateQueries({ queryKey: ["crm", "pipeline"] });
+    void qc.invalidateQueries({ queryKey: ["crm", "quotes", id] });
   }, [qc, id]);
   useLiveEntity("Opportunity", useCallback((e) => void (e.id === id && refresh()), [id, refresh]));
 
-  const open = useMemo(() => (stages.data ?? []).filter(isOpenStage).sort((a, b) => Number(a.stage_order ?? 0) - Number(b.stage_order ?? 0)), [stages.data]);
+  // The deal's own pipeline's stages (all of them for a deal from before it had one).
+  const inPipeline = doc?.pipeline as string | null | undefined;
+  const open = useMemo(
+    () =>
+      (stages.data ?? [])
+        .filter((s) => isOpenStage(s) && (!inPipeline || !s.pipeline || s.pipeline === inPipeline))
+        .sort((a, b) => Number(a.stage_order ?? 0) - Number(b.stage_order ?? 0)),
+    [stages.data, inPipeline],
+  );
   const name = useCallback(
     (field: string, value: unknown) => {
       if (value == null || value === "") return "";
       if (field === "sales_stage") return stages.data?.find((s) => s.id === value)?.stage_name ?? "";
+      if (field === "pipeline") return pipelines.data?.find((p) => p.id === value)?.pipeline_name ?? "";
       return String(value);
     },
-    [stages.data],
+    [stages.data, pipelines.data],
   );
   const told = useMemo(() => (story.data ? timeline(story.data.activities, story.data.events, story.data.mail, name) : null), [story.data, name]);
 
@@ -267,6 +314,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
           <p className="page-sub">
             {isolate(
               [
+                (pipelines.data?.length ?? 0) > 1 ? name("pipeline", doc.pipeline) : null,
                 doc.party_name,
                 doc.base_amount != null ? money(Number(doc.base_amount)) : null,
                 doc.expected_close_date ? t("closes {expected_close_date}", { expected_close_date: String(doc.expected_close_date) }) : null,
@@ -341,6 +389,35 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
           )}
         </section>
         <aside className="crm-deal-side" aria-label={t("Deal details")}>
+          {contactIds.length > 0 && (
+            <>
+              <h2 className="crm-group">{t("People")}</h2>
+              <ul className="crm-people">
+                {people(rows, doc.contact as string | null, who.data?.names ?? {}, who.data?.roles ?? {}).map((p) => (
+                  <li key={p.id}>
+                    <Link to={`/e/Contact/${p.id}`}>{isolate(p.name || t("Contact"))}</Link>
+                    {p.role && <span className="faint"> · {isolate(p.role)}</span>}
+                    {p.primary && <Badge tone="blue">{t("Primary")}</Badge>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+          {(quotes.data?.length ?? 0) > 0 && (
+            <>
+              <h2 className="crm-group">{t("Quotations")}</h2>
+              <ul className="crm-people">
+                {quotes.data!.map((q) => (
+                  <li key={q.id}>
+                    <Link to={`/e/Quotation/${q.id}`}>{isolate(q.number ?? t("Draft"))}</Link>
+                    {(q.revision ?? 1) > 1 && <span className="faint"> · {t("revision {revision}", { revision: q.revision ?? 1 })}</span>}
+                    {q.grand_total != null && <span className="faint"> · {isolate(money(Number(q.grand_total)))}</span>}
+                    {q.status && <Badge tone={statusTone(q.status)}>{isolate(q.status)}</Badge>}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
           <RecordFields meta={meta} doc={doc} save={(n, v) => save(n, v).then(refresh)} only={["Opportunity", "Pipeline", "Value"]} />
         </aside>
       </div>
