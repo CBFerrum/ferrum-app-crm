@@ -36,6 +36,10 @@ impl DocHook for LeadHook {
         if status != "Lost" {
             set(doc, "lost_reason", Value::Null);
         }
+        for (f, key) in [("phone", "phone_key"), ("mobile", "mobile_key")] {
+            let national = digits(s(doc, f));
+            set(doc, key, json!(national));
+        }
         let old = stored(hc, doc).await?;
         if old.is_none_or(|o| ["email", "phone", "mobile"].iter().any(|f| o.get(*f) != doc.get(*f))) {
             duplicates(hc, doc).await?;
@@ -66,11 +70,27 @@ impl DocHook for LeadHook {
     }
 }
 
-/// A phone number's digits, however it was written ("+91 98450-00001", "(+91) 9845000001"); fewer
-/// than six tell no one apart and count as none.
+/// A phone number's national part, however it was written: its digits, leading zeros dropped (a
+/// trunk 0, an international 00), and the last ten of a longer number (its country code), so
+/// "098450 00001", "+91 98450 00001", "0091 9845000001" and "9845000001" are one number. Fewer than
+/// six digits tell no one apart and count as none. Two countries' numbers that share their last ten
+/// digits match too: the person ticks Allow Duplicate to keep both.
 pub(crate) fn digits(phone: Option<&str>) -> Option<String> {
-    let d: String = phone?.chars().filter(char::is_ascii_digit).collect();
-    (d.len() >= 6).then_some(d)
+    let all: String = phone?.chars().filter(char::is_ascii_digit).collect();
+    let national = all.trim_start_matches('0');
+    let national = &national[national.len().saturating_sub(10)..];
+    (national.len() >= 6).then(|| national.to_string())
+}
+
+/// [`digits`] in SQL, of column `$c` (less the six-digit floor, which the side holding the
+/// [`digits`] keeps): what `sql/002_lead_keys.sql` fills a lead's phone and mobile keys with, and what
+/// customers' and contacts' numbers are compared by. A lead's keys are stored and indexed because
+/// under row-level security the planner uses no index on an expression of functions that are not
+/// leakproof (`lower`, `regexp_replace`): the lookup compares plain columns.
+macro_rules! national {
+    ($c:literal) => {
+        concat!("right(ltrim(regexp_replace(coalesce(", $c, ", ''), '[^0-9]', '', 'g'), '0'), 10)")
+    };
 }
 
 /// The record's email (any case) and the digits of its phone and mobile: what tells a person apart.
@@ -98,10 +118,9 @@ async fn duplicates(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
         None
     } else {
         sqlx::query_as(
-            "select a.id, a.number, a.lead_name, a.status, coalesce(lower(a.email) = $3, false) from e_lead a \
+            "select a.id, a.number, a.lead_name, a.status, coalesce(a.email = $3, false) from e_lead a \
              where a.tenant_id = $1 and a.id is distinct from $2 and a.company is not distinct from $5 \
-             and (lower(a.email) = $3 or regexp_replace(coalesce(a.phone, ''), '[^0-9]', '', 'g') = any($4) \
-                  or regexp_replace(coalesce(a.mobile, ''), '[^0-9]', '', 'g') = any($4)) \
+             and (a.email = $3 or a.phone_key = any($4) or a.mobile_key = any($4)) \
              and not exists (select 1 from record_alias m where m.tenant_id = a.tenant_id and m.entity = 'Lead' and m.alias_id = a.id) \
              order by a.status in ('New', 'Contacted', 'Qualified') desc, a.duplicate_of is null desc, a.created_at limit 1",
         )
@@ -172,25 +191,29 @@ async fn holders(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Vec<(&'static str, 
     if email.is_none() && phones.is_empty() {
         return Ok(vec![]);
     }
-    let customers: Vec<(Uuid, String)> = sqlx::query_as(
-        "select a.id, a.customer_name from e_customer a where a.tenant_id = $1 \
-         and (lower(a.email) = $2 or regexp_replace(coalesce(a.phone, ''), '[^0-9]', '', 'g') = any($3)) \
-         and not exists (select 1 from record_alias m where m.tenant_id = a.tenant_id and m.entity = 'Customer' and m.alias_id = a.id) \
-         order by a.created_at limit 3",
-    )
+    let customers: Vec<(Uuid, String)> = sqlx::query_as(concat!(
+        "select a.id, a.customer_name from e_customer a where a.tenant_id = $1 and (lower(a.email) = $2 or ",
+        national!("a.phone"),
+        " = any($3)) \
+             and not exists (select 1 from record_alias m where m.tenant_id = a.tenant_id and m.entity = 'Customer' and m.alias_id = a.id) \
+             order by a.created_at limit 3"
+    ))
     .bind(hc.ctx.tenant)
     .bind(&email)
     .bind(&phones)
     .fetch_all(&mut **hc.tx)
     .await?;
-    let contacts: Vec<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
+    let contacts: Vec<(Uuid, String, Option<Uuid>)> = sqlx::query_as(concat!(
         "select c.id, coalesce(c.full_name, c.first_name), c.customer from e_contact c where c.tenant_id = $1 and c.lead is distinct from $4 \
-         and (lower(c.email) = $2 or regexp_replace(coalesce(c.phone, ''), '[^0-9]', '', 'g') = any($3) \
+             and (lower(c.email) = $2 or ",
+        national!("c.phone"),
+        " = any($3) \
               or exists (select 1 from e_contact__emails e where e.tenant_id = c.tenant_id and e.parent_id = c.id and lower(e.email) = $2) \
-              or exists (select 1 from e_contact__phones p where p.tenant_id = c.tenant_id and p.parent_id = c.id \
-                         and regexp_replace(p.phone, '[^0-9]', '', 'g') = any($3))) \
-         order by c.created_at limit 3",
-    )
+              or exists (select 1 from e_contact__phones p where p.tenant_id = c.tenant_id and p.parent_id = c.id and ",
+        national!("p.phone"),
+        " = any($3))) \
+             order by c.created_at limit 3"
+    ))
     .bind(hc.ctx.tenant)
     .bind(&email)
     .bind(&phones)
@@ -506,4 +529,28 @@ async fn make_opportunity(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Value> {
         hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Lead", lead_id, v).await?;
     }
     Ok(created("Opportunity", &opp))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_phone_is_its_national_part() {
+        for spelled in ["098450 00001", "+91 98450 00001", "0091 9845000001", "9845000001", "(+91) 98450-00001"] {
+            assert_eq!(digits(Some(spelled)).as_deref(), Some("9845000001"), "{spelled}");
+        }
+        assert_eq!(digits(Some("555 0123")).as_deref(), Some("5550123"), "a short number whole");
+        assert_ne!(digits(Some("+1 415 555 0100")), digits(Some("+44 415 555 0100 9")), "a near-miss of another length");
+        assert_eq!(digits(Some("00 123")), None, "too few digits to tell anyone apart");
+        assert_eq!(digits(Some("")), None);
+    }
+
+    #[test]
+    fn the_backfill_computes_the_keys_as_digits_does() {
+        let sql = include_str!("../packages/crm/sql/002_lead_keys.sql");
+        for column in [national!("phone"), national!("mobile")] {
+            assert!(sql.contains(column), "002_lead_keys.sql fills the keys with {column}");
+        }
+    }
 }

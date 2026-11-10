@@ -5,7 +5,7 @@
 For a sales team arriving from another CRM: the everyday situations and the common corrections work.
 
 The same person entered again:
-- A lead whose email, phone or mobile is an open lead's is refused, naming that lead. Phones compare by their digits, so +91 98450-00001 and (+91) 9845000001 are one number; blank values never match. Ticking Allow Duplicate saves it all the same (two people sharing one mailbox), linked to the lead it repeats as Duplicate Of, to merge later or keep apart.
+- A lead whose email, phone or mobile is an open lead's is refused, naming that lead. Phones compare by their national part (digits only, leading zeros dropped, the last ten of a longer number), so 098450 00001, +91 98450 00001, 0091 9845000001 and 9845000001 are one number; a shorter number matches only itself, two countries' numbers that share their last ten digits match too, and blank values or fewer than six digits never match. Ticking Allow Duplicate saves it all the same (two people sharing one mailbox), linked to the lead it repeats as Duplicate Of, to merge later or keep apart.
 - A match with a converted, lost or junk lead never blocks: the person who comes back is saved as a new lead, linked to the old one.
 - An enquiry from a form or a mail is never dropped: it is saved and linked to the lead it repeats (a lead with a known address was refused before, and Comms and Forms only logged it). An integration calling the API as a person ticks Allow Duplicate to do the same.
 - A double submit still makes one lead, now for the phone numbers as well as the email.
@@ -28,9 +28,10 @@ Placement and access:
 For data already there:
 - Leads converted before this release kept no record of what converting them made: undoing one gives the lead back its records, and leaves its customer, contact and address in place.
 - Deals open when the release arrives remember the stage they stand at (sql/001_open_stage.sql); deals already won or lost reopen at the first open stage.
+- A lead keeps its phone's and mobile's national part (indexed, so the check stays quick for an import of many leads); leads already there get theirs from sql/002_lead_keys.sql.
 - Leads that already share an email or phone are left as they are; the check runs when a lead is created or its email or phone changes.
 
-Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (341 names and 71 words each), translated by the model, to be reviewed by native speakers.
+Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (345 names and 71 words each), translated by the model, to be reviewed by native speakers.
 
 ## 0.7.0
 
