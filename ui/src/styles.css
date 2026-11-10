@@ -672,3 +672,14 @@
   width: auto;
   height: 34px;
 }
+
+/* ── an account's page ── */
+
+.crm-account-extra {
+  margin-inline-start: auto;
+  font-weight: 400;
+}
+
+.crm-account-section .crm-people {
+  margin-bottom: 0.5rem;
+}
