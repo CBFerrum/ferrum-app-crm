@@ -827,6 +827,7 @@ async fn scenario() {
 
     crm_alone(&k).await;
     day_one(&k).await;
+    assign_and_remind(&k).await;
 }
 
 /// CRM in a workspace without ERP (docs/plan/apps-ui.md §13): contacts, customers and items are the
@@ -1182,4 +1183,390 @@ async fn day_one(k: &Arc<Kernel>) {
     assert!(met["subject"].as_str().is_some_and(|s| s.starts_with("Erased ")) && met["details"].is_null(), "{met:?}");
     let solo = admin.get("Prospect", uid(&solo)).await;
     assert!(solo["email"].is_null() && solo["phone"].is_null() && solo["notes"].is_null() && solo["prospect_name"] == json!("Kim Consulting"), "{solo:?}");
+}
+
+/// Who was told of `kind` about `record`, in order.
+async fn told(k: &Kernel, tenant: Uuid, kind: &str, record: Uuid) -> Vec<String> {
+    let mut tx = k.db.system_tx().await.unwrap();
+    let who: Vec<String> = sqlx::query_scalar(
+        "select u.email::text from notification n join app_user u on u.tenant_id = n.tenant_id and u.id = n.user_id \
+         where n.tenant_id = $1 and n.kind = $2 and n.record_id = $3 order by n.created_at, n.id",
+    )
+    .bind(tenant)
+    .bind(kind)
+    .bind(record)
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    who
+}
+
+/// Runs SQL as the engine (backdating, a release's backfill).
+async fn sql(k: &Kernel, q: &str, record: Uuid) {
+    let mut tx = k.db.system_tx().await.unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(q.to_string())).bind(record).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn remind(k: &Kernel) {
+    ferrum_app_crm::maintenance(k).await.expect("maintenance");
+}
+
+/// A sales team's leads shared out by rules, the reminders that keep work from slipping, and the
+/// reports a manager reads at the end of the month.
+async fn assign_and_remind(k: &Arc<Kernel>) {
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: "remind".into(),
+            name: "Remind".into(),
+            admin_email: "admin@rem.test".into(),
+            admin_password: PASSWORD.into(),
+            admin_name: None,
+            packages: vec!["crm".into(), "crm_erp".into()],
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": *ZONE})),
+        })
+        .await
+        .expect("tenant");
+    let session = k.login("remind", "admin@rem.test", PASSWORD).await.expect("login");
+    let admin = U { k: k.clone(), ctx: k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx") };
+    let inr = admin.one("Currency", json!({"code": "INR"})).await;
+    let company = admin.insert("Company", json!({"company_name": "Remind", "abbr": "RM", "default_currency": inr["id"]})).await;
+    let cid = uid(&company).to_string();
+    let user = |email: &'static str, roles: &'static [&'static str]| {
+        let (k, admin_ctx) = (k.clone(), admin.ctx.clone());
+        async move {
+            let roles: Vec<String> = roles.iter().map(|r| r.to_string()).collect();
+            let id = k.create_user(&admin_ctx, email, email, Some(PASSWORD), &roles, false).await.expect("user");
+            U { ctx: k.load_ctx(tenant, id, None, "it".into()).await.expect("user ctx"), k }
+        }
+    };
+    let anna = user("anna@rem.test", &["Sales User"]).await;
+    let ben = user("ben@rem.test", &["Sales User"]).await;
+    let cara = user("cara@rem.test", &["Sales User"]).await;
+    let dave = user("dave@rem.test", &["Sales User"]).await;
+    let maria = user("maria@rem.test", &["Sales Manager"]).await;
+    let deactivate = |who: &U| {
+        let (k, email) = (k.clone(), who.ctx.email.clone());
+        async move {
+            let mut tx = k.db.system_tx().await.unwrap();
+            sqlx::query("update app_user set is_active = false where tenant_id = $1 and email = $2").bind(tenant).bind(email).execute(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
+        }
+    };
+    let engine = Ctx::system(tenant, admin.ctx.schema.clone());
+    let arrive = |v: Value| {
+        let (k, engine, cid) = (k.clone(), engine.clone(), cid.clone());
+        async move {
+            let mut v = obj(v);
+            v.insert("company".into(), json!(cid));
+            k.insert(&engine, "Lead", v).await.expect("a lead arrives")
+        }
+    };
+    let owner = |d: &Doc| d["assigned_to"].as_str().unwrap_or_default().to_string();
+
+    // ───────────── assignment rules ─────────────
+    let all = admin.one("Territory", json!({"territory_name": "All Territories"})).await;
+    let india = maria.insert("Territory", json!({"territory_name": "India", "parent_territory": all["id"], "is_group": true})).await;
+    let pune = maria.insert("Territory", json!({"territory_name": "Pune", "parent_territory": india["id"]})).await;
+    // Cara's lead, from before she left.
+    let hers = maria.insert("Lead", json!({"first_name": "Hal", "source": "Website", "assigned_to": "cara@rem.test"})).await;
+    refused(
+        maria.k.insert(&maria.ctx, "LeadAssignmentRule", obj(json!({"rule_name": "x", "people": [{"user": "nobody@rem.test"}]}))).await,
+        "not a user of this workspace",
+    );
+    refused(anna.k.insert(&anna.ctx, "LeadAssignmentRule", obj(json!({"rule_name": "mine", "people": [{"user": "anna@rem.test"}]}))).await, "not permitted");
+    // Tried first, but its one person leaves: it passes leads on.
+    let only_cara = maria
+        .insert("LeadAssignmentRule", json!({"rule_name": "Referrals", "rule_order": 0, "source": "Referral", "people": [{"user": "cara@rem.test"}]}))
+        .await;
+    let web = maria
+        .insert(
+            "LeadAssignmentRule",
+            json!({"rule_name": "Website", "rule_order": 1, "source": "Website",
+                   "people": [{"user": "anna@rem.test"}, {"user": "Cara@rem.test"}, {"user": "ben@rem.test"}]}),
+        )
+        .await;
+    let shows = maria
+        .insert(
+            "LeadAssignmentRule",
+            json!({"rule_name": "India shows", "rule_order": 2, "territory": india["id"], "method": "Fewest Open Leads",
+                   "people": [{"user": "ben@rem.test"}, {"user": "anna@rem.test"}]}),
+        )
+        .await;
+    deactivate(&cara).await;
+    assert!(only_cara["id"].is_string());
+
+    // In turn, over three people with one inactive.
+    let l1 = arrive(json!({"first_name": "One", "source": "Website"})).await;
+    let l2 = arrive(json!({"first_name": "Two", "source": "Website"})).await;
+    let l3 = arrive(json!({"first_name": "Three", "source": "Website"})).await;
+    assert_eq!([owner(&l1), owner(&l2), owner(&l3)], ["anna@rem.test", "ben@rem.test", "anna@rem.test"], "cara is skipped");
+    assert_eq!(
+        (l1["assignment_rule"].clone(), maria.get("LeadAssignmentRule", uid(&web)).await["last_assigned_to"].clone()),
+        (web["id"].clone(), json!("anna@rem.test"))
+    );
+    assert_eq!(told(k, tenant, "crm.assigned", uid(&l1)).await, ["anna@rem.test"], "the new owner is told");
+    // Two arriving at the same instant take two turns.
+    let (a, b) = tokio::join!(arrive(json!({"first_name": "Four", "source": "Website"})), arrive(json!({"first_name": "Five", "source": "Website"})));
+    let mut two = [owner(&a), owner(&b)];
+    two.sort();
+    assert_eq!(two, ["anna@rem.test", "ben@rem.test"], "two people, not one twice");
+    // Not a website lead: the first rule passes it on; the India rule takes Pune, to whoever holds fewer.
+    let open = |who: &'static str| {
+        let maria = &maria;
+        async move { maria.list("Lead", json!({"assigned_to": who, "status": "New"})).await.len() }
+    };
+    let (na, nb) = (open("anna@rem.test").await, open("ben@rem.test").await);
+    let fewer = if nb < na { "ben@rem.test" } else { "anna@rem.test" };
+    let show = arrive(json!({"first_name": "Six", "source": "Trade Show", "territory": pune["id"]})).await;
+    assert_eq!((owner(&show), show["assignment_rule"].clone()), (fewer.to_string(), shows["id"].clone()), "{na} vs {nb}");
+    let tie_broken = arrive(json!({"first_name": "Seven", "source": "Trade Show", "territory": pune["id"]})).await;
+    assert_ne!(owner(&tie_broken), "", "given");
+    // Referral: its rule's one person left; nothing else takes it, so it stays as before rules.
+    let referral = arrive(json!({"first_name": "Eight", "source": "Referral"})).await;
+    assert_eq!((owner(&referral).as_str(), referral["assignment_rule"].clone()), ("system@ferrum.local", Value::Null));
+    // A person's own lead is kept, and an owner someone chose is never overridden.
+    let own = anna.insert("Lead", json!({"first_name": "Mine", "source": "Website", "assigned_to": "anna@rem.test"})).await;
+    assert_eq!((owner(&own).as_str(), own["assignment_rule"].clone()), ("anna@rem.test", Value::Null));
+    let chosen = maria.insert("Lead", json!({"first_name": "Yours", "source": "Website", "assigned_to": "ben@rem.test"})).await;
+    assert_eq!(owner(&chosen), "ben@rem.test");
+    assert_eq!(told(k, tenant, "crm.assigned", uid(&own)).await.len(), 0, "nobody tells themself");
+    // Entered with the owner left empty, the rules choose; the creator still sees it.
+    let left_empty = anna.insert("Lead", json!({"first_name": "Open", "source": "Website"})).await;
+    assert_eq!(left_empty["assignment_rule"], web["id"]);
+    anna.get("Lead", uid(&left_empty)).await;
+    // An owner changed by hand is that person's choice, not the rule's.
+    let moved = maria.update("Lead", uid(&l1), json!({"assigned_to": "ben@rem.test"})).await;
+    assert!(moved["assignment_rule"].is_null());
+    assert_eq!(told(k, tenant, "crm.assigned", uid(&l1)).await, ["anna@rem.test", "ben@rem.test"]);
+    // Assign by Rules: for a lead whose owner left, not one with an owner.
+    refused(maria.k.run_action(&maria.ctx, "Lead", uid(&l1), "assign_by_rules", json!({})).await, "is ben@rem.test's");
+    let done = maria.action("Lead", uid(&hers), "assign_by_rules", json!({})).await;
+    let hal = maria.get("Lead", uid(&hers)).await;
+    assert_eq!((hal["assigned_to"].clone(), hal["assignment_rule"].clone()), (done["assigned_to"].clone(), web["id"].clone()));
+    assert_ne!(owner(&hal), "cara@rem.test");
+    assert_eq!(told(k, tenant, "crm.assigned", uid(&hers)).await, ["cara@rem.test".to_string(), owner(&hal)], "she was told while she was here");
+    let mut tx = k.db.system_tx().await.unwrap();
+    let story: Vec<(String, Option<Uuid>)> =
+        sqlx::query_as("select action, actor from audit_event where tenant_id = $1 and entity = 'Lead' and record_id = $2 and action = 'assign_by_rules'")
+            .bind(tenant)
+            .bind(uid(&hers))
+            .fetch_all(&mut *tx)
+            .await
+            .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(story, [("assign_by_rules".to_string(), Some(maria.ctx.user))], "the story says who asked");
+
+    // ───────────── what the reminders stand on ─────────────
+    let stage = |name: &'static str| {
+        let admin = &admin;
+        async move { admin.one("SalesStage", json!({"stage_name": name})).await["id"].clone() }
+    };
+    let deal = anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": l3["id"], "amount": "1000"})).await;
+    let did = uid(&deal);
+    assert!(deal["stage_changed_at"].is_string() && deal["last_activity_at"].is_null());
+    let since = deal["stage_changed_at"].clone();
+    let kept = anna.update("Opportunity", did, json!({"amount": "1200"})).await;
+    assert_eq!(kept["stage_changed_at"], since, "the stage did not move");
+    let moved = anna.update("Opportunity", did, json!({"sales_stage": stage("Proposal").await})).await;
+    assert_ne!(moved["stage_changed_at"], since);
+    // A call logged after the fact counts when it happened; its outcome and length are kept, and the
+    // next follow-up is set in the same step.
+    let yesterday = (chrono::Utc::now() - chrono::Duration::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let call = anna.insert("Activity", json!({"activity_type": "Call", "subject": "Intro", "opportunity": did.to_string(), "due_at": yesterday})).await;
+    let next = (today() + chrono::Duration::days(3)).to_string();
+    anna.action("Activity", uid(&call), "complete", json!({"call_outcome": "No Answer", "duration_minutes": 2, "next_follow_up": next})).await;
+    let call = anna.get("Activity", uid(&call)).await;
+    assert_eq!((call["status"].clone(), call["call_outcome"].clone(), call["duration_minutes"].clone()), (json!("Done"), json!("No Answer"), json!(2)));
+    let deal = anna.get("Opportunity", did).await;
+    assert_eq!(deal["next_follow_up"], json!(next));
+    let at = |v: &Value| ferrum_kernel::value::parse_datetime(v.as_str().unwrap()).unwrap();
+    assert_eq!(at(&deal["last_activity_at"]), at(&json!(yesterday)), "when it happened");
+    assert_eq!(at(&anna.get("Lead", uid(&l3)).await["last_touched_at"]), at(&json!(yesterday)), "the lead was touched too");
+    // The release's backfill gives records already there the same dates.
+    sql(k, "update e_opportunity set stage_changed_at = null, last_activity_at = null where id = $1", did).await;
+    sql(k, "update e_lead set last_touched_at = null where id = $1", uid(&l3)).await;
+    let mut tx = k.db.system_tx().await.unwrap();
+    sqlx::raw_sql(include_str!("../packages/crm/sql/003_touch_dates.sql")).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let back = admin.get("Opportunity", did).await;
+    assert!((at(&back["stage_changed_at"]) - at(&moved["stage_changed_at"])).num_seconds().abs() < 5, "{back:?} {moved:?}");
+    assert_eq!(at(&back["last_activity_at"]), at(&json!(yesterday)));
+    assert_eq!(at(&admin.get("Lead", uid(&l3)).await["last_touched_at"]), at(&json!(yesterday)));
+
+    // ───────────── reminders ─────────────
+    // An activity overdue: told once, not again, again once moved and overdue again.
+    let three_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let task = anna.insert("Activity", json!({"activity_type": "Task", "subject": "Send brochure", "lead": l1["id"], "due_at": three_hours_ago})).await;
+    remind(k).await;
+    remind(k).await;
+    assert_eq!(told(k, tenant, "crm.activity_overdue", uid(&task)).await, ["anna@rem.test"]);
+    anna.update("Activity", uid(&task), json!({"due_at": (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339()})).await;
+    remind(k).await;
+    anna.update("Activity", uid(&task), json!({"due_at": three_hours_ago})).await;
+    remind(k).await;
+    assert_eq!(told(k, tenant, "crm.activity_overdue", uid(&task)).await.len(), 2, "a new occasion");
+    // My work: the overdue task and the deal to follow up, each linking to its record.
+    let site = k.hooks.site("crm").expect("CRM's endpoints").clone();
+    let req = ferrum_kernel::SiteRequest {
+        tenant,
+        user: Some(anna.ctx.clone()),
+        method: "GET".into(),
+        path: "/work".into(),
+        query: Default::default(),
+        headers: Default::default(),
+        body: vec![],
+        client_ip: "203.0.113.7".into(),
+    };
+    anna.update("Lead", uid(&own), json!({"next_follow_up": today().to_string()})).await;
+    let work: Value = serde_json::from_slice(&site.handle(k, req).await.expect("work").body).unwrap();
+    let items = work["items"].as_array().unwrap();
+    let item = |title: &str| items.iter().find(|i| i["title"] == json!(title)).unwrap_or_else(|| panic!("{title} in {work}")).clone();
+    assert_eq!(item("Send brochure")["url"], json!(format!("/crm/e/Lead/{}", uid(&l1))));
+    assert_eq!(item("Send brochure")["priority"], json!("High"), "overdue");
+    assert_eq!(item("Mine")["due"], json!(today().to_string()));
+    assert!(items.iter().all(|i| i["title"] != json!("Intro")), "done is not work");
+
+    // A new lead nobody touched; a converted one, or one with a call planned, raises nothing.
+    let quiet_lead = arrive(json!({"first_name": "Nine", "source": "Website"})).await;
+    let converted = arrive(json!({"first_name": "Ten", "source": "Website"})).await;
+    maria.action("Lead", uid(&converted), "convert_to_customer", json!({})).await;
+    let planned = arrive(json!({"first_name": "Eleven", "source": "Website"})).await;
+    maria.insert("Activity", json!({"activity_type": "Call", "subject": "First call", "lead": planned["id"]})).await;
+    for l in [&quiet_lead, &converted, &planned] {
+        sql(k, "update e_lead set created_at = now() - interval '25 hours' where id = $1", uid(l)).await;
+    }
+    remind(k).await;
+    remind(k).await;
+    assert_eq!(told(k, tenant, "crm.lead_untouched", uid(&quiet_lead)).await, [owner(&quiet_lead)]);
+    assert!(told(k, tenant, "crm.lead_untouched", uid(&converted)).await.is_empty() && told(k, tenant, "crm.lead_untouched", uid(&planned)).await.is_empty());
+
+    // A deal gone quiet with no next step: told of both; something done ends both; quiet again, told again.
+    let gone = anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": l3["id"], "amount": "500"})).await;
+    let back20 = "update e_opportunity set created_at = now() - interval '20 days', stage_changed_at = now() - interval '20 days', \
+                  last_activity_at = least(last_activity_at, now() - interval '20 days') where id = $1";
+    sql(k, back20, uid(&gone)).await;
+    remind(k).await;
+    remind(k).await;
+    assert_eq!(told(k, tenant, "crm.deal_quiet", uid(&gone)).await, ["anna@rem.test"]);
+    assert_eq!(told(k, tenant, "crm.deal_no_step", uid(&gone)).await, ["anna@rem.test"]);
+    assert!(told(k, tenant, "crm.deal_quiet", did).await.is_empty(), "a deal worked on lately");
+    anna.insert("Activity", json!({"activity_type": "Note", "subject": "Asked for a budget", "opportunity": gone["id"]})).await;
+    remind(k).await;
+    sql(k, back20, uid(&gone)).await;
+    sql(k, "update e_opportunity set last_activity_at = now() - interval '20 days' where id = $1", uid(&gone)).await;
+    remind(k).await;
+    assert_eq!(told(k, tenant, "crm.deal_quiet", uid(&gone)).await.len(), 2, "quiet again");
+    assert_eq!(told(k, tenant, "crm.deal_no_step", uid(&gone)).await.len(), 2);
+    anna.update("Opportunity", uid(&gone), json!({"next_step": "Call the CFO"})).await;
+    remind(k).await;
+    assert_eq!(told(k, tenant, "crm.deal_no_step", uid(&gone)).await.len(), 2, "it has a next step now");
+    // A closed deal raises nothing.
+    let won = anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": l3["id"], "amount": "100"})).await;
+    sql(k, back20, uid(&won)).await;
+    anna.action("Opportunity", uid(&won), "mark_won", json!({})).await;
+    remind(k).await;
+    assert!(told(k, tenant, "crm.deal_quiet", uid(&won)).await.is_empty() && told(k, tenant, "crm.deal_no_step", uid(&won)).await.is_empty());
+    // An owner who left is told nothing; after a handover, the new owner is.
+    let daves = dave.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": l2["id"], "amount": "900", "next_step": "Demo"})).await;
+    sql(k, back20, uid(&daves)).await;
+    deactivate(&dave).await;
+    remind(k).await;
+    assert!(told(k, tenant, "crm.deal_quiet", uid(&daves)).await.is_empty());
+    maria.update("Opportunity", uid(&daves), json!({"assigned_to": "ben@rem.test"})).await;
+    remind(k).await;
+    assert_eq!(told(k, tenant, "crm.deal_quiet", uid(&daves)).await, ["ben@rem.test"]);
+    ben.get("Opportunity", uid(&daves)).await;
+
+    // Thresholds at zero switch reminders off.
+    maria.insert("CrmSettings", json!({"overdue_activity_hours": 0, "untouched_lead_hours": 0, "quiet_deal_days": 0, "no_next_step_days": 0})).await;
+    let late = anna.insert("Activity", json!({"activity_type": "Task", "subject": "Too late", "lead": l1["id"], "due_at": three_hours_ago})).await;
+    let silent = arrive(json!({"first_name": "Twelve", "source": "Website"})).await;
+    sql(k, "update e_lead set created_at = now() - interval '25 hours' where id = $1", uid(&silent)).await;
+    remind(k).await;
+    assert!(told(k, tenant, "crm.activity_overdue", uid(&late)).await.is_empty() && told(k, tenant, "crm.lead_untouched", uid(&silent)).await.is_empty());
+
+    // ───────────── reports ─────────────
+    // A second company keeps the reports' figures to a known set.
+    let co2 = admin.insert("Company", json!({"company_name": "Reports Co", "abbr": "RC", "default_currency": inr["id"]})).await;
+    let c2 = uid(&co2).to_string();
+    let acme = maria.insert("Prospect", json!({"prospect_name": "Acme"})).await;
+    let deal = |who: &'static str, amount: &'static str, source: &'static str, competitors: Value| {
+        let (maria, c2, acme) = (&maria, c2.clone(), acme["id"].clone());
+        async move {
+            uid(&maria
+                .insert(
+                    "Opportunity",
+                    json!({"opportunity_from": "Prospect", "prospect": acme, "company": c2, "amount": amount, "source": source,
+                           "assigned_to": who, "competitors": competitors}),
+                )
+                .await)
+        }
+    };
+    let a = deal("anna@rem.test", "1000", "Website", json!([])).await;
+    let b = deal("anna@rem.test", "500", "Referral", json!([])).await;
+    let c = deal("anna@rem.test", "300", "Website", json!([{"competitor": "Rival"}])).await;
+    let d = deal("anna@rem.test", "200", "Referral", json!([{"competitor": "Rival"}, {"competitor": "Other"}])).await;
+    let e = deal("ben@rem.test", "700", "Website", json!([])).await;
+    let f = deal("ben@rem.test", "2000", "Website", json!([])).await;
+    sql(k, "update e_opportunity set created_at = now() - interval '10 days' where id = $1", a).await;
+    sql(k, "update e_opportunity set created_at = now() - interval '4 days' where id = $1", b).await;
+    for w in [a, b, f] {
+        maria.action("Opportunity", w, "mark_won", json!({})).await;
+    }
+    for (l, reason) in [(c, "Price"), (d, "Price"), (e, "Timing")] {
+        maria.action("Opportunity", l, "mark_lost", json!({"lost_reason": reason})).await;
+    }
+    let span = [("company", c2.clone()), ("from_date", (today() - chrono::Duration::days(30)).to_string()), ("to_date", today().to_string())];
+    let with = |extra: (&'static str, &'static str)| {
+        let mut p: Vec<(&str, String)> = span.to_vec();
+        p.push((extra.0, extra.1.to_string()));
+        p
+    };
+    let rate = maria.report("win_rate", &with(("group_by", "Owner"))).await;
+    let row = |r: &Value, key: &str, group: &str| {
+        r["rows"].as_array().unwrap().iter().find(|x| x[key] == json!(group)).unwrap_or_else(|| panic!("{group} in {r}")).clone()
+    };
+    let an = row(&rate, "group", "anna@rem.test");
+    assert_eq!(
+        (an["won"].clone(), an["lost"].clone(), dec(&an["win_rate_pct"]), dec(&an["won_amount"]), dec(&an["lost_amount"])),
+        (json!(2), json!(2), n("50"), n("1500"), n("500"))
+    );
+    assert_eq!((rate["totals"]["won"].clone(), rate["totals"]["lost"].clone(), dec(&rate["totals"]["win_rate_pct"])), (json!(3), json!(3), n("50")));
+    let by_source = maria.report("win_rate", &with(("group_by", "Source"))).await;
+    let w = row(&by_source, "group", "Website");
+    assert_eq!((w["won"].clone(), w["lost"].clone(), dec(&w["win_rate_pct"])), (json!(2), json!(2), n("50")));
+    let by_month = maria.report("win_rate", &with(("group_by", "Month"))).await;
+    assert_eq!(by_month["rows"].as_array().map(Vec::len), Some(1), "all closed this month");
+    let cycle = maria.report("sales_cycle", &with(("group_by", "Owner"))).await;
+    let an = row(&cycle, "group", "anna@rem.test");
+    assert_eq!((an["deals"].clone(), dec(&an["average_days"]), dec(&an["shortest_days"]), dec(&an["longest_days"])), (json!(2), n("7"), n("4"), n("10")));
+    assert_eq!(dec(&row(&cycle, "group", "ben@rem.test")["average_days"]), n("0"));
+    let stages = maria.report("sales_cycle", &with(("group_by", "Stage"))).await;
+    assert_eq!(row(&stages, "group", "Prospecting")["deals"], json!(3), "each won deal stood in Prospecting: {stages}");
+    let lost = maria.report("lost_reasons", &span).await;
+    let price = row(&lost, "reason", "Price");
+    assert_eq!(
+        (price["deals"].clone(), dec(&price["amount"]), dec(&price["share_pct"]), price["competitors"].clone()),
+        (json!(2), n("500"), n("41.67"), json!("Rival (2), Other (1)"))
+    );
+    assert_eq!(lost["rows"][0]["reason"], json!("Price"), "the most deals first");
+    assert_eq!(dec(&row(&lost, "reason", "Timing")["amount"]), n("700"));
+    // Activity by person: Rita's calls, meeting and task, not her note.
+    let rita = user("rita@rem.test", &["Sales User"]).await;
+    for (kind, outcome, minutes) in [("Call", Some("Reached"), 5), ("Call", Some("No Answer"), 2), ("Meeting", None, 30), ("Task", None, 0), ("Note", None, 0)]
+    {
+        let a = rita.insert("Activity", json!({"activity_type": kind, "subject": kind})).await;
+        if kind != "Note" {
+            rita.action("Activity", uid(&a), "complete", json!({"call_outcome": outcome, "duration_minutes": minutes})).await;
+        }
+    }
+    let busy = maria.report("activity_by_person", &with(("period", "Month"))).await;
+    let r = row(&busy, "person", "rita@rem.test");
+    assert_eq!(
+        [&r["calls"], &r["reached"], &r["call_minutes"], &r["meetings"], &r["tasks"], &r["emails"], &r["total"]].map(|v| v.as_i64().unwrap()),
+        [2, 1, 7, 1, 1, 0, 4]
+    );
+    assert!(maria.report("activity_by_person", &with(("period", "Week"))).await["rows"].as_array().is_some_and(|r| !r.is_empty()));
 }
