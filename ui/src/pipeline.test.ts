@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attention, initials, matches, overview, pipeline } from "./pipeline";
+import { attention, completion, daysSince, initials, matches, overview, pipeline } from "./pipeline";
 
 describe("CRM's pipeline", () => {
   it("puts open deals under their stages, in the stages' order, with their totals", () => {
@@ -55,5 +55,21 @@ describe("CRM's pipeline", () => {
     expect(initials("asha.rao@acme.test")).toBe("AR");
     expect(initials("admin@demo.test")).toBe("AD");
     expect(initials(null)).toBe("?");
+  });
+
+  it("counts whole days since a moment, and nothing for none or one to come", () => {
+    const now = new Date("2026-11-11T12:00:00Z");
+    expect(daysSince("2026-11-01T13:00:00Z", now)).toBe(9);
+    expect(daysSince("2026-11-11T08:00:00Z", now)).toBe(0);
+    expect(daysSince("2026-11-12T08:00:00Z", now)).toBeNull();
+    expect(daysSince(null, now)).toBeNull();
+    expect(daysSince("not a date", now)).toBeNull();
+  });
+
+  it("sends a call's outcome, minutes and next follow-up only when given", () => {
+    expect(completion("Reached", "12", "2026-11-14")).toEqual({ call_outcome: "Reached", duration_minutes: 12, next_follow_up: "2026-11-14" });
+    expect(completion("", " ", "")).toEqual({});
+    expect(completion("", "-3", "")).toEqual({});
+    expect(completion("", "0", "")).toEqual({ duration_minutes: 0 });
   });
 });

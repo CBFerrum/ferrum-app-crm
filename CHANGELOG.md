@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.9.0
+
+For a sales team switching CRMs: leads shared out by rules, reminders so nothing slips, and the reports a manager asks for at the end of the month.
+
+Leads shared out by rules:
+- A manager sets Lead Assignment Rules (CRM's menu): which leads a rule takes (a source, a territory and those under it, a campaign, a company; empty is any; and whose: leads that arrive by themselves, or also leads people enter or import without an owner), its people, and how it shares them out: In Turn, or to whoever holds the Fewest Open Leads (new, contacted or qualified). Rules are tried by their Order; the first that takes the lead and has an active person gives it.
+- Every rule takes the leads that arrive by themselves: from a form, a mail or an integration. A lead a person enters by hand, or imports, without an owner is theirs, as before: a rep prospecting all day neither picks themself on each lead nor loses one by forgetting. A rule set to take also the leads people enter or import without an owner shares those out too; reps then choose themselves as owner to keep a lead they enter. An owner someone chose is never overridden.
+- Inactive people are skipped, and a rule whose people are all inactive passes the lead on. Two leads arriving at once go to two people: the turn is kept on the rule (Last Given To), under a lock.
+- Assigned By Rule says which rule gave a lead its owner; a person changing the owner later clears it. Assign by Rules gives a lead with no owner, or whose owner left, to whom its rules choose (any enabled rule, whoever asks), its history recording who asked; a lead with an active owner is refused.
+- The new owner of a lead is told (Leads given to you, in the bar and by email unless they chose otherwise).
+
+Reminders and My work:
+- Home's My work lists each person's CRM work: their open activities due today or overdue, and their leads and deals whose follow-up is due, each linking to its record.
+- The maintenance run tells an owner of an activity overdue, a new lead nobody has logged or planned anything on, an open deal with nothing done on it lately, and an open deal with no open activity, next step or follow-up date. Each is told once, and again only when it happens again (an activity moved and overdue again, a deal worked on and quiet again). It goes to the owner as the record stands; an owner who left is told nothing, and the owner it is handed to is. Closed, won, lost and converted records raise nothing. Each person can switch each kind off in their notification settings.
+- A manager sets when, in CRM Settings: an activity 1 hour past due, a new lead untouched for 24 hours, a deal quiet for 14 days, a deal without a next step for 1 day, out of the box; zero switches one off.
+
+What they stand on:
+- A deal shows In Stage Since and Last Activity, and a lead Last Touched, kept as activities are logged or completed (a call logged after the fact counts when it happened, as Last Contacted already did) and as the stage moves. The deal's page says how many days it has stood in its stage and when something was last done.
+- A call keeps its Outcome (reached, no answer, left a message, busy, wrong number) and its Duration; Mark as Done takes both, and the next follow-up for its deal (else its lead) in the same step, as logging a call from the deal's page does.
+
+Reports, in CRM's menu:
+- Win Rate: deals won against lost in a period, by owner, source or month, with the amounts won and lost and the average won deal. Deals closed with no outcome (Closed) count as neither.
+- Sales Cycle: won deals' days from opening to winning by owner (average, shortest, longest), or the days each stage held them on the way, from their history.
+- Lost Reasons: lost deals by reason, their count, amount and share, with the competitors named on them.
+- Activity by Person: calls (how many reached someone, and their minutes), meetings, tasks and emails done by each person, by month, week or day. Notes are not counted; activities belong to no company, so the company chosen gives the report its period only.
+
+For data already there:
+- Deals get In Stage Since from the last stage change in their history (else when they were made), and deals and leads Last Activity and Last Touched from their latest done activity (sql/003_touch_dates.sql); those with none keep none, and a deal's quiet time counts from when it was made or last moved.
+- What is already overdue, untouched, quiet or without a next step when the release arrives (by the default times) counts as told, so nobody is flooded on the first run; each is told when it happens again.
+- Leads already there keep their owners; rules apply to leads that arrive from now on, or through Assign by Rules. Lead Owner no longer shows the person entering a lead before saving: left empty, it is filled with them on save, unless a rule takes leads people enter.
+
+Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (426 names and 82 words each), translated by the model, to be reviewed by native speakers.
+
 ## 0.8.0
 
 For a sales team arriving from another CRM: the everyday situations and the common corrections work.

@@ -9,7 +9,7 @@ import { api, ApiError, docPath, errorMessage, formatMoment, shell, t, isolate }
 import { Badge, Button, ErrorState, Icon, PageLoading, statusTone, toast, useCanIntent, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, CollabPanel, type Doc, type EntityMeta, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
 import { LostDialog } from "./Lost";
-import { type Deal, isOpenStage, money, type Stage } from "./pipeline";
+import { completion, type Deal, daysSince, isOpenStage, money, type Stage } from "./pipeline";
 import { type Activity, type AuditEvent, type Item, type Mail, timeline } from "./timeline";
 
 const ICONS: Record<Item["kind"], string> = { call: "phone", meeting: "calendar", email: "mail", mail: "mail", task: "check", note: "file", change: "refresh" };
@@ -41,11 +41,23 @@ function Row({ item, onDone }: { item: Item; onDone?: (id: string) => void }) {
 
 type Log = "Note" | "Call" | "Task";
 
+/** A call's outcomes, as stored and as read. */
+const outcomes = (): [string, string][] => [
+  ["Reached", t("Reached")],
+  ["No Answer", t("No Answer")],
+  ["Left Message", t("Left Message")],
+  ["Busy", t("Busy")],
+  ["Wrong Number", t("Wrong Number")],
+];
+
 /** Writes down what happened, or what is to happen, on the deal. */
 function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
   const [kind, setKind] = useState<Log>("Note");
   const [text, setText] = useState("");
   const [due, setDue] = useState("");
+  const [outcome, setOutcome] = useState("");
+  const [minutes, setMinutes] = useState("");
+  const [next, setNext] = useState("");
   const [busy, setBusy] = useState(false);
   const canMail = useCanIntent("compose", "email");
   const canMeet = useCanIntent("schedule", "event");
@@ -65,10 +77,13 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
         opportunity: deal.id,
         due_at: kind === "Task" && due ? new Date(due).toISOString() : kind === "Call" ? new Date().toISOString() : null,
       });
-      // A call being logged has happened.
-      if (kind === "Call") await api.post(docPath("Activity", made.id, "actions", "complete"), {});
+      // A call being logged has happened: its outcome, length and the next follow-up go with it.
+      if (kind === "Call") await api.post(docPath("Activity", made.id, "actions", "complete"), completion(outcome, minutes, next));
       setText("");
       setDue("");
+      setOutcome("");
+      setMinutes("");
+      setNext("");
       onSaved();
     } catch (err) {
       toast(errorMessage(err), "error");
@@ -110,6 +125,20 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
       />
       <div className="crm-composer-foot">
         {kind === "Task" && <input className="input" type="datetime-local" aria-label={t("Due")} value={due} onChange={(e) => setDue(e.target.value)} />}
+        {kind === "Call" && (
+          <>
+            <select className="input" aria-label={t("Outcome")} value={outcome} onChange={(e) => setOutcome(e.target.value)}>
+              <option value="">{t("Outcome")}</option>
+              {outcomes().map(([o, read]) => (
+                <option key={o} value={o}>
+                  {isolate(read)}
+                </option>
+              ))}
+            </select>
+            <input className="input crm-minutes" type="number" min={0} inputMode="numeric" aria-label={t("Minutes")} placeholder={t("Minutes")} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+            <input className="input" type="date" aria-label={t("Next follow-up")} title={t("Next follow-up")} value={next} onChange={(e) => setNext(e.target.value)} />
+          </>
+        )}
         <span className="spacer" />
         <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!text.trim()}>
           {t("Save")}
@@ -188,6 +217,8 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
   if (record.error) return <ErrorState error={record.error} onRetry={() => void record.refetch()} />;
   if (!doc) return <PageLoading />;
   const isOpen = doc.status === "Open";
+  const inStage = isOpen ? daysSince(doc.stage_changed_at as string | null) : null;
+  const lastDone = daysSince(doc.last_activity_at as string | null);
   const writable = can(meta.permissions, "write");
   const done = async (activity: string) => {
     try {
@@ -234,7 +265,17 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
         <div className="crm-deal-title">
           <h1 className="page-title">{isolate(String(doc.title ?? "Deal"))}</h1>
           <p className="page-sub">
-            {isolate([doc.party_name, doc.base_amount != null ? money(Number(doc.base_amount)) : null, doc.expected_close_date ? t("closes {expected_close_date}", { expected_close_date: String(doc.expected_close_date) }) : null].filter(Boolean).join(" · "))}
+            {isolate(
+              [
+                doc.party_name,
+                doc.base_amount != null ? money(Number(doc.base_amount)) : null,
+                doc.expected_close_date ? t("closes {expected_close_date}", { expected_close_date: String(doc.expected_close_date) }) : null,
+                inStage != null ? t("{days} days in this stage", { days: inStage }) : null,
+                isOpen ? (lastDone != null ? t("last activity {days} days ago", { days: lastDone }) : t("no activity yet")) : null,
+              ]
+                .filter(Boolean)
+                .join(" · "),
+            )}
           </p>
         </div>
         <div className="page-actions">

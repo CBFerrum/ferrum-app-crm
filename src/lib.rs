@@ -7,14 +7,16 @@
 //! in `assigned_to` (`owner_fields`), so own-records permissions cover what is assigned to a rep.
 
 mod activity;
+mod assign;
 mod lead;
 mod opportunity;
 mod quotation;
+mod remind;
 mod reports;
 
 use ferrum_domain::reports::ReportSource;
 use ferrum_domain::util::{find, id, s, sys};
-use ferrum_kernel::{Doc, Error, Filter, HookCtx, HookRegistry, Kernel, Result};
+use ferrum_kernel::{Doc, Error, Filter, HookCtx, HookRegistry, Kernel, Result, Tx};
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -26,7 +28,9 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("Lead", Arc::new(lead::LeadHook))
         .register("Opportunity", Arc::new(opportunity::OpportunityHook))
         .register("Quotation", Arc::new(quotation::QuotationHook))
-        .register("Activity", Arc::new(activity::ActivityHook));
+        .register("Activity", Arc::new(activity::ActivityHook))
+        .register("LeadAssignmentRule", Arc::new(assign::RuleHook));
+    hooks.add_site("crm", Arc::new(remind::CrmSite));
     hooks.scoped(&[CONNECTOR_PACKAGE.to_string()], |h| {
         h.register("SalesOrder", Arc::new(quotation::SalesOrderHook)).register("SalesInvoice", Arc::new(quotation::SalesInvoiceHook));
     });
@@ -42,7 +46,44 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
 
 /// Periodic upkeep (every few minutes on every replica; must be idempotent and safe to run concurrently).
 pub async fn maintenance(k: &Kernel) -> Result<()> {
-    quotation::expire_all(k).await
+    quotation::expire_all(k).await?;
+    remind::remind_all(k).await
+}
+
+/// The notification kinds app.yaml declares (`shell.notification`), with the defaults it declares.
+pub const ASSIGNED: &str = "crm.assigned";
+pub const ACTIVITY_OVERDUE: &str = "crm.activity_overdue";
+pub const LEAD_UNTOUCHED: &str = "crm.lead_untouched";
+pub const DEAL_QUIET: &str = "crm.deal_quiet";
+pub const DEAL_NO_STEP: &str = "crm.deal_no_step";
+
+/// The active user signing in with `email`.
+pub(crate) async fn active_user(tx: &mut Tx, tenant: Uuid, email: &str) -> Result<Option<Uuid>> {
+    Ok(sqlx::query_scalar("select id from app_user where tenant_id = $1 and email = $2::citext and is_active")
+        .bind(tenant)
+        .bind(email)
+        .fetch_optional(&mut **tx)
+        .await?)
+}
+
+/// A notification of `kind` about a record to the active user signing in with `email`, the way they
+/// chose for that kind (in the bar, and by email for an assignment, unless they chose otherwise).
+/// False when there is no such user: the record's owner left, and nobody is told.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn tell(
+    tx: &mut Tx,
+    tenant: Uuid,
+    email: &str,
+    kind: &str,
+    title: &str,
+    body: Option<&str>,
+    entity: &str,
+    record: Option<Uuid>,
+) -> Result<bool> {
+    let Some(user) = active_user(tx, tenant, email).await? else { return Ok(false) };
+    let default = ferrum_kernel::notify::declared_default(if kind == ASSIGNED { &["inapp", "email"] } else { &["inapp"] });
+    ferrum_kernel::notify::send_kind(tx, tenant, user, kind, default, title, body, Some(entity), record).await?;
+    Ok(true)
 }
 
 /// "First Last" from the parts that are present.
@@ -131,13 +172,31 @@ mod tests {
     }
 
     #[test]
+    fn it_declares_the_notifications_it_sends() {
+        let m = ferrum_apps::AppManifest::parse(MANIFEST).expect("app.yaml");
+        let declared: Vec<String> = m.contributes["shell.notification"].iter().filter_map(|n| n["id"].as_str()).map(|i| format!("crm.{i}")).collect();
+        assert_eq!(declared, [ASSIGNED, ACTIVITY_OVERDUE, LEAD_UNTOUCHED, DEAL_QUIET, DEAL_NO_STEP]);
+        assert_eq!(m.contributes["shell.work"][0]["endpoint"], "/api/app/crm/work");
+    }
+
+    #[test]
     fn its_menu_and_create_menu_reach_everything() {
         let m = ferrum_apps::AppManifest::parse(MANIFEST).expect("app.yaml");
         let creates: Vec<&str> = m.contributes["shell.create"].iter().filter_map(|c| c["entity"].as_str()).collect();
         assert_eq!(creates, ["Lead", "Opportunity", "Contact", "Quotation", "Activity"]);
         let crm = packages().expect("packages").into_iter().find(|p| p.manifest.package == "crm").expect("crm");
         let items = &crm.manifest.modules[0].items;
-        for item in ["ProductRule", "report:campaign_attribution", "Customer"] {
+        for item in [
+            "ProductRule",
+            "report:campaign_attribution",
+            "Customer",
+            "LeadAssignmentRule",
+            "CrmSettings",
+            "report:win_rate",
+            "report:sales_cycle",
+            "report:lost_reasons",
+            "report:activity_by_person",
+        ] {
             assert!(items.iter().any(|i| i == item), "{item} in CRM's menu");
         }
     }
