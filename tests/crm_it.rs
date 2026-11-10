@@ -2008,7 +2008,10 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
     tx.commit().await.unwrap();
     let (one, two, three) = (anna.get("Quotation", q1).await, anna.get("Quotation", q2).await, anna.get("Quotation", q3).await);
     assert_eq!([&one["revision"], &two["revision"], &three["revision"]], [&json!(1), &json!(2), &json!(3)]);
-    assert_eq!((three["revision_of"].clone(), one["replaced_by"].clone(), two["replaced_by"].clone()), (json!(q2.to_string()), json!(q2.to_string()), json!(q3.to_string())));
+    assert_eq!(
+        (three["revision_of"].clone(), one["replaced_by"].clone(), two["replaced_by"].clone()),
+        (json!(q2.to_string()), json!(q2.to_string()), json!(q3.to_string()))
+    );
     assert_eq!(anna.action("Quotation", q3, "mark_accepted", json!({})).await["status"], json!("Accepted"));
     let order = vid(&anna.action("Quotation", q3, "make_sales_order", json!({})).await);
     anna.submit("SalesOrder", order).await;
