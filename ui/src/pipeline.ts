@@ -81,3 +81,22 @@ export function initials(email?: string | null): string {
   const name = (email ?? "").split("@")[0].split(/[._-]+/).filter(Boolean);
   return (name.length > 1 ? name[0][0] + name[1][0] : (name[0] ?? "?").slice(0, 2)).toUpperCase();
 }
+
+/** Whole days from `at` to `now` (none for no date or one in the future): how long a deal has stood
+ *  in its stage, or since something was last done on it. */
+export function daysSince(at: string | null | undefined, now = new Date()): number | null {
+  if (!at) return null;
+  const t = new Date(at).getTime();
+  if (Number.isNaN(t) || t > now.getTime()) return null;
+  return Math.floor((now.getTime() - t) / 86_400_000);
+}
+
+/** What a call's outcome and length, and the next follow-up, send with Mark as Done: only what was given. */
+export function completion(outcome: string, minutes: string, next: string): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  if (outcome) out.call_outcome = outcome;
+  const m = Number(minutes);
+  if (minutes.trim() && Number.isInteger(m) && m >= 0) out.duration_minutes = m;
+  if (next) out.next_follow_up = next;
+  return out;
+}

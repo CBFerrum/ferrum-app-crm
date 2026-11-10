@@ -1,11 +1,13 @@
 //! Activities (calls, meetings, emails, tasks and notes) on leads, opportunities, customers and
-//! contacts. Completing one with a lead records the contact on the lead and moves a new lead on
-//! to Contacted.
+//! contacts. Logging or completing one marks its lead touched and its deal active (Last Touched,
+//! Last Activity); completing one other than a note records the contact on the lead and moves a new
+//! lead on to Contacted. A call keeps its outcome and duration, and completing it can set the next
+//! follow-up.
 
 use crate::{check_assignee, lookup};
 use async_trait::async_trait;
-use chrono::{SecondsFormat, Utc};
-use ferrum_domain::util::{get, id, s, set, sys};
+use chrono::{DateTime, SecondsFormat, Utc};
+use ferrum_domain::util::{id, s, set, sys};
 use ferrum_kernel::value::parse_datetime;
 use ferrum_kernel::{Doc, DocHook, Error, HookCtx, Result};
 use serde_json::{Value, json};
@@ -49,39 +51,101 @@ impl DocHook for ActivityHook {
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
         check_assignee(hc, doc, old).await?;
         let done_now = s(doc, "status") == Some("Done") && old.is_none_or(|o| s(o, "status") != Some("Done"));
-        // A note records something; it is not an interaction with the lead.
-        if done_now
-            && s(doc, "activity_type") != Some("Note")
-            && let Some(lead) = id(doc, "lead")
-        {
-            // A past call logged today counts on the day it happened.
-            let (today, offset) = (hc.ctx.today(), *hc.ctx.now_local().offset());
-            let on =
-                s(doc, "due_at").and_then(|t| parse_datetime(t).ok()).map(|t| t.with_timezone(&offset).date_naive()).filter(|d| *d <= today).unwrap_or(today);
-            let sctx = sys(hc.ctx);
-            let l = get(hc.kernel, hc.ctx, hc.tx, "Lead", lead).await?;
-            let mut v = Doc::new();
-            if s(&l, "status") == Some("New") {
-                v.insert("status".into(), json!("Contacted"));
-            }
-            if s(&l, "last_contacted_on").is_none_or(|last| last < on.to_string().as_str()) {
-                v.insert("last_contacted_on".into(), json!(on.to_string()));
-            }
-            if !v.is_empty() {
-                hc.kernel.set_values_tx(&sctx, hc.tx, "Lead", lead, v).await?;
-            }
+        if done_now {
+            touch(hc, doc).await?;
         }
         Ok(())
     }
 
-    async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, _params: &Value) -> Result<Option<Value>> {
+    async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
         if name != "complete" {
             return Ok(None);
         }
         let aid = id(doc, "id").ok_or_else(|| Error::internal("activity without id"))?;
         let mut patch = Doc::new();
         patch.insert("status".into(), json!("Done"));
+        for f in ["call_outcome", "duration_minutes"] {
+            if let Some(v) = params.get(f).filter(|v| !v.is_null() && v.as_str() != Some("")) {
+                patch.insert(f.into(), v.clone());
+            }
+        }
         let saved = hc.kernel.update_tx(hc.ctx, hc.tx, "Activity", aid, patch, None).await?;
+        // The next follow-up, on its deal, else its lead, in the same step.
+        if let Some(next) = params.get("next_follow_up").and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()) {
+            let on = match (id(&saved, "opportunity"), id(&saved, "lead")) {
+                (Some(o), _) => Some(("Opportunity", o)),
+                (None, Some(l)) => Some(("Lead", l)),
+                _ => None,
+            };
+            let Some((entity, record)) = on else {
+                return Err(Error::field("next_follow_up", "the activity is on no deal or lead to follow up"));
+            };
+            let mut v = Doc::new();
+            v.insert("next_follow_up".into(), json!(next));
+            hc.kernel.update_tx(hc.ctx, hc.tx, entity, record, v, None).await?;
+        }
         Ok(Some(json!({"status": saved.get("status"), "completed_at": saved.get("completed_at")})))
+    }
+}
+
+/// The moment a done activity counts from: when it was due, for one logged after the fact, else now.
+fn moment(doc: &Doc, now: DateTime<Utc>) -> DateTime<Utc> {
+    s(doc, "due_at").and_then(|t| parse_datetime(t).ok()).filter(|t| *t <= now).unwrap_or(now)
+}
+
+/// Whether `at` is later than the stored datetime `was` (or there is none).
+fn later(was: Option<&str>, at: DateTime<Utc>) -> bool {
+    was.and_then(|w| parse_datetime(w).ok()).is_none_or(|w| w < at)
+}
+
+/// A done activity touches its lead and its deal; one other than a note is a contact with the lead.
+async fn touch(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
+    let at = moment(doc, Utc::now());
+    let stamp = json!(at.to_rfc3339_opts(SecondsFormat::Millis, true));
+    let sctx = sys(hc.ctx);
+    if let Some(deal) = lookup(hc, "Opportunity", id(doc, "opportunity")).await?
+        && let Some(did) = id(&deal, "id")
+        && later(s(&deal, "last_activity_at"), at)
+    {
+        let mut v = Doc::new();
+        v.insert("last_activity_at".into(), stamp.clone());
+        hc.kernel.set_values_tx(&sctx, hc.tx, "Opportunity", did, v).await?;
+    }
+    let Some(l) = lookup(hc, "Lead", id(doc, "lead")).await? else { return Ok(()) };
+    let Some(lead) = id(&l, "id") else { return Ok(()) };
+    let mut v = Doc::new();
+    if later(s(&l, "last_touched_at"), at) {
+        v.insert("last_touched_at".into(), stamp);
+    }
+    // A note records something; it is not an interaction with the lead.
+    if s(doc, "activity_type") != Some("Note") {
+        // A past call logged today counts on the day it happened.
+        let on = at.with_timezone(hc.ctx.now_local().offset()).date_naive().min(hc.ctx.today());
+        if s(&l, "status") == Some("New") {
+            v.insert("status".into(), json!("Contacted"));
+        }
+        if s(&l, "last_contacted_on").is_none_or(|last| last < on.to_string().as_str()) {
+            v.insert("last_contacted_on".into(), json!(on.to_string()));
+        }
+    }
+    if !v.is_empty() {
+        hc.kernel.set_values_tx(&sctx, hc.tx, "Lead", lead, v).await?;
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_call_logged_later_counts_when_it_happened() {
+        let now = parse_datetime("2026-11-11T10:00:00Z").unwrap();
+        let mut call = Doc::new();
+        call.insert("due_at".into(), json!("2026-11-10T09:00:00Z"));
+        assert_eq!(moment(&call, now), parse_datetime("2026-11-10T09:00:00Z").unwrap());
+        call.insert("due_at".into(), json!("2026-11-12T09:00:00Z"));
+        assert_eq!(moment(&call, now), now, "done before it was due: now");
+        assert!(later(None, now) && later(Some("2026-11-10T09:00:00Z"), now) && !later(Some("2026-11-12T00:00:00Z"), now));
     }
 }

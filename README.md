@@ -5,7 +5,7 @@
   <img alt="Ferrum CRM" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.8.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.9.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -25,14 +25,14 @@ same selling engine that invoices them, so what sales promises is what accountin
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.8.0` |
+| 📦 Version | `0.9.0` |
 | 🧱 Platform | Ferrum `>=0.3.2, <0.4` |
 | 🔗 Requires | nothing else |
 | 🖥️ Interface | its own, at `/crm/` |
-| 🗃️ Records | 12 entities in 2 packages |
+| 🗃️ Records | 15 entities in 2 packages |
 | 👥 Roles | 4: Sales User, Sales Manager, Marketing Manager, CRM Viewer |
-| 📊 Reports | 6 |
-| 🧪 Tests | 13 Rust tests, 2 interface test files |
+| 📊 Reports | 10 |
+| 🧪 Tests | 17 Rust tests, 2 interface test files |
 
 
 ## Highlights
@@ -42,7 +42,7 @@ same selling engine that invoices them, so what sales promises is what accountin
 <td width="50%" valign="top">
 
 ### 🎯 Lead capture and qualification
-One open lead per email or phone, however it is written; enquiries from forms and mail kept and linked to the lead they repeat. Conversion to a new or an existing customer and contact, taking the lead's notes along, and undone while nothing else hangs on it.
+One open lead per email or phone, however it is written; enquiries from forms and mail kept and linked to the lead they repeat, and given an owner by assignment rules, in turn or to whoever holds fewest; a lead a rep types in stays theirs unless a rule says otherwise. Conversion to a new or an existing customer and contact, taking the lead's notes along, and undone while nothing else hangs on it.
 
 </td>
 <td width="50%" valign="top">
@@ -56,7 +56,7 @@ Configurable stages and probabilities, a weighted pipeline, competitors and won 
 <td width="50%" valign="top">
 
 ### 🗓️ Every touchpoint
-Calls, meetings, emails and tasks on the lead, deal or customer they concern, with owners and due dates.
+Calls, meetings, emails and tasks on the lead, deal or customer they concern, with owners and due dates, a call's outcome and length. Home's My work lists what is due; owners are told of overdue activities, untouched leads, quiet deals and deals with no next step.
 
 </td>
 <td width="50%" valign="top">
@@ -70,7 +70,7 @@ Priced and taxed by the selling engine. An approval is of the quotation's terms,
 <td width="50%" valign="top">
 
 ### 📊 Reports that answer questions
-Sales pipeline, lead funnel and conversion, campaign performance and a quotation register.
+Sales pipeline and forecast, lead funnel and conversion, campaign performance and attribution, a quotation register, win rate, sales cycle, lost reasons and activity by person.
 
 </td>
 <td width="50%" valign="top">
@@ -122,7 +122,7 @@ flowchart LR
     subgraph Server["Ferrum server"]
         API["REST · MCP · live"]
         K["Kernel<br/><small>permissions · row-level security · audit</small>"]
-        APP["CRM<br/><small>12 entities · 4 roles</small>"]
+        APP["CRM<br/><small>15 entities · 4 roles</small>"]
         OB[("Outbox")]
     end
     DB[("PostgreSQL")]
@@ -149,10 +149,12 @@ with them under the same rules as people.
 | ➕ Create menu | Contact |
 | ➕ Create menu | Quotation |
 | ➕ Create menu | Activity |
+| 🏠 Home's My work | Sales follow-ups: activities due, leads and deals to follow up |
+| 🔔 Notifications | Leads given to you; overdue activities; untouched leads; quiet deals; deals with no next step |
 
 ## Data model
 
-The main records and how they connect (12 entities in all; `packages/` has every field).
+The main records and how they connect (15 entities in all; `packages/` has every field).
 
 ```mermaid
 erDiagram
@@ -204,12 +206,12 @@ erDiagram
 | Role | What it is for | Entities |
 |---|---|---|
 | **Sales User** | Works the leads, opportunities and activities they own, and their quotations. | 14 |
-| **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 24 |
-| **Marketing Manager** | Campaigns and lead generation. | 12 |
+| **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 26 |
+| **Marketing Manager** | Campaigns and lead generation. | 13 |
 | **CRM Viewer** | Read-only access to CRM records and reports. | 11 |
 
 <details>
-<summary><b>Reports (6)</b></summary>
+<summary><b>Reports (10)</b></summary>
 
 - Sales Pipeline
 - Sales Forecast
@@ -217,6 +219,10 @@ erDiagram
 - Campaign Performance
 - Campaign Attribution (linear, first or last touch)
 - Quotation Register
+- Win Rate (by owner, source or month)
+- Sales Cycle (by owner, or days in each stage)
+- Lost Reasons (with competitors)
+- Activity by Person (by month, week or day)
 
 </details>
 
@@ -295,6 +301,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.9.0** | Leads shared out by assignment rules; reminders and My work; days in stage and last activity; call outcomes; win rate, sales cycle, lost reasons and activity reports. |
 | **0.8.0** | Duplicates by email or phone, kept or refused; conversion onto existing contacts, and undone; deals reopened, and for prospects. |
 | **0.7.0** | An approval is of a quotation's terms; the orders and invoices made from it keep what it quoted. |
 | **0.6.17** | Its reports' names in Arabic and Hindi. |

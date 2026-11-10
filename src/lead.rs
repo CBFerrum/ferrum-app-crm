@@ -2,7 +2,7 @@
 //! customer with its contact and address (or onto ones that exist already) and undoing it, and
 //! opportunities created from a lead.
 
-use crate::{check_assignee, lookup, person_name, stored};
+use crate::{assign, check_assignee, lookup, person_name, stored};
 use async_trait::async_trait;
 use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::created;
@@ -41,9 +41,10 @@ impl DocHook for LeadHook {
             set(doc, key, json!(national));
         }
         let old = stored(hc, doc).await?;
-        if old.is_none_or(|o| ["email", "phone", "mobile"].iter().any(|f| o.get(*f) != doc.get(*f))) {
+        if old.as_ref().is_none_or(|o| ["email", "phone", "mobile"].iter().any(|f| o.get(*f) != doc.get(*f))) {
             duplicates(hc, doc).await?;
         }
+        owner(hc, doc, old.as_ref()).await?;
         // Keeping a duplicate is decided save by save.
         set(doc, "allow_duplicate", false);
         Ok(())
@@ -57,7 +58,11 @@ impl DocHook for LeadHook {
     }
 
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
-        check_assignee(hc, doc, old).await
+        check_assignee(hc, doc, old).await?;
+        if old.is_none_or(|o| s(o, "assigned_to") != s(doc, "assigned_to")) {
+            assign::tell_owner(hc, doc).await?;
+        }
+        Ok(())
     }
 
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
@@ -65,9 +70,40 @@ impl DocHook for LeadHook {
             "convert_to_customer" => convert(hc, doc, params).await.map(Some),
             "undo_conversion" => undo_conversion(hc, doc).await.map(Some),
             "make_opportunity" => make_opportunity(hc, doc).await.map(Some),
+            "assign_by_rules" => assign::assign_by_rules(hc, doc).await.map(Some),
             _ => Ok(None),
         }
     }
+}
+
+/// A new lead's owner: the one chosen, else the one its assignment rules give (Assigned By Rule
+/// says which), else the person entering it, as before rules (a form's or a mail's lead, entered by
+/// the engine, its placeholder address). A lead a person enters or imports goes only to rules that
+/// take those too: who types a lead in owns it. An owner changed later is a person's choice.
+async fn owner(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result<()> {
+    if let Some(o) = old {
+        if s(o, "assigned_to") != s(doc, "assigned_to") {
+            set(doc, "assignment_rule", Value::Null);
+        }
+        return Ok(());
+    }
+    // The engine's own address is no one's choice.
+    let chosen = s(doc, "assigned_to").is_some_and(|e| !(hc.ctx.is_system && e.eq_ignore_ascii_case(&hc.ctx.email)));
+    if chosen {
+        set(doc, "assignment_rule", Value::Null);
+        return Ok(());
+    }
+    match assign::by_rules(hc, doc, !hc.ctx.is_system).await? {
+        Some((owner, rule)) => {
+            set(doc, "assigned_to", owner);
+            set(doc, "assignment_rule", rule.to_string());
+        }
+        None => {
+            set(doc, "assigned_to", hc.ctx.email.to_lowercase());
+            set(doc, "assignment_rule", Value::Null);
+        }
+    }
+    Ok(())
 }
 
 /// A phone number's national part, however it was written: its digits, leading zeros dropped (a

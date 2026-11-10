@@ -24,8 +24,8 @@ modules:
     icon: handshake
     order: 35
     items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, Address, Customer, Item, Campaign, SalesStage, Territory, LostReason, QuotationApprovalRule,
-            ProductRule, report:sales_pipeline, report:sales_forecast, report:lead_funnel, report:campaign_performance, report:campaign_attribution,
-            report:quotation_register]
+            ProductRule, LeadAssignmentRule, CrmSettings, report:sales_pipeline, report:sales_forecast, report:lead_funnel, report:campaign_performance,
+            report:campaign_attribution, report:quotation_register, report:win_rate, report:sales_cycle, report:lost_reasons, report:activity_by_person]
 
 roles:
   - name: Sales User
@@ -62,6 +62,8 @@ roles:
       - {entity: ProductRule, read: true, write: true, create: true, delete: true}
       - {entity: Territory, read: true, write: true, create: true, delete: true}
       - {entity: LostReason, read: true, write: true, create: true, delete: true}
+      - {entity: LeadAssignmentRule, read: true, write: true, create: true, delete: true}
+      - {entity: CrmSettings, read: true, write: true, create: true}
       - {entity: Customer, read: true, write: true, create: true, export: true}
       - {entity: CustomerGroup, read: true}
       - {entity: Item, read: true}
@@ -86,6 +88,7 @@ roles:
       - {entity: SalesStage, read: true}
       - {entity: Territory, read: true, write: true, create: true}
       - {entity: LostReason, read: true}
+      - {entity: LeadAssignmentRule, read: true}
       - {entity: Company, read: true}
       - {entity: Currency, read: true}
   - name: CRM Viewer
