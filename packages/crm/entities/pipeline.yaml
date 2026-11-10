@@ -23,6 +23,10 @@
     - {name: lost_reason, type: link, to: LostReason, visible_if: "doc.status == 'Lost'", required_if: "doc.status == 'Lost'"}
     - {name: assigned_to, type: email, label: Lead Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the lead. Left empty, it is yours, unless an assignment rule takes leads people enter"}
     - {name: assignment_rule, type: link, to: LeadAssignmentRule, read_only: true, no_copy: true, in_filter: true, label: Assigned By Rule}
+    - {name: sales_team, type: link, to: SalesTeam, in_filter: true, description: "Empty: its owner's first team. Its manager sees and works it"}
+    - {name: score, type: int, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "From the Lead Scoring Rules it meets and its recent calls, meetings and emails"}
+    - {name: score_why, type: text, read_only: true, no_copy: true, label: Why This Score}
+    - {name: scored_at, type: datetime, read_only: true, hidden: true, no_copy: true, description: "When its score was last worked out"}
     - {name: next_follow_up, type: date, in_list: true, in_filter: true}
     - {name: last_contacted_on, type: date, read_only: true, no_copy: true}
     - {name: last_touched_at, type: datetime, read_only: true, no_copy: true, in_filter: true, label: Last Touched, description: "When an activity on it was last logged or completed"}
@@ -58,7 +62,12 @@
     - {name: customer, type: link, to: Customer, read_only: true, no_copy: true, in_filter: true}
     - {name: contact, type: link, to: Contact, read_only: true, no_copy: true}
     - {name: converted_on, type: date, read_only: true, no_copy: true}
+    - {name: do_not_call, type: check, in_filter: true, label: Do Not Call, description: "No sales calls: a call logged to them needs a reason"}
+    - {name: call_consent_on, type: date, label: Calls Since, description: "Since when calls are allowed or refused; set when it changes"}
+    - {name: call_consent_how, type: data, description: "A web form, in person, a phone call, a request by mail or letter…", label: Calls Given or Withdrawn By}
     - {name: unsubscribed, type: check, in_filter: true, description: Do not send marketing communication}
+    - {name: email_consent_on, type: date, label: Email Since, description: "Since when marketing email is allowed or refused; set when it changes"}
+    - {name: email_consent_how, type: data, description: "A web form, in person, a phone call, a request by mail or letter…", label: Email Given or Withdrawn By}
     - {name: allow_duplicate, type: check, no_copy: true, description: "Save it although an open lead has the same email or phone; it is linked to that lead, to merge later"}
     - {name: phone_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The phone's national part, by which the same person is found"}
     - {name: mobile_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The mobile's national part, by which the same person is found"}
@@ -66,8 +75,8 @@
     - {name: conversion, type: json, read_only: true, hidden: true, no_copy: true, description: "What converting it made and changed, so that it can be undone"}
     - {name: notes, type: text}
   form:
-    - {label: Lead, fields: [first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, assignment_rule, next_follow_up, last_contacted_on, last_touched_at]}
-    - {label: Contact Details, fields: [email, phone, mobile, website, unsubscribed, allow_duplicate, duplicate_of]}
+    - {label: Lead, fields: [first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, sales_team, assignment_rule, score, score_why, next_follow_up, last_contacted_on, last_touched_at]}
+    - {label: Contact Details, fields: [email, phone, mobile, website, do_not_call, call_consent_on, call_consent_how, unsubscribed, email_consent_on, email_consent_how, allow_duplicate, duplicate_of]}
     - {label: Source and Segment, fields: [source, campaign, prospect, territory, industry, company_size, annual_revenue, company]}
     - {label: Qualification, collapsible: true, fields: [budget, is_decision_maker, need, timeline, qualified_on, qualified_by]}
     - {label: Address, collapsible: true, fields: [address_line1, address_line2, city, state, postal_code, country]}
@@ -97,7 +106,7 @@
       permission: write
       condition: "doc.status == 'New' || doc.status == 'Contacted' || doc.status == 'Qualified'"
       confirm: "Give this lead to the person its assignment rules choose?"
-  list: {columns: [number, lead_name, organization_name, status, assigned_to, next_follow_up], sort: created_at desc}
+  list: {columns: [number, lead_name, organization_name, status, assigned_to, score, next_follow_up], sort: created_at desc}
 
 - name: OpportunityItem
   label: Opportunity Item
@@ -171,6 +180,7 @@
     - {name: base_weighted_amount, type: currency, read_only: true, label: Weighted Amount (Company Currency)}
     - {name: competitors, type: table, of: OpportunityCompetitor}
     - {name: assigned_to, type: email, default_expr: "user.email", label: Opportunity Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the opportunity"}
+    - {name: sales_team, type: link, to: SalesTeam, in_filter: true, description: "Empty: its owner's first team. Its manager sees and works it"}
     - {name: next_step, type: data}
     - {name: next_follow_up, type: date, in_filter: true}
     - name: source
@@ -186,7 +196,7 @@
     - {name: no_step_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its owner was told it had no next step"}
     - {name: notes, type: text}
   form:
-    - {label: Opportunity, fields: [title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to]}
+    - {label: Opportunity, fields: [title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to, sales_team]}
     - {label: Contacts, fields: [contacts]}
     - {label: Pipeline, fields: [pipeline, sales_stage, probability, forecast_category, status, lost_reason, lost_detail, expected_close_date, next_step, next_follow_up, stage_changed_at, last_activity_at, closed_on]}
     - {label: Value, fields: [currency, conversion_rate, price_list, items, amount, weighted_amount, base_amount, base_weighted_amount]}
@@ -223,12 +233,14 @@
     - {name: status, type: select, options: [Open, Done, Cancelled], required: true, default: Open, in_list: true, in_filter: true, description: Notes are always Done}
     - {name: due_at, type: datetime, label: Due / At, in_list: true, in_filter: true}
     - {name: assigned_to, type: email, default_expr: "user.email", in_list: true, in_filter: true, description: "A user's email; the assignee can see and edit the activity"}
+    - {name: sales_team, type: link, to: SalesTeam, in_filter: true, description: "Empty: its owner's first team. Its manager sees and works it"}
     - {name: lead, type: link, to: Lead, in_filter: true}
     - {name: opportunity, type: link, to: Opportunity, in_filter: true}
     - {name: customer, type: link, to: Customer, in_filter: true}
     - {name: contact, type: link, to: Contact, in_filter: true}
     - {name: call_outcome, type: select, options: [Reached, No Answer, Left Message, Busy, Wrong Number], label: Outcome, visible_if: "doc.activity_type == 'Call'", in_filter: true}
     - {name: duration_minutes, type: int, min: 0, label: Duration (Minutes), visible_if: "doc.activity_type == 'Call' || doc.activity_type == 'Meeting'"}
+    - {name: call_reason, type: text, label: Reason for Calling, visible_if: "doc.activity_type == 'Call'", description: "Needed for a call to someone on do-not-call"}
     - {name: details, type: text}
     - {name: completed_at, type: datetime, read_only: true, no_copy: true}
     - {name: overdue_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its assignee was told it is overdue"}
@@ -240,5 +252,6 @@
       params:
         - {name: call_outcome, type: select, label: Outcome, options: [Reached, No Answer, Left Message, Busy, Wrong Number]}
         - {name: duration_minutes, type: int, label: Duration (Minutes)}
+        - {name: call_reason, type: text, label: Reason for Calling, description: "Needed for a call to someone on do-not-call"}
         - {name: next_follow_up, type: date, label: Next Follow Up, description: "On its deal, else its lead"}
   list: {columns: [subject, activity_type, status, due_at, assigned_to], sort: due_at asc}

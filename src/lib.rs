@@ -6,14 +6,18 @@
 //! orders; the orders' quantities flow back onto the quotation lines and win the opportunity behind them. Leads, opportunities, activities and quotations are also owned by the user named
 //! in `assigned_to` (`owner_fields`), so own-records permissions cover what is assigned to a rep.
 
+mod accounts;
 mod activity;
 mod assign;
+mod consent;
 mod lead;
 mod opportunity;
 mod pipeline;
 mod quotation;
 mod remind;
 mod reports;
+mod score;
+mod targets;
 
 use ferrum_domain::reports::ReportSource;
 use ferrum_domain::util::{find, id, s, sys};
@@ -32,8 +36,19 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("Activity", Arc::new(activity::ActivityHook))
         .register("SalesPipeline", Arc::new(pipeline::PipelineHook))
         .register("SalesStage", Arc::new(pipeline::StageHook))
-        .register("LeadAssignmentRule", Arc::new(assign::RuleHook));
+        .register("LeadAssignmentRule", Arc::new(assign::RuleHook))
+        .register("Territory", Arc::new(accounts::TerritoryHook))
+        .register("SalesTeam", Arc::new(accounts::SalesTeamHook))
+        .register("AccountContact", Arc::new(accounts::AccountContactHook))
+        .register("SalesTarget", Arc::new(targets::TargetHook))
+        .register("LeadScoringRule", Arc::new(score::RuleHook));
+    // On the platform's contacts, only where CRM is installed.
+    hooks.scoped(&["crm".to_string()], |h| {
+        h.register("Contact", Arc::new(accounts::ContactHook));
+    });
     hooks.add_site("crm", Arc::new(remind::CrmSite));
+    hooks.add_personal_held(Arc::new(consent::ConsentHeld));
+    hooks.add_event_sink(Arc::new(accounts::Departures));
     hooks.scoped(&[CONNECTOR_PACKAGE.to_string()], |h| {
         h.register("SalesOrder", Arc::new(quotation::SalesOrderHook)).register("SalesInvoice", Arc::new(quotation::SalesInvoiceHook));
     });
@@ -50,7 +65,8 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
 /// Periodic upkeep (every few minutes on every replica; must be idempotent and safe to run concurrently).
 pub async fn maintenance(k: &Kernel) -> Result<()> {
     quotation::expire_all(k).await?;
-    remind::remind_all(k).await
+    remind::remind_all(k).await?;
+    score::rescore_all(k).await
 }
 
 /// The notification kinds app.yaml declares (`shell.notification`), with the defaults it declares.

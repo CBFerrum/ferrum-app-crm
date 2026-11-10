@@ -1,0 +1,76 @@
+- name: AccountContact
+  label: Contact at Account
+  label_plural: Contacts at Accounts
+  kind: master
+  module: crm
+  title_field: title
+  description: "A person at a customer or a prospect: their title or role there, from when and until when. A contact can be at several; the primary customer is the contact's Customer."
+  fields:
+    - {name: contact, type: link, to: Contact, required: true, in_list: true, in_filter: true, index: true}
+    - {name: customer, type: link, to: Customer, in_list: true, in_filter: true, index: true, description: "The customer they are at; or a prospect"}
+    - {name: prospect, type: link, to: Prospect, in_list: true, in_filter: true, index: true}
+    - {name: title, type: data, label: Title or Role, in_list: true, description: "What they are there: Head of Purchasing, Consultant, Board Member"}
+    - {name: start_date, type: date, label: From, in_list: true}
+    - {name: end_date, type: date, label: Until, in_list: true, in_filter: true, description: "Empty while they are still there"}
+    - {name: is_primary, type: check, label: Primary, in_list: true, description: "Their main company: the contact's Customer. One current customer is the primary"}
+  rules:
+    - {name: one_account, check: "(doc.customer != null) != (doc.prospect != null)", message: "Choose a customer or a prospect"}
+    - {name: dates, check: "doc.end_date == null || doc.start_date == null || doc.end_date >= doc.start_date", message: "The end is before the start"}
+    - {name: primary_customer, check: "!doc.is_primary || (doc.customer != null && doc.end_date == null)", message: "Only a customer they are still at can be the primary"}
+  list: {columns: [contact, customer, prospect, title, start_date, end_date, is_primary], sort: start_date desc}
+
+- name: SalesTeamMember
+  label: Sales Team Member
+  kind: child
+  fields:
+    - {name: person, type: email, required: true, in_list: true, description: "A user's email"}
+
+- name: SalesTeam
+  label: Sales Team
+  kind: master
+  module: crm
+  title_field: team_name
+  description: "A manager and the people they lead. A person can be in more than one team; their leads, deals, quotations and activities are their first team's unless another of theirs is chosen, and the manager sees and works them."
+  fields:
+    - {name: team_name, type: data, required: true, unique: true, label: Name, in_list: true}
+    - {name: manager, type: email, required: true, in_list: true, in_filter: true, description: "A user's email: sees and works the team's leads, deals, quotations and activities"}
+    - {name: members, type: table, of: SalesTeamMember, label: Members}
+    - {name: disabled, type: check, in_list: true, in_filter: true, description: "New records no longer go to it; those already its stay"}
+  list: {columns: [team_name, manager, disabled], sort: team_name asc}
+
+- name: SalesTarget
+  label: Sales Target
+  kind: master
+  module: crm
+  title_field: title
+  company_scoped: true
+  owner_fields: [person]
+  description: "What a person or a team should win in a month, a quarter or a year: an amount in the company's currency, or a number of deals, in every pipeline or one. A team's achievement is its members'."
+  fields:
+    - {name: title, type: data, read_only: true, in_list: true}
+    - {name: target_for, type: select, options: [Person, Team], required: true, default: Person, in_filter: true, label: For}
+    - {name: person, type: email, visible_if: "doc.target_for == 'Person'", required_if: "doc.target_for == 'Person'", in_list: true, in_filter: true, description: "A user's email"}
+    - {name: sales_team, type: link, to: SalesTeam, visible_if: "doc.target_for == 'Team'", required_if: "doc.target_for == 'Team'", in_list: true, in_filter: true, label: Team}
+    - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", in_filter: true}
+    - {name: period, type: select, options: [Month, Quarter, Year], required: true, default: Month, in_list: true, in_filter: true, description: "Quarters and years follow the fiscal year"}
+    - {name: start_date, type: date, required: true, label: Starting, in_list: true, in_filter: true, description: "Any day of it: the period it falls in is taken"}
+    - {name: end_date, type: date, read_only: true, label: Ending, in_list: true}
+    - {name: measure, type: select, options: [Amount Won, Deals Won], required: true, default: Amount Won, in_list: true, in_filter: true}
+    - {name: target, type: decimal, required: true, min: "0", in_list: true, description: "An amount in the company's currency, or a number of deals"}
+    - {name: pipeline, type: link, to: SalesPipeline, in_filter: true, description: "Empty: every pipeline"}
+  list: {columns: [title, period, start_date, measure, target], sort: start_date desc}
+
+- name: LeadScoringRule
+  label: Lead Scoring Rule
+  kind: master
+  module: crm
+  title_field: description
+  description: "Points a lead earns, or loses, when one of its fields holds a value. A lead's score is the sum of the rules it meets, plus points for its recent calls, meetings and emails, which halve as they age (CRM Settings)."
+  fields:
+    - {name: description, type: data, required: true, in_list: true, description: "What it rewards, as people read it on the lead: Came from the website"}
+    - {name: field, type: data, required: true, in_list: true, description: "A field of the lead, by its name: source, industry, company_size, annual_revenue, territory, timeline, is_decision_maker…"}
+    - {name: comparison, type: select, options: [Is, Is Not, Contains, Is Set, Is Not Set, At Least, At Most], required: true, default: Is, in_list: true}
+    - {name: value, type: data, in_list: true, visible_if: "doc.comparison != 'Is Set' && doc.comparison != 'Is Not Set'", description: "As the field shows it; a number for At Least and At Most; Yes or No for a tick"}
+    - {name: points, type: int, required: true, in_list: true, description: "Negative to take points away"}
+    - {name: enabled, type: check, default: true, in_list: true, in_filter: true}
+  list: {columns: [description, field, comparison, value, points, enabled], sort: points desc}

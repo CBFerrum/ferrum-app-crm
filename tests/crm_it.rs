@@ -830,6 +830,7 @@ async fn scenario() {
     day_one(&k).await;
     assign_and_remind(&k).await;
     pipelines_and_quotes(&k).await;
+    accounts_and_teams(&k).await;
 }
 
 /// CRM in a workspace without ERP (docs/plan/apps-ui.md §13): contacts, customers and items are the
@@ -2033,4 +2034,334 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
     refused(anna.k.run_action(&anna.ctx, "Quotation", late, "mark_accepted", json!({})).await, "not available");
     let reg = maria.report("quotation_register", &[("company", cid.clone()), ("status", "Rejected".into())]).await;
     assert_eq!(reg["totals"]["count"], json!(0), "a rejected revision since replaced is cancelled");
+}
+
+/// A sales team arriving from another CRM, with its accounts and its ways: accounts with an owner, a
+/// territory and a parent; people at several companies, and moving between them; managers and
+/// territories seeing their people's records and nobody else's; targets; consent to calls and e-mail;
+/// prospects merged; leads scored. An accountant reads customers as before.
+async fn accounts_and_teams(k: &Arc<Kernel>) {
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: "accts".into(),
+            name: "Accounts".into(),
+            admin_email: "admin@accts.test".into(),
+            admin_password: PASSWORD.into(),
+            admin_name: None,
+            packages: vec!["crm".into(), "crm_erp".into()],
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": *ZONE})),
+        })
+        .await
+        .expect("tenant");
+    let session = k.login("accts", "admin@accts.test", PASSWORD).await.expect("login");
+    let admin = U { k: k.clone(), ctx: k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx") };
+    let inr = admin.one("Currency", json!({"code": "INR"})).await;
+    let usd = admin.one("Currency", json!({"code": "USD"})).await;
+    let company = admin.insert("Company", json!({"company_name": "Accounts", "abbr": "AC", "default_currency": inr["id"]})).await;
+    let cid = uid(&company).to_string();
+    let group = admin.one("ItemGroup", json!({"group_name": "Products"})).await;
+    let nos = admin.one("Uom", json!({"uom_name": "Nos"})).await;
+    let widget = uid(&admin
+        .insert("Item", json!({"item_code": "W", "item_name": "Widget", "item_group": group["id"], "stock_uom": nos["id"], "standard_rate": "100"}))
+        .await)
+    .to_string();
+    let user = |email: &'static str, roles: &'static [&'static str]| {
+        let (k, admin_ctx) = (k.clone(), admin.ctx.clone());
+        async move {
+            let roles: Vec<String> = roles.iter().map(|r| r.to_string()).collect();
+            let id = k.create_user(&admin_ctx, email, email, Some(PASSWORD), &roles, false).await.expect("user");
+            U { ctx: k.load_ctx(tenant, id, None, "it".into()).await.expect("user ctx"), k }
+        }
+    };
+    let anna = user("anna@accts.test", &["Sales User"]).await;
+    let ben = user("ben@accts.test", &["Sales User"]).await;
+    let mo = user("mo@accts.test", &["Sales User"]).await;
+    let tara = user("tara@accts.test", &["Sales User"]).await;
+    let dan = user("dan@accts.test", &["Sales User"]).await;
+    let maria = user("maria@accts.test", &["Sales Manager"]).await;
+    let acc = user("acc@accts.test", &["Accounts User"]).await;
+    let titles = |rows: &[Doc]| -> Vec<String> {
+        let mut t: Vec<String> = rows.iter().filter_map(|r| r.get("title").or(r.get("lead_name")).and_then(Value::as_str).map(str::to_string)).collect();
+        t.sort();
+        t
+    };
+
+    // ───────────── accounts: an owner, a territory and a parent, never a cycle ─────────────
+    let all = admin.one("Territory", json!({"territory_name": "All Territories"})).await;
+    let india = maria
+        .insert("Territory", json!({"territory_name": "India", "is_group": true, "parent_territory": all["id"], "people": [{"person": "Tara@accts.test"}]}))
+        .await;
+    let karnataka = maria.insert("Territory", json!({"territory_name": "Karnataka", "parent_territory": india["id"]})).await;
+    let europe = maria.insert("Territory", json!({"territory_name": "Europe", "parent_territory": all["id"]})).await;
+    let reach = |t: &Doc| t["reach"].as_array().unwrap().iter().map(|r| r["person"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!(reach(&maria.get("Territory", uid(&karnataka)).await), ["tara@accts.test"], "a territory reaches the people of those above it");
+    refused(k.update(&maria.ctx, "Territory", uid(&india), obj(json!({"parent_territory": karnataka["id"]})), None).await, "cycle in the hierarchy");
+
+    let acme = maria.insert("Customer", json!({"customer_name": "Acme Group", "account_owner": "anna@accts.test", "territory": india["id"]})).await;
+    let retail = maria.insert("Customer", json!({"customer_name": "Acme Retail", "parent_customer": acme["id"]})).await;
+    let shop = maria.insert("Customer", json!({"customer_name": "Acme Shop", "parent_customer": retail["id"]})).await;
+    refused(
+        k.update(&maria.ctx, "Customer", uid(&acme), obj(json!({"parent_customer": shop["id"]})), None).await,
+        "this would create a cycle in the hierarchy",
+    );
+    refused(k.update(&maria.ctx, "Customer", uid(&acme), obj(json!({"parent_customer": acme["id"]})), None).await, "cannot be its own parent");
+    assert_eq!(maria.one("Customer", json!({"parent_customer": acme["id"]})).await["customer_name"], json!("Acme Retail"), "a parent lists its children");
+    let holding = maria.insert("Prospect", json!({"prospect_name": "Globex Holding"})).await;
+    let globex = maria.insert("Prospect", json!({"prospect_name": "Globex Labs", "parent_prospect": holding["id"]})).await;
+    refused(k.update(&maria.ctx, "Prospect", uid(&holding), obj(json!({"parent_prospect": globex["id"]})), None).await, "cycle in the hierarchy");
+    // An accountant reads every customer, with what CRM added, as before.
+    assert_eq!(acc.list("Customer", json!({})).await.len(), admin.list("Customer", json!({})).await.len());
+    assert_eq!(acc.get("Customer", uid(&retail)).await["parent_customer"], acme["id"]);
+
+    // ───────────── converting a lead: its owner and territory for a new customer ─────────────
+    let lia = anna
+        .insert(
+            "Lead",
+            json!({"first_name": "Lia", "last_name": "Rao", "organization_name": "Lia Studio", "email": "lia@studio.test", "company": cid, "territory": karnataka["id"],
+                   "do_not_call": true, "call_consent_how": "Phone Call", "unsubscribed": true}),
+        )
+        .await;
+    assert_eq!((lia["call_consent_on"].clone(), lia["email_consent_on"].clone()), (json!(today().to_string()), json!(today().to_string())), "each side dated");
+    let made = anna.action("Lead", uid(&lia), "convert_to_customer", json!({})).await;
+    let studio = maria.get("Customer", vid(&made)).await;
+    assert_eq!((studio["account_owner"].clone(), studio["territory"].clone()), (json!("anna@accts.test"), karnataka["id"].clone()));
+    let lia_ct = maria.get("Contact", vid(&json!({"id": made["contact"]}))).await;
+    assert_eq!(
+        (lia_ct["do_not_call"].clone(), lia_ct["call_consent_how"].clone(), lia_ct["call_consent_on"].clone(), lia_ct["unsubscribed"].clone()),
+        (json!(true), json!("Phone Call"), json!(today().to_string()), json!(true)),
+        "consent goes on with the person"
+    );
+    let at = maria.one("AccountContact", json!({"contact": lia_ct["id"]})).await;
+    assert_eq!((at["customer"].clone(), at["is_primary"].clone()), (studio["id"].clone(), json!(true)));
+    let gus = ben.insert("Lead", json!({"first_name": "Gus", "organization_name": "Acme Group", "company": cid, "territory": europe["id"]})).await;
+    ben.action("Lead", uid(&gus), "convert_to_customer", json!({"customer": acme["id"]})).await;
+    let acme_now = maria.get("Customer", uid(&acme)).await;
+    assert_eq!(
+        (acme_now["account_owner"].clone(), acme_now["territory"].clone()),
+        (json!("anna@accts.test"), india["id"].clone()),
+        "an existing customer's own stay"
+    );
+
+    // ───────────── a contact at two companies, moved to a third ─────────────
+    let sam = maria.insert("Contact", json!({"first_name": "Sam", "last_name": "Lee", "designation": "CFO", "customer": acme["id"]})).await;
+    let links = |c: Value| {
+        let maria = &maria;
+        async move {
+            let mut l = maria.list("AccountContact", json!({"contact": c})).await;
+            l.sort_by_key(|r| r["customer"].as_str().map(str::to_string));
+            l
+        }
+    };
+    let first = maria.one("AccountContact", json!({"contact": sam["id"]})).await;
+    assert_eq!((first["customer"].clone(), first["title"].clone(), first["is_primary"].clone()), (acme["id"].clone(), json!("CFO"), json!(true)));
+    maria.insert("AccountContact", json!({"contact": sam["id"], "customer": retail["id"], "title": "Board Member", "start_date": "2025-01-01"})).await;
+    assert_eq!(maria.get("Contact", uid(&sam)).await["customer"], acme["id"], "the primary stays their Customer");
+    refused(k.insert(&maria.ctx, "AccountContact", obj(json!({"contact": sam["id"], "customer": retail["id"]}))).await, "Sam Lee is at Acme Retail already");
+    refused(k.insert(&maria.ctx, "AccountContact", obj(json!({"contact": sam["id"]}))).await, "Choose a customer or a prospect");
+    let initech = maria.insert("Customer", json!({"customer_name": "Initech"})).await;
+    let moved = maria.action("Contact", uid(&sam), "move_to_account", json!({"customer": initech["id"], "title": "CEO"})).await;
+    assert_eq!(moved["message"], json!(format!("Sam Lee moved to Initech on {}", today())));
+    let sam_now = maria.get("Contact", uid(&sam)).await;
+    assert_eq!((sam_now["customer"].clone(), sam_now["designation"].clone()), (initech["id"].clone(), json!("CEO")));
+    let history = links(sam["id"].clone()).await;
+    assert_eq!(history.len(), 3, "the history is kept: {history:?}");
+    let link = |c: &Doc| history.iter().find(|l| l["customer"] == c["id"]).unwrap().clone();
+    assert_eq!((link(&acme)["end_date"].clone(), link(&acme)["is_primary"].clone()), (json!(today().to_string()), json!(false)), "the old company ends");
+    assert!(link(&retail)["end_date"].is_null(), "a seat elsewhere stays");
+    assert_eq!((link(&initech)["start_date"].clone(), link(&initech)["is_primary"].clone()), (json!(today().to_string()), json!(true)));
+    assert_eq!(maria.list("AccountContact", json!({"customer": acme["id"]})).await.len(), 2, "the account lists who was there too");
+    // Their Customer changed by hand to a company they are at besides is their primary changing.
+    maria.update("Contact", uid(&sam), json!({"customer": retail["id"]})).await;
+    let history = links(sam["id"].clone()).await;
+    let primary: Vec<&Value> = history.iter().filter(|l| l["is_primary"] == json!(true)).map(|l| &l["customer"]).collect();
+    assert_eq!(primary, [&retail["id"]]);
+    assert!(history.iter().find(|l| l["customer"] == initech["id"]).unwrap()["end_date"].is_null(), "still at Initech");
+
+    // Contacts already there get a link to their customer, the primary (sql/006_account_contacts.sql), once.
+    let olga = maria.insert("Contact", json!({"first_name": "Olga", "designation": "Buyer", "customer": retail["id"]})).await;
+    sql(k, "delete from e_account_contact where contact = $1", uid(&olga)).await;
+    for _ in 0..2 {
+        let mut tx = k.db.system_tx().await.unwrap();
+        sqlx::raw_sql(include_str!("../packages/crm/sql/006_account_contacts.sql")).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+    }
+    let back = maria.one("AccountContact", json!({"contact": olga["id"]})).await;
+    assert_eq!(
+        (back["customer"].clone(), back["is_primary"].clone(), back["title"].clone(), back["start_date"].clone()),
+        (retail["id"].clone(), json!(true), json!("Buyer"), Value::Null)
+    );
+    // A contact deleted takes its links along.
+    k.delete(&maria.ctx, "Contact", uid(&olga), None).await.expect("deleted with its link");
+    assert!(maria.list("AccountContact", json!({"contact": olga["id"]})).await.is_empty());
+
+    // ───────────── sales teams and territories: whose records each sees ─────────────
+    let north = maria.insert("SalesTeam", json!({"team_name": "North", "manager": "Mo@accts.test", "members": [{"person": "anna@accts.test"}]})).await;
+    let south = maria.insert("SalesTeam", json!({"team_name": "South", "manager": "maria@accts.test", "members": [{"person": "ben@accts.test"}]})).await;
+    assert_eq!(maria.get("Lead", uid(&lia)).await["sales_team"], north["id"], "records already there join their owner's team");
+    let deal = |title: &str, extra: Value| {
+        let mut v = json!({"opportunity_from": "Customer", "customer": acme["id"], "title": title, "company": cid});
+        v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap());
+        v
+    };
+    let north_deal = anna.insert("Opportunity", deal("North deal", json!({"amount": "100"}))).await;
+    assert_eq!(north_deal["sales_team"], north["id"]);
+    let south_deal = ben.insert("Opportunity", deal("South deal", json!({"amount": "100"}))).await;
+    assert_eq!(south_deal["sales_team"], south["id"]);
+    let call = anna.insert("Activity", json!({"activity_type": "Task", "subject": "Send the deck", "opportunity": north_deal["id"]})).await;
+    let quote =
+        anna.insert("Quotation", json!({"company": cid, "party_type": "Customer", "customer": acme["id"], "items": [{"item": widget, "qty": "1"}]})).await;
+    assert_eq!((call["sales_team"].clone(), quote["sales_team"].clone()), (north["id"].clone(), north["id"].clone()));
+    // The manager: the team's deals, leads, activities and quotations, and nothing of South's.
+    assert_eq!(titles(&mo.list("Opportunity", json!({})).await), ["North deal"]);
+    assert_eq!(titles(&mo.list("Lead", json!({})).await), ["Lia Rao"]);
+    assert_eq!(mo.list("Activity", json!({})).await.len(), 1);
+    assert_eq!(mo.list("Quotation", json!({})).await.len(), 1);
+    mo.update("Opportunity", uid(&north_deal), json!({"next_step": "Call back Friday"})).await;
+    assert!(k.get(&mo.ctx, "Opportunity", uid(&south_deal), false).await.is_err(), "another team's deal");
+    assert!(k.update(&mo.ctx, "Opportunity", uid(&south_deal), obj(json!({"next_step": "x"})), None).await.is_err());
+    // A rep on another team sees their own only.
+    assert_eq!(titles(&ben.list("Opportunity", json!({})).await), ["South deal"]);
+    assert!(k.get(&ben.ctx, "Opportunity", uid(&north_deal), false).await.is_err());
+    // A territory's rep: the leads and deals in it and under it, besides their own.
+    let ka_lead = ben.insert("Lead", json!({"first_name": "Kiran", "company": cid, "territory": karnataka["id"]})).await;
+    ben.insert("Lead", json!({"first_name": "Elsa", "company": cid, "territory": europe["id"]})).await;
+    ben.insert("Opportunity", deal("Bengaluru deal", json!({"territory": karnataka["id"]}))).await;
+    assert_eq!(titles(&tara.list("Lead", json!({})).await), ["Kiran", "Lia Rao"]);
+    assert_eq!(titles(&tara.list("Opportunity", json!({})).await), ["Bengaluru deal"]);
+    tara.update("Lead", uid(&ka_lead), json!({"next_follow_up": today().to_string()})).await;
+    // Taken off the territory, she sees none of it.
+    maria.update("Territory", uid(&india), json!({"people": []})).await;
+    assert!(reach(&maria.get("Territory", uid(&karnataka)).await).is_empty(), "the territories under it follow");
+    assert!(tara.list("Lead", json!({})).await.is_empty());
+
+    // ───────────── handover: a rep who leaves hands over the customers they look after ─────────────
+    let dans = maria.insert("Customer", json!({"customer_name": "Dan's Account", "account_owner": "dan@accts.test"})).await;
+    let dans_lead = dan.insert("Lead", json!({"first_name": "Dina", "company": cid})).await;
+    k.deprovision_user(&admin.ctx, dan.ctx.user, Some(ben.ctx.user), "left").await.expect("deprovisioned");
+    while k.dispatch_outbox_once().await.unwrap() > 0 {}
+    assert_eq!(maria.get("Customer", uid(&dans)).await["account_owner"], json!("ben@accts.test"));
+    assert_eq!(maria.get("Lead", uid(&dans_lead)).await["assigned_to"], json!("ben@accts.test"));
+
+    // ───────────── targets: met and missed, in the company's currency ─────────────
+    let negotiation = admin.one("SalesStage", json!({"stage_name": "Negotiation"})).await["id"].clone();
+    for (who, title, extra) in [
+        (&anna, "Rupees", json!({"amount": "5000"})),
+        (&anna, "Dollars", json!({"amount": "100", "currency": usd["id"], "conversion_rate": "80"})),
+        (&ben, "Ben's one", json!({"amount": "10"})),
+    ] {
+        let d = who.insert("Opportunity", deal(title, extra)).await;
+        who.action("Opportunity", uid(&d), "mark_won", json!({})).await;
+    }
+    anna.insert("Opportunity", deal("Committed", json!({"amount": "3000", "sales_stage": negotiation, "expected_close_date": today().to_string()}))).await;
+    let target = |v: Value| {
+        let mut t = json!({"company": cid, "period": "Quarter", "start_date": today().to_string()});
+        t.as_object_mut().unwrap().extend(v.as_object().cloned().unwrap());
+        obj(t)
+    };
+    let annas = maria.insert("SalesTarget", json!(target(json!({"person": "Anna@accts.test", "target": "20000"})))).await;
+    assert_eq!(annas["start_date"].as_str().map(|d| d.ends_with("-01")), Some(true), "the quarter's first day");
+    maria.insert("SalesTarget", json!(target(json!({"person": "ben@accts.test", "measure": "Deals Won", "target": "1"})))).await;
+    maria.insert("SalesTarget", json!(target(json!({"target_for": "Team", "sales_team": north["id"], "target": "10000"})))).await;
+    refused(k.insert(&maria.ctx, "SalesTarget", target(json!({"person": "anna@accts.test", "period": "Month", "target": "1"}))).await, "it overlaps target");
+    maria.insert("SalesTarget", json!(target(json!({"person": "anna@accts.test", "measure": "Deals Won", "target": "5"})))).await;
+    let report = maria.report("sales_targets", &[("company", cid.clone())]).await;
+    let rows = report["rows"].as_array().unwrap().clone();
+    let row = |who: &str, measure: &str| {
+        rows.iter().find(|r| r["who"] == json!(who) && r["measure"] == json!(measure)).unwrap_or_else(|| panic!("{who} {measure}: {report}")).clone()
+    };
+    let a = row("anna@accts.test", "Amount Won");
+    assert_eq!(
+        (dec(&a["target"]), dec(&a["achieved"]), dec(&a["gap"]), dec(&a["commit"]), a["met"].clone()),
+        (n("20000"), n("13000"), n("7000"), n("3000"), json!(false)),
+        "missed: {a}"
+    );
+    let b = row("ben@accts.test", "Deals Won");
+    assert_eq!((dec(&b["achieved"]), b["met"].clone()), (n("1"), json!(true)), "met: {b}");
+    let team = row("North", "Amount Won");
+    assert_eq!((dec(&team["achieved"]), team["met"].clone()), (n("13000"), json!(true)), "a team's is its members': {team}");
+    assert_eq!(dec(&row("anna@accts.test", "Deals Won")["achieved"]), n("2"));
+    // A rep sees their own targets and their team's.
+    let mine = anna.report("sales_targets", &[("company", cid.clone())]).await;
+    assert_eq!(mine["rows"].as_array().unwrap().len(), 3, "{mine}");
+
+    // ───────────── do-not-call ─────────────
+    let lia_deal = anna
+        .insert(
+            "Opportunity",
+            json!({"opportunity_from": "Customer", "customer": studio["id"], "contact": lia_ct["id"], "company": cid, "title": "Studio renewal"}),
+        )
+        .await;
+    let logged = |reason: Option<&str>| {
+        obj(
+            json!({"activity_type": "Call", "subject": "Renewal", "opportunity": lia_deal["id"], "call_reason": reason, "due_at": chrono::Utc::now().to_rfc3339()}),
+        )
+    };
+    refused(k.insert(&anna.ctx, "Activity", logged(None)).await, "Lia Rao is on do-not-call");
+    let call = anna.insert("Activity", json!(logged(Some("She asked us to call about the renewal")))).await;
+    let pat = anna.insert("Lead", json!({"first_name": "Pat", "company": cid, "do_not_call": true})).await;
+    refused(k.insert(&anna.ctx, "Activity", obj(json!({"activity_type": "Call", "subject": "Hello", "lead": pat["id"]}))).await, "call_reason");
+    anna.insert("Activity", json!({"activity_type": "Email", "subject": "Hello", "lead": pat["id"]})).await;
+    let site = k.hooks.site("crm").expect("CRM's endpoints").clone();
+    let req = ferrum_kernel::SiteRequest {
+        tenant,
+        user: Some(anna.ctx.clone()),
+        method: "GET".into(),
+        path: "/work".into(),
+        query: Default::default(),
+        headers: Default::default(),
+        body: vec![],
+        client_ip: "203.0.113.7".into(),
+    };
+    let work: Value = serde_json::from_slice(&site.handle(k, req).await.expect("work").body).unwrap();
+    let item = work["items"].as_array().unwrap().iter().find(|i| i["url"] == json!(format!("/crm/d/{}", lia_deal["id"].as_str().unwrap()))).cloned();
+    assert!(item.as_ref().is_some_and(|i| i["subtitle"].as_str().unwrap().ends_with("Do not call")), "{work}");
+    anna.action("Activity", uid(&call), "complete", json!({"call_outcome": "Reached"})).await;
+
+    // ───────────── a prospect merged: its deals, quotations, leads and people follow ─────────────
+    let dup = maria.insert("Prospect", json!({"prospect_name": "Globex Labs Inc"})).await;
+    let pdeal = anna.insert("Opportunity", json!({"opportunity_from": "Prospect", "prospect": dup["id"], "company": cid})).await;
+    let plead = anna.insert("Lead", json!({"first_name": "Gil", "company": cid, "prospect": dup["id"]})).await;
+    let pquote =
+        anna.insert("Quotation", json!({"company": cid, "party_type": "Prospect", "prospect": dup["id"], "items": [{"item": widget, "qty": "1"}]})).await;
+    let gil = maria.insert("Contact", json!({"first_name": "Gil", "prospect": dup["id"]})).await;
+    assert_eq!(maria.one("AccountContact", json!({"contact": gil["id"]})).await["prospect"], dup["id"]);
+    k.merge_records(&maria.ctx, "Prospect", uid(&globex), uid(&dup), "The same company, entered twice").await.expect("merged");
+    assert_eq!(maria.get("Opportunity", uid(&pdeal)).await["prospect"], globex["id"]);
+    assert_eq!(maria.get("Lead", uid(&plead)).await["prospect"], globex["id"]);
+    assert_eq!(maria.get("Quotation", uid(&pquote)).await["prospect"], globex["id"]);
+    assert_eq!(maria.one("AccountContact", json!({"contact": gil["id"]})).await["prospect"], globex["id"]);
+    assert!(k.merge_records(&maria.ctx, "Contact", uid(&gil), uid(&sam), "x").await.is_err(), "contacts are the platform's, and not mergeable");
+
+    // ───────────── lead scoring ─────────────
+    maria
+        .insert("LeadScoringRule", json!({"description": "Came from the website", "field": "source", "comparison": "Is", "value": "Website", "points": 10}))
+        .await;
+    maria
+        .insert("LeadScoringRule", json!({"description": "Big company", "field": "annual_revenue", "comparison": "At Least", "value": "1000000", "points": 15}))
+        .await;
+    refused(
+        k.insert(&maria.ctx, "LeadScoringRule", obj(json!({"description": "x", "field": "nonsense", "points": 1}))).await,
+        "the lead has no field nonsense",
+    );
+    refused(
+        k.insert(&maria.ctx, "LeadScoringRule", obj(json!({"description": "x", "field": "budget", "comparison": "At Least", "value": "lots", "points": 1})))
+            .await,
+        "give a number",
+    );
+    let hot = anna.insert("Lead", json!({"first_name": "Hot", "company": cid, "source": "Website"})).await;
+    assert_eq!((hot["score"].clone(), hot["score_why"].clone()), (json!(10), json!("Came from the website +10")));
+    let intro = anna.insert("Activity", json!({"activity_type": "Call", "subject": "Intro", "lead": hot["id"], "status": "Done"})).await;
+    let hot_now = anna.get("Lead", uid(&hot)).await;
+    assert_eq!((hot_now["score"].clone(), hot_now["score_why"].clone()), (json!(20), json!("Came from the website +10; 1 recent activity +10")));
+    sql(k, "update e_activity set completed_at = now() - interval '14 days', due_at = null where id = $1", uid(&intro)).await;
+    anna.update("Activity", uid(&intro), json!({"details": "Two weeks on"})).await;
+    assert_eq!(anna.get("Lead", uid(&hot)).await["score"], json!(15), "an activity's points halve as it ages");
+    assert_eq!(titles(&anna.list("Lead", json!({"score": [">=", 15]})).await), ["Hot"]);
+
+    // ───────────── an erasure takes when and how consent was given, never the refusal ─────────────
+    k.erase_personal_data(&admin.ctx, "lia@studio.test", "Request 11").await.expect("erased");
+    let lead = admin.get("Lead", uid(&lia)).await;
+    assert!(lead["call_consent_on"].is_null() && lead["call_consent_how"].is_null() && lead["do_not_call"] == json!(true), "{lead:?}");
+    let ct = admin.get("Contact", uid(&lia_ct)).await;
+    assert!(ct["call_consent_on"].is_null() && ct["email_consent_on"].is_null() && ct["do_not_call"] == json!(true), "{ct:?}");
 }

@@ -4,7 +4,7 @@
 //! lead on to Contacted. A call keeps its outcome and duration, and completing it can set the next
 //! follow-up.
 
-use crate::{check_assignee, lookup};
+use crate::{check_assignee, lookup, stored};
 use async_trait::async_trait;
 use chrono::{DateTime, SecondsFormat, Utc};
 use ferrum_domain::util::{id, s, set, sys};
@@ -45,7 +45,12 @@ impl DocHook for ActivityHook {
         } else if s(doc, "completed_at").is_none() {
             set(doc, "completed_at", Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true));
         }
-        Ok(())
+        let old = stored(hc, doc).await?;
+        crate::accounts::follow_team(hc, doc, old.as_ref()).await
+    }
+
+    async fn validate_change(&self, hc: &mut HookCtx<'_>, old: Option<&Doc>, doc: &Doc) -> Result<()> {
+        crate::consent::check_call(hc, doc, old).await
     }
 
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
@@ -53,6 +58,13 @@ impl DocHook for ActivityHook {
         let done_now = s(doc, "status") == Some("Done") && old.is_none_or(|o| s(o, "status") != Some("Done"));
         if done_now {
             touch(hc, doc).await?;
+        }
+        // Its lead's score counts its recent activities.
+        let mut leads: Vec<_> = [id(doc, "lead"), old.and_then(|o| id(o, "lead"))].into_iter().flatten().collect();
+        leads.dedup();
+        let sctx = sys(hc.ctx);
+        for lead in leads {
+            crate::score::again(hc.kernel, &sctx, hc.tx, lead).await?;
         }
         Ok(())
     }
@@ -64,7 +76,7 @@ impl DocHook for ActivityHook {
         let aid = id(doc, "id").ok_or_else(|| Error::internal("activity without id"))?;
         let mut patch = Doc::new();
         patch.insert("status".into(), json!("Done"));
-        for f in ["call_outcome", "duration_minutes"] {
+        for f in ["call_outcome", "duration_minutes", "call_reason"] {
             if let Some(v) = params.get(f).filter(|v| !v.is_null() && v.as_str() != Some("")) {
                 patch.insert(f.into(), v.clone());
             }

@@ -5,7 +5,7 @@
   <img alt="Ferrum CRM" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.10.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.11.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -22,18 +22,20 @@ order, without leaving Ferrum. Deals move through the stages of pipelines you de
 business, renewals…), weighted by probability;
 calls, meetings and tasks hang off the record they belong to; and quotations are priced by the
 same selling engine that invoices them, so what sales promises is what accounting books.
+Accounts have owners, territories and parents, and one page that shows everything about them;
+teams and territories see their people's records, and targets say how far along each is.
 
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.10.0` |
+| 📦 Version | `0.11.0` |
 | 🧱 Platform | Ferrum `>=0.3.2, <0.4` |
 | 🔗 Requires | nothing else |
 | 🖥️ Interface | its own, at `/crm/` |
-| 🗃️ Records | 18 entities in 2 packages |
+| 🗃️ Records | 26 entities in 2 packages |
 | 👥 Roles | 4: Sales User, Sales Manager, Marketing Manager, CRM Viewer |
-| 📊 Reports | 10 |
-| 🧪 Tests | 20 Rust tests, 2 interface test files |
+| 📊 Reports | 11 |
+| 🧪 Tests | 24 Rust tests, 3 interface test files |
 
 
 ## Highlights
@@ -71,13 +73,27 @@ Priced and taxed by the selling engine. Sent, accepted or rejected with a reason
 <td width="50%" valign="top">
 
 ### 📊 Reports that answer questions
-Sales pipeline, and a forecast by owner with commit, best case and pipeline; lead funnel and conversion, campaign performance and attribution, a quotation register, win rate, sales cycle, lost reasons and activity by person.
+Sales pipeline, and a forecast by owner with commit, best case and pipeline; targets for a person or a team, met or missed, with the forecast beside them; lead funnel and conversion, campaign performance and attribution, a quotation register, win rate, sales cycle, lost reasons and activity by person.
 
 </td>
 <td width="50%" valign="top">
 
-### 🔐 Own-records permissions
-Assignees own their leads, deals and activities; managers see the team's.
+### 🔐 Teams, territories and consent
+Assignees own their leads, deals and activities; a sales team's manager sees and works the team's, and a territory's sales people those in it, nothing more. Consent to calls and e-mail kept apart, dated and with how it was given; a call to someone on do-not-call says why.
+
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+
+### 🏢 Accounts on one page
+A customer's owner, territory and parent; its people at several companies, with their titles and history when they move; its open deals, quotations, orders, invoices and what it owes, open tickets and latest activities, each where its app is installed and the person may read it.
+
+</td>
+<td width="50%" valign="top">
+
+### 🔥 Leads that rank themselves
+A score from rules a manager sets and recent activity that fades, with a sentence saying why; prospects merged like leads and customers.
 
 </td>
 </tr>
@@ -123,7 +139,7 @@ flowchart LR
     subgraph Server["Ferrum server"]
         API["REST · MCP · live"]
         K["Kernel<br/><small>permissions · row-level security · audit</small>"]
-        APP["CRM<br/><small>18 entities · 4 roles</small>"]
+        APP["CRM<br/><small>26 entities · 4 roles</small>"]
         OB[("Outbox")]
     end
     DB[("PostgreSQL")]
@@ -155,7 +171,7 @@ with them under the same rules as people.
 
 ## Data model
 
-The main records and how they connect (18 entities in all; `packages/` has every field).
+The main records and how they connect (26 entities in all; `packages/` has every field).
 
 ```mermaid
 erDiagram
@@ -192,6 +208,22 @@ erDiagram
         string campaign_name PK
         string status
     }
+    AccountContact {
+        string title
+        date start_date
+        date end_date
+        bool is_primary
+    }
+    SalesTeam {
+        string team_name PK
+        string manager
+    }
+    SalesTarget {
+        string period
+        date start_date
+        string measure
+        decimal target
+    }
     Campaign ||--o{ Lead : "campaign"
     Prospect ||--o{ Lead : "prospect"
     Territory ||--o{ Lead : "territory"
@@ -217,22 +249,31 @@ erDiagram
     Opportunity ||--o{ Quotation : "opportunity"
     Quotation ||--o| Quotation : "revision_of"
     Lead ||--o{ Lead : "duplicate_of"
+    Contact ||--o{ AccountContact : "contact"
+    Customer ||--o{ AccountContact : "customer"
+    Prospect ||--o{ AccountContact : "prospect"
+    Customer ||--o{ Customer : "parent_customer"
+    Territory ||--o{ Customer : "territory"
+    SalesTeam ||--o{ Opportunity : "sales_team"
+    SalesTeam ||--o{ SalesTarget : "sales_team"
+    SalesPipeline ||--o{ SalesTarget : "pipeline"
 ```
 
 ### Roles
 
 | Role | What it is for | Entities |
 |---|---|---|
-| **Sales User** | Works the leads, opportunities and activities they own, and their quotations. | 18 |
-| **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 28 |
-| **Marketing Manager** | Campaigns and lead generation. | 14 |
-| **CRM Viewer** | Read-only access to CRM records and reports. | 13 |
+| **Sales User** | Works the leads, opportunities and activities they own, and their quotations; a team's manager works its team's too, and a territory's sales people the leads and deals in it. | 22 |
+| **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 32 |
+| **Marketing Manager** | Campaigns and lead generation. | 16 |
+| **CRM Viewer** | Read-only access to CRM records and reports. | 16 |
 
 <details>
-<summary><b>Reports (10)</b></summary>
+<summary><b>Reports (11)</b></summary>
 
 - Sales Pipeline (one pipeline, or all)
 - Sales Forecast (by owner or month: closed, commit, best case, pipeline and weighted)
+- Sales Targets (a person's or a team's: target, achieved, gap, commit and best case)
 - Lead Funnel
 - Campaign Performance
 - Campaign Attribution (linear, first or last touch)
@@ -319,6 +360,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.11.0** | Accounts with an owner, a territory and a parent, on one page; contacts at several companies and moving between them; sales teams and territories seeing their people's records; targets; consent to calls and e-mail; prospects merged; lead scoring. |
 | **0.10.0** | Several pipelines; what a stage asks of a deal entering it; a deal's people with buying roles; deal lines priced from a price list, with units and discounts; quotations sent, accepted or rejected, and revised; a forecast by owner and category. |
 | **0.9.0** | Leads shared out by assignment rules; reminders and My work; days in stage and last activity; call outcomes; win rate, sales cycle, lost reasons and activity reports. |
 | **0.8.0** | Duplicates by email or phone, kept or refused; conversion onto existing contacts, and undone; deals reopened, and for prospects. |

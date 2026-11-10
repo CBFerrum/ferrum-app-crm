@@ -1,5 +1,48 @@
 # Changelog
 
+## 0.11.0
+
+For a sales team switching CRMs: their accounts, teams, targets and consent as they kept them.
+
+Accounts:
+- A customer has an Account Owner, a Territory and a Parent Account; a prospect a Parent Account besides its owner and territory. A parent that would put an account under itself is refused. Who may read a customer does not change: an accountant or a support agent reads every customer as before.
+- Converting a lead into a new customer gives it the lead's owner and territory; converting onto an existing customer leaves its own.
+- When someone leaves and an administrator names who takes over, the customers they looked after go to that person, with their leads, deals, quotations, activities and prospects, as before.
+
+People at several companies:
+- A contact can be at several customers and prospects (Contacts at Accounts), each with their title or role there, from and until when. One customer they are still at is the primary, and it is the contact's Customer, so everything that reads it reads it as before; setting a contact's Customer makes it their primary.
+- Moved to Another Company, on a contact, ends their link to their main company on the day given (today when none) and starts one at the new company with their title there; their Customer and designation follow, and the history stays. Changing their Customer by hand does the same, or only changes the primary where they are at both. The same person twice at the same company at once is refused.
+
+An account's page:
+- In CRM, a customer and a prospect open on their page (from CRM's Customers and Prospects, and from a deal's crumbs): its owner, territory and parent, its people now and before, the accounts under it, its open deals with their stages and worth, quotations, and where ERP is installed its orders, invoices and what it still owes, where Helpdesk is its open tickets, with the latest activities; Log a call, New deal and New quotation. Each section shows only what the person may read, and only where its app is installed. Its full form is a click away.
+
+Teams and territories:
+- A manager sets up Sales Teams (CRM's menu): a manager and members; a person can be in more than one. A lead, deal, quotation or activity is its owner's first team's (by name) unless a person chooses another of theirs; a new owner brings their team.
+- A team's manager, as a Sales User, sees and works the team's leads, deals, quotations and activities, and nothing of other teams'. A manager who should see everything keeps the Sales Manager role.
+- A territory's Sales People see and work the leads and deals in it and in the territories under it, besides their own. Taken off it, they no longer do.
+
+Targets:
+- A manager sets Sales Targets for a person or a team: a month, a quarter or a year (quarters and years follow the fiscal year, from any day of it), an amount won in the company's currency or a number of deals won, in every pipeline or one. A second target for the same people, measure and pipeline over the same days is refused, naming the first.
+- Sales Targets (a report in CRM's menu) gives each target, what was won towards it (deals won by the day they were won, in the company's currency; a team's, its members'), the gap, and the open deals expected to close in it as Commit and Best Case, as the forecast counts them. A sales user sees their own targets and their teams'.
+
+Consent:
+- A lead and a contact keep, for calls and for e-mail apart, whether they may be contacted (Do Not Call; Unsubscribed, which other apps read as before), since when (dated when it changes) and how it was given or withdrawn. Converting a lead carries it to the contact it makes; onto an existing contact, a refusal on the lead stands.
+- A call logged or planned to someone on do-not-call (its contact, its lead, or its deal's primary contact) needs its Reason for Calling. The deal's page and the account's page mark people on do-not-call and ask for the reason; My work marks such calls; the lead's and the contact's forms show it beside their phone.
+- A personal-data erasure takes when and how consent was given or withdrawn, the reason of their calls and their titles at companies; the refusal itself stays, so that they are not called or mailed again.
+
+Merging and scoring:
+- Prospects can be merged, as leads and customers can: their deals, quotations, leads and people follow the one that stays. Contacts are the platform's and are not merged from CRM yet.
+- A manager sets Lead Scoring Rules (a field of the lead, a comparison, points, negative to take some away) and, in CRM Settings, what a done call, meeting or email adds (10 points, halving every 14 days, out of the box). A lead's Score, sortable and filterable, and Why This Score are kept as it and its activities change, and every day as its activities age.
+
+For data already there:
+- Customers keep no owner, territory or parent until someone sets them.
+- Each contact with a customer gets one link to it, the primary, with their designation as their title and no start date; one with a prospect, a link to it (sql/006_account_contacts.sql).
+- Leads, deals, quotations and activities have no team until a team is made with their owner in it: they then join it.
+- Nobody is on do-not-call, and no consent has a date, until someone says so.
+- Open leads are scored by the maintenance run, a batch at a time, and again whenever a rule changes; until then they have no score.
+
+Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (101 names and 26 words each), translated by the model, to be reviewed by native speakers.
+
 ## 0.10.0
 
 For a sales team switching CRMs: their pipelines, quotations and forecast as they kept them.
