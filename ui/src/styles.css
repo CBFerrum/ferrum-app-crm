@@ -645,3 +645,7 @@
     display: inline;
   }
 }
+
+.crm-composer-foot .crm-minutes {
+  width: 6rem;
+}
