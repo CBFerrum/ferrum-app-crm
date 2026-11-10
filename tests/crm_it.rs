@@ -1387,6 +1387,9 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     // The release's backfill gives records already there the same dates.
     sql(k, "update e_opportunity set stage_changed_at = null, last_activity_at = null where id = $1", did).await;
     sql(k, "update e_lead set last_touched_at = null where id = $1", uid(&l3)).await;
+    // Overdue already when the release arrives: counted as told, so nobody is flooded.
+    let before = (chrono::Utc::now() - chrono::Duration::hours(5)).to_rfc3339();
+    let stale = anna.insert("Activity", json!({"activity_type": "Task", "subject": "From the old CRM", "lead": l3["id"], "due_at": before})).await;
     let mut tx = k.db.system_tx().await.unwrap();
     sqlx::raw_sql(include_str!("../packages/crm/sql/003_touch_dates.sql")).execute(&mut *tx).await.unwrap();
     tx.commit().await.unwrap();
@@ -1402,6 +1405,7 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     remind(k).await;
     remind(k).await;
     assert_eq!(told(k, tenant, "crm.activity_overdue", uid(&task)).await, ["anna@rem.test"]);
+    assert!(told(k, tenant, "crm.activity_overdue", uid(&stale)).await.is_empty(), "overdue before the release");
     anna.update("Activity", uid(&task), json!({"due_at": (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339()})).await;
     remind(k).await;
     anna.update("Activity", uid(&task), json!({"due_at": three_hours_ago})).await;

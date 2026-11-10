@@ -28,7 +28,7 @@ Reports, in CRM's menu:
 
 For data already there:
 - Deals get In Stage Since from the last stage change in their history (else when they were made), and deals and leads Last Activity and Last Touched from their latest done activity (sql/003_touch_dates.sql); those with none keep none, and a deal's quiet time counts from when it was made or last moved.
-- The first maintenance run after the release tells owners of what is already overdue, untouched or quiet, once each. A workspace that does not want that sets the thresholds to zero in CRM Settings before installing, or after it, to stop more.
+- What is already overdue, untouched, quiet or without a next step when the release arrives (by the default times) counts as told, so nobody is flooded on the first run; each is told when it happens again.
 - Leads already there keep their owners; rules apply to leads that arrive from now on, or through Assign by Rules. Lead Owner no longer defaults to the person entering a lead: an empty owner goes to the rules, and without one that takes it, to that person as before.
 
 Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (422 names and 82 words each), translated by the model, to be reviewed by native speakers.
