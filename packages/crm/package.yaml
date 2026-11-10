@@ -24,7 +24,8 @@ modules:
     icon: handshake
     order: 35
     items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, Address, Customer, Item, Campaign, SalesStage, Territory, LostReason, QuotationApprovalRule,
-            report:sales_pipeline, report:sales_forecast, report:lead_funnel, report:campaign_performance, report:quotation_register]
+            ProductRule, report:sales_pipeline, report:sales_forecast, report:lead_funnel, report:campaign_performance, report:campaign_attribution,
+            report:quotation_register]
 
 roles:
   - name: Sales User
@@ -37,6 +38,9 @@ roles:
       - {entity: Prospect, read: true, write: true, create: true}
       - {entity: Contact, read: true, write: true, create: true}
       - {entity: Address, read: true, write: true, create: true}
+      # As ERP's selling gives them: converting a lead makes or picks a customer, with or without ERP.
+      - {entity: Customer, read: true, write: true, create: true}
+      - {entity: CustomerGroup, read: true}
       - {entity: Campaign, read: true}
       - {entity: ProductRule, read: true}
       - {entity: SalesStage, read: true}
@@ -101,7 +105,13 @@ roles:
 
 # What a personal-data request exports and erases for a person (their email).
 personal_data:
-  - {entity: Lead, match: email, phone: phone, name: lead_name, erase: [first_name, last_name, lead_name, job_title, email, phone, mobile]}
+  - {entity: Lead, match: email, phone: phone, name: lead_name,
+     erase: [first_name, last_name, lead_name, organization_name, job_title, email, phone, mobile, address_line1, address_line2, postal_code, need, notes]}
+  # An organization's own email and phone can be a person's (a sole trader's); its name stays, as a company customer's does.
+  - {entity: Prospect, match: email, phone: phone, erase: [email, phone, notes]}
+  # What was written down about the person on their lead or contact: calls, meetings and notes.
+  - {entity: Activity, match: lead, erase: [subject, details]}
+  - {entity: Activity, match: contact, erase: [subject, details]}
 seed:
   - entity: SalesStage
     key: [stage_name]

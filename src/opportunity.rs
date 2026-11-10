@@ -1,12 +1,13 @@
-//! Opportunities: party and amounts, the sales stage ↔ status ↔ probability rules, weighted
-//! amounts in the company currency, quotations made from them, and winning (or reopening) them
-//! as their quotations are ordered (or those orders cancelled).
+//! Opportunities: party (a lead, a prospect or a customer) and amounts, the sales stage ↔ status ↔
+//! probability rules, weighted amounts in the company currency, quotations made from them, winning
+//! (or reopening) them as their quotations are ordered (or those orders cancelled), and reopening a
+//! closed one by hand.
 
 use crate::{check_assignee, lookup, lost_reason, stored};
 use async_trait::async_trait;
 use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::created;
-use ferrum_domain::util::{company, currency, d, elevated, exchange_rate, find, id, money, round, rows, s, set, sys};
+use ferrum_domain::util::{b, company, currency, d, elevated, exchange_rate, find, id, money, round, rows, s, set, sys};
 use ferrum_kernel::{Doc, DocHook, Error, Filter, HookCtx, Op, Result};
 use rust_decimal::Decimal;
 use serde_json::{Map, Value, json};
@@ -23,6 +24,10 @@ impl DocHook for OpportunityHook {
             set(doc, "title", json!(s(doc, "party_name")));
         }
         stage(hc, doc, old.as_ref()).await?;
+        if s(doc, "status") == Some("Open") {
+            let at = doc.get("sales_stage").cloned().unwrap_or(Value::Null);
+            set(doc, "open_stage", at);
+        }
         amounts(hc, doc, old.as_ref()).await?;
         let status = s(doc, "status").unwrap_or("Open").to_string();
         if status == "Open" {
@@ -46,6 +51,7 @@ impl DocHook for OpportunityHook {
         let mut patch = Doc::new();
         match name {
             "make_quotation" => return make_quotation(hc, doc).await.map(Some),
+            "reopen" => return reopen(hc, doc).await.map(Some),
             "mark_won" => {
                 patch.insert("status".into(), json!("Won"));
             }
@@ -61,13 +67,23 @@ impl DocHook for OpportunityHook {
     }
 }
 
-/// Party name, and for a lead its customer once converted (plus its prospect and source when the
-/// opportunity is created). A lost or junk lead must be reopened before new business is opened.
+/// Party name, and for a lead or a prospect its customer once it has one (plus, for a lead, its
+/// prospect and source when the opportunity is created). A lost or junk lead must be reopened
+/// before new business is opened.
 async fn party(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result<()> {
-    if s(doc, "opportunity_from") == Some("Customer") {
-        let c = lookup(hc, "Customer", id(doc, "customer")).await?;
-        set(doc, "party_name", json!(c.as_ref().and_then(|c| s(c, "customer_name"))));
-        return Ok(());
+    match s(doc, "opportunity_from") {
+        Some("Customer") => {
+            let c = lookup(hc, "Customer", id(doc, "customer")).await?;
+            set(doc, "party_name", json!(c.as_ref().and_then(|c| s(c, "customer_name"))));
+            return Ok(());
+        }
+        Some("Prospect") => {
+            let p = lookup(hc, "Prospect", id(doc, "prospect")).await?;
+            set(doc, "customer", json!(p.as_ref().and_then(|p| s(p, "customer"))));
+            set(doc, "party_name", json!(p.as_ref().and_then(|p| s(p, "prospect_name"))));
+            return Ok(());
+        }
+        _ => {}
     }
     let lead_id = id(doc, "lead");
     let Some(lead) = lookup(hc, "Lead", lead_id).await? else { return Ok(()) };
@@ -202,12 +218,16 @@ async fn amounts(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Resu
 /// items and any rates already discussed.
 async fn make_quotation(hc: &mut HookCtx<'_>, opp: &Doc) -> Result<Value> {
     let mut q = Map::new();
-    match id(opp, "customer") {
-        Some(c) => {
+    match (id(opp, "customer"), s(opp, "opportunity_from")) {
+        (Some(c), _) => {
             q.insert("party_type".into(), json!("Customer"));
             q.insert("customer".into(), json!(c.to_string()));
         }
-        None => {
+        (None, Some("Prospect")) => {
+            q.insert("party_type".into(), json!("Prospect"));
+            q.insert("prospect".into(), opp.get("prospect").cloned().unwrap_or(Value::Null));
+        }
+        (None, _) => {
             q.insert("party_type".into(), json!("Lead"));
             q.insert("lead".into(), opp.get("lead").cloned().unwrap_or(Value::Null));
         }
@@ -231,6 +251,65 @@ async fn make_quotation(hc: &mut HookCtx<'_>, opp: &Doc) -> Result<Value> {
     q.insert("items".into(), Value::Array(items));
     let quotation = create_for_user(hc, "Quotation", q).await?;
     Ok(created("Quotation", &quotation))
+}
+
+/// Opens a won, lost or closed deal again, at the stage it last held open (or the first open stage),
+/// unless a quotation of it was ordered: cancelling that order reopens it. The live close date and
+/// loss details are cleared; what they were is written on its story as a note.
+async fn reopen(hc: &mut HookCtx<'_>, opp: &Doc) -> Result<Value> {
+    let oid = id(opp, "id").ok_or_else(|| Error::internal("opportunity without id"))?;
+    let title = s(opp, "title").or(s(opp, "number")).unwrap_or_default().to_string();
+    let status = s(opp, "status").unwrap_or("Open").to_string();
+    if status == "Open" {
+        return Err(Error::invalid(format!("deal {title} is open")));
+    }
+    let ordered = find(
+        hc.kernel,
+        hc.ctx,
+        hc.tx,
+        "Quotation",
+        vec![
+            Filter::eq("opportunity", oid.to_string()),
+            Filter::eq("docstatus", 1),
+            Filter { field: "status".into(), op: Op::In, value: json!(["Ordered", "Partially Ordered"]) },
+        ],
+        None,
+        1,
+    )
+    .await?;
+    if let Some(q) = ordered.first() {
+        return Err(Error::invalid(format!(
+            "deal {title} was ordered through quotation {}; cancel its sales order to reopen the deal",
+            s(q, "number").unwrap_or_default()
+        )));
+    }
+    let last = lookup(hc, "SalesStage", id(opp, "open_stage")).await?.filter(|st| s(st, "outcome") == Some("Open") && !b(st, "disabled"));
+    let stage = match last {
+        Some(st) => Some(st),
+        None => stage_with(hc, "Open", false).await?,
+    };
+    let reason = lookup(hc, "LostReason", id(opp, "lost_reason")).await?;
+    let mut was = format!("It was {status}");
+    if let Some(on) = s(opp, "closed_on") {
+        was.push_str(&format!(" on {on}"));
+    }
+    if let Some(r) = reason.as_ref().and_then(|r| s(r, "reason")) {
+        was.push_str(&format!(": {r}"));
+    }
+    if let Some(d) = s(opp, "lost_detail") {
+        was.push_str(&format!(" ({d})"));
+    }
+    let mut patch = Doc::new();
+    patch.insert("status".into(), json!("Open"));
+    patch.insert("sales_stage".into(), json!(stage.as_ref().and_then(|st| s(st, "id"))));
+    let saved = hc.kernel.update_tx(hc.ctx, hc.tx, "Opportunity", oid, patch, None).await?;
+    let mut note = Doc::new();
+    note.insert("activity_type".into(), json!("Note"));
+    note.insert("subject".into(), json!("Reopened"));
+    note.insert("details".into(), json!(was));
+    note.insert("opportunity".into(), json!(oid.to_string()));
+    create_for_user(hc, "Activity", note).await?;
+    Ok(json!({"status": saved.get("status"), "sales_stage": saved.get("sales_stage")}))
 }
 
 /// An opportunity is won once one of its quotations is ordered, and reopens in its last open

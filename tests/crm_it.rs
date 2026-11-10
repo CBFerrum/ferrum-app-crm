@@ -421,7 +421,7 @@ async fn scenario() {
     for (entity, action, names) in [
         ("Quotation", "mark_lost", &["lost_reason", "lost_detail"][..]),
         ("Opportunity", "mark_lost", &["lost_reason", "lost_detail"]),
-        ("Lead", "convert_to_customer", &["customer", "customer_group"]),
+        ("Lead", "convert_to_customer", &["customer", "contact", "customer_group", "create_new"]),
     ] {
         assert_eq!(asks(entity, action), names, "{entity}.{action}");
     }
@@ -686,9 +686,14 @@ async fn scenario() {
     // ── duplicate leads become one, and what hung off them stays ──
     let first =
         anna.insert("Lead", json!({"first_name": "Dana", "last_name": "Twice", "email": "dana@twice.test", "mobile": "+91 98765 00001", "company": cid})).await;
-    let again = anna
-        .insert("Lead", json!({"first_name": "D.", "last_name": "Twice", "email": "dana.work@twice.test", "mobile": "+91 98765 00001", "company": cid}))
-        .await;
+    // The same mobile is the same person: refused, unless kept on purpose, and then linked to merge.
+    let twice = json!({"first_name": "D.", "last_name": "Twice", "email": "dana.work@twice.test", "mobile": "+91 98765 00001", "company": cid});
+    refused(anna.k.insert(&anna.ctx, "Lead", obj(twice.clone())).await, "already exists");
+    let mut kept = twice.clone();
+    kept["allow_duplicate"] = json!(true);
+    let again = anna.insert("Lead", kept).await;
+    assert_eq!(again["duplicate_of"], first["id"], "linked to the lead it duplicates");
+    assert_eq!(again["allow_duplicate"], json!(false), "keeping one is decided save by save");
     let groups = k.duplicates(&maria.ctx, "Lead", 50).await.unwrap();
     assert!(groups.iter().any(|g| g["ids"].as_array().is_some_and(|ids| ids.contains(&again["id"]) && ids.contains(&first["id"]))), "{groups:?}");
     let deal = anna
@@ -821,6 +826,7 @@ async fn scenario() {
     assert_eq!(anna.submit("Quotation", q).await["docstatus"], json!(1));
 
     crm_alone(&k).await;
+    day_one(&k).await;
 }
 
 /// CRM in a workspace without ERP (docs/plan/apps-ui.md §13): contacts, customers and items are the
@@ -888,4 +894,254 @@ async fn crm_alone(k: &Arc<Kernel>) {
     admin.action("Quotation", uid(&quote), "mark_lost", json!({"lost_reason": lost["id"]})).await;
     assert_eq!(admin.get("Quotation", uid(&quote)).await["status"].as_str(), Some("Lost"));
     refused(k.run_action(&admin.ctx, "Quotation", uid(&quote), "make_sales_order", json!({})).await, "not found");
+
+    // A sales rep reads customers, and converting a lead makes one, without ERP too.
+    let id = k.create_user(&admin.ctx, "sol@solo.test", "Sol Rep", Some(PASSWORD), &["Sales User".to_string()], false).await.expect("user");
+    let sol = U { ctx: k.load_ctx(tenant, id, None, "it".into()).await.expect("ctx"), k: k.clone() };
+    assert_eq!(sol.list("Customer", json!({})).await.len(), 1, "the customers in CRM's menu");
+    let lead = sol.insert("Lead", json!({"first_name": "Lia", "organization_name": "Lia Studio", "company": company["id"]})).await;
+    let made = sol.action("Lead", uid(&lead), "convert_to_customer", json!({})).await;
+    assert_eq!(sol.get("Customer", vid(&made)).await["customer_name"], json!("Lia Studio"));
+}
+
+/// A sales team's first days after switching CRMs: the same person entered again, enquiries from
+/// forms and mail, a conversion onto what exists and one taken back, a deal reopened, a prospect's
+/// deal, and what an erasure takes.
+async fn day_one(k: &Arc<Kernel>) {
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: "dayone".into(),
+            name: "Day One".into(),
+            admin_email: "admin@day.test".into(),
+            admin_password: PASSWORD.into(),
+            admin_name: None,
+            packages: vec!["crm".into(), "crm_erp".into()],
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": *ZONE})),
+        })
+        .await
+        .expect("tenant");
+    let session = k.login("dayone", "admin@day.test", PASSWORD).await.expect("login");
+    let admin = U { k: k.clone(), ctx: k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx") };
+    let inr = admin.one("Currency", json!({"code": "INR"})).await;
+    let company = admin.insert("Company", json!({"company_name": "Day One", "abbr": "DO", "default_currency": inr["id"]})).await;
+    let cid = uid(&company).to_string();
+    let group = admin.one("ItemGroup", json!({"group_name": "Products"})).await;
+    let nos = admin.one("Uom", json!({"uom_name": "Nos"})).await;
+    let widget = uid(&admin
+        .insert("Item", json!({"item_code": "W", "item_name": "Widget", "item_group": group["id"], "stock_uom": nos["id"], "standard_rate": "100"}))
+        .await)
+    .to_string();
+    let user = |email: &'static str, roles: &'static [&'static str]| {
+        let (k, admin_ctx) = (k.clone(), admin.ctx.clone());
+        async move {
+            let roles: Vec<String> = roles.iter().map(|r| r.to_string()).collect();
+            let id = k.create_user(&admin_ctx, email, email, Some(PASSWORD), &roles, false).await.expect("user");
+            U { ctx: k.load_ctx(tenant, id, None, "it".into()).await.expect("user ctx"), k }
+        }
+    };
+    let anna = user("anna@day.test", &["Sales User"]).await;
+    let maria = user("maria@day.test", &["Sales Manager"]).await;
+    let stage = |name: &'static str| {
+        let admin = &admin;
+        async move { admin.one("SalesStage", json!({"stage_name": name})).await["id"].clone() }
+    };
+    let price = admin.one("LostReason", json!({"reason": "Price"})).await["id"].clone();
+
+    // ───────────── the same person, entered again ─────────────
+    let asha = anna.insert("Lead", json!({"first_name": "Asha", "last_name": "Rao", "email": "asha@rao.test", "mobile": "+91 98450 00001"})).await;
+    // The same phone written three ways, in either field, and the email in capitals.
+    for again in [
+        json!({"first_name": "A", "phone": "+91-98450-00001"}),
+        json!({"first_name": "A", "mobile": "(+91) 9845000001"}),
+        json!({"first_name": "A", "phone": "+91 98450 000 01"}),
+        json!({"first_name": "A", "email": "Asha@Rao.TEST"}),
+    ] {
+        let r = anna.k.insert(&anna.ctx, "Lead", obj(again.clone())).await;
+        refused(r, "already exists");
+    }
+    let said = anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "A", "mobile": "98450-00001 ", "phone": "+91 98450 00001"}))).await;
+    assert!(
+        matches!(&said, Err(Error::Validation(e)) if e.iter().any(|f| f.message.contains(asha["number"].as_str().unwrap()) && f.message.contains("Asha Rao"))),
+        "names the lead: {said:?}"
+    );
+    // Blank values never match.
+    for _ in 0..2 {
+        assert!(anna.insert("Lead", json!({"first_name": "Walk-in"})).await["duplicate_of"].is_null());
+    }
+    // Two people sharing one mailbox: kept apart on purpose, linked to merge or not.
+    let ravi = anna.insert("Lead", json!({"first_name": "Ravi", "last_name": "Rao", "email": "asha@rao.test", "allow_duplicate": true})).await;
+    assert_eq!((ravi["duplicate_of"].clone(), ravi["allow_duplicate"].clone()), (asha["id"].clone(), json!(false)));
+    // Editing a lead that others match leaves it be.
+    anna.update("Lead", uid(&asha), json!({"next_follow_up": today().to_string()})).await;
+    // A lost lead returning is a new enquiry.
+    let old = anna.insert("Lead", json!({"first_name": "Omar", "email": "omar@old.test"})).await;
+    anna.update("Lead", uid(&old), json!({"status": "Lost", "lost_reason": price})).await;
+    let back = anna.insert("Lead", json!({"first_name": "Omar", "email": "omar@old.test"})).await;
+    assert_eq!((back["status"].clone(), back["duplicate_of"].clone()), (json!("New"), old["id"].clone()), "saved, linked to the lost one");
+    // An enquiry from a form or a mail (the engine's context) is never dropped.
+    let engine = Ctx::system(tenant, admin.ctx.schema.clone());
+    let form =
+        k.insert(&engine, "Lead", obj(json!({"first_name": "Asha", "email": "asha@rao.test", "company": cid, "source": "Website"}))).await.expect("kept");
+    assert_eq!(form["duplicate_of"], asha["id"], "linked to the open lead it repeats");
+    // A double submit still makes one lead.
+    let twin = json!({"first_name": "Tia", "email": "tia@twin.test"});
+    let (a, b) = tokio::join!(anna.k.insert(&anna.ctx, "Lead", obj(twin.clone())), anna.k.insert(&anna.ctx, "Lead", obj(twin.clone())));
+    assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(), 1, "{a:?} {b:?}");
+    assert_eq!(anna.list("Lead", json!({"email": "tia@twin.test"})).await.len(), 1);
+
+    // ───────────── converting onto what exists ─────────────
+    let rao = admin.insert("Customer", json!({"customer_name": "Rao Works"})).await;
+    let card = admin.insert("Contact", json!({"first_name": "Asha", "last_name": "Rao", "customer": rao["id"], "emails": [{"email": "asha@rao.test"}]})).await;
+    let deal = vid(&anna.action("Lead", uid(&asha), "make_opportunity", json!({})).await);
+    anna.update("Lead", uid(&asha), json!({"need": "Faster delivery", "notes": "Met at the expo; wants 50 units"})).await;
+    let r = anna.k.run_action(&anna.ctx, "Lead", uid(&asha), "convert_to_customer", json!({})).await;
+    refused(r, "contact Asha Rao already has");
+    let done = anna.action("Lead", uid(&asha), "convert_to_customer", json!({"contact": card["id"]})).await;
+    assert_eq!((done["id"].clone(), done["contact"].clone()), (rao["id"].clone(), card["id"].clone()), "the contact's customer, and the contact itself");
+    assert_eq!(admin.list("Contact", json!({"customer": rao["id"]})).await.len(), 1, "no second contact");
+    assert_eq!(anna.get("Opportunity", deal).await["customer"], rao["id"]);
+    let notes = anna.list("Activity", json!({"opportunity": deal.to_string(), "activity_type": "Note"})).await;
+    let note = notes.iter().find(|n| n["subject"].as_str().is_some_and(|s| s.starts_with("Notes from lead"))).expect("the lead's notes on the deal's story");
+    assert!(note["details"].as_str().is_some_and(|d| d.contains("Need: Faster delivery") && d.contains("wants 50 units")), "{note:?}");
+    assert_eq!(note["customer"], rao["id"]);
+    // Refused on a customer with the same phone, then allowed when asked to make a new one.
+    admin.insert("Customer", json!({"customer_name": "Chen Old", "phone": "+65 6123 4567"})).await;
+    let chen = anna.insert("Lead", json!({"first_name": "Mei", "last_name": "Chen", "organization_name": "Chen New", "phone": "+65-6123-4567"})).await;
+    refused(anna.k.run_action(&anna.ctx, "Lead", uid(&chen), "convert_to_customer", json!({})).await, "Create New Anyway");
+    let made = anna.action("Lead", uid(&chen), "convert_to_customer", json!({"create_new": true})).await;
+    assert_eq!(anna.get("Customer", vid(&made)).await["customer_name"], json!("Chen New"));
+
+    // ───────────── undoing a conversion ─────────────
+    let eve = anna
+        .insert("Lead", json!({"first_name": "Eve", "organization_name": "Eve Labs", "email": "eve@labs.test", "address_line1": "1 Lab Road", "city": "Pune", "notes": "Call after 5"}))
+        .await;
+    let eve_deal = vid(&anna.action("Lead", uid(&eve), "make_opportunity", json!({})).await);
+    let eve_call = anna.insert("Activity", json!({"activity_type": "Call", "subject": "Intro", "lead": eve["id"]})).await;
+    let made = anna.action("Lead", uid(&eve), "convert_to_customer", json!({})).await;
+    let eve_co = vid(&made);
+    // Another lead converted onto that customer stands in the way, until it is undone itself.
+    let gus = anna.insert("Lead", json!({"first_name": "Gus", "email": "gus@labs.test"})).await;
+    let joined = anna.action("Lead", uid(&gus), "convert_to_customer", json!({"customer": eve_co.to_string()})).await;
+    let r = anna.k.run_action(&anna.ctx, "Lead", uid(&eve), "undo_conversion", json!({})).await;
+    assert!(matches!(&r, Err(Error::Invalid(m)) if m.contains("the customer Eve Labs") && m.contains("Gus") && m.contains("nothing was undone")), "{r:?}");
+    assert_eq!(anna.get("Lead", uid(&eve)).await["status"], json!("Converted"), "nothing was undone");
+    // The customer existed before Gus's conversion: it stays, and the contact made for him goes.
+    anna.action("Lead", uid(&gus), "undo_conversion", json!({})).await;
+    let gus_now = anna.get("Lead", uid(&gus)).await;
+    assert_eq!((gus_now["status"].clone(), gus_now["customer"].clone()), (json!("New"), Value::Null));
+    refused(admin.k.get(&admin.ctx, "Contact", vid(&json!({"id": joined["contact"]})), false).await, "not found");
+    admin.get("Customer", eve_co).await;
+    refused(anna.k.run_action(&anna.ctx, "Lead", uid(&gus), "undo_conversion", json!({})).await, "not available");
+    // Eve's undone whole: her deal, call and status back, and what was made for her gone.
+    let undone = anna.action("Lead", uid(&eve), "undo_conversion", json!({})).await;
+    assert_eq!(undone["removed"].as_array().map(Vec::len), Some(4), "note, address, contact, customer: {undone}");
+    let eve_now = anna.get("Lead", uid(&eve)).await;
+    assert_eq!((eve_now["status"].clone(), eve_now["customer"].clone(), eve_now["contact"].clone()), (json!("Qualified"), Value::Null, Value::Null));
+    assert!(anna.get("Opportunity", eve_deal).await["customer"].is_null() && anna.get("Activity", uid(&eve_call)).await["customer"].is_null());
+    for (entity, rid) in [("Customer", made["id"].clone()), ("Contact", made["contact"].clone()), ("Address", made["address"].clone())] {
+        refused(admin.k.get(&admin.ctx, entity, vid(&json!({"id": rid})), false).await, "not found");
+    }
+    assert_eq!(admin.list("Activity", json!({"lead": eve["id"], "activity_type": "Note"})).await.len(), 0, "the note it wrote goes too");
+    refused(anna.k.run_action(&anna.ctx, "Lead", uid(&eve), "undo_conversion", json!({})).await, "not available");
+    // Converted again, and ordered: undoing waits for the order to go.
+    let again = anna.action("Lead", uid(&eve), "convert_to_customer", json!({})).await;
+    anna.update("Opportunity", eve_deal, json!({"items": [{"item": widget, "qty": "2", "rate": "100"}]})).await;
+    let q = vid(&anna.action("Opportunity", eve_deal, "make_quotation", json!({})).await);
+    anna.submit("Quotation", q).await;
+    let order = vid(&anna.action("Quotation", q, "make_sales_order", json!({})).await);
+    anna.submit("SalesOrder", order).await;
+    refused(anna.k.run_action(&anna.ctx, "Lead", uid(&eve), "undo_conversion", json!({})).await, "cancel its sales orders");
+    // Its deal is won by the order, and reopening it waits for the order too.
+    assert_eq!(anna.get("Opportunity", eve_deal).await["status"], json!("Won"));
+    refused(anna.k.run_action(&anna.ctx, "Opportunity", eve_deal, "reopen", json!({})).await, "cancel its sales order");
+    anna.cancel("SalesOrder", order).await;
+    assert_eq!(anna.get("Opportunity", eve_deal).await["status"], json!("Open"), "cancelling the order reopens it");
+    refused(anna.k.run_action(&anna.ctx, "Lead", uid(&eve), "undo_conversion", json!({})).await, "sales order");
+    admin.get("Customer", vid(&again)).await;
+    // A lead converted before 0.8.0 kept no record of what was made: its records come back, the customer stays.
+    let fay = anna.insert("Lead", json!({"first_name": "Fay", "email": "fay@old.test"})).await;
+    let fays = anna.action("Lead", uid(&fay), "convert_to_customer", json!({})).await;
+    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+    sqlx::query("update e_lead set conversion = null where tenant_id = $1 and id = $2").bind(tenant).bind(uid(&fay)).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    anna.action("Lead", uid(&fay), "undo_conversion", json!({})).await;
+    assert_eq!(anna.get("Lead", uid(&fay)).await["status"], json!("Qualified"));
+    admin.get("Customer", vid(&fays)).await;
+
+    // ───────────── reopening a closed deal ─────────────
+    let won = uid(&anna
+        .insert("Opportunity", json!({"opportunity_from": "Lead", "lead": back["id"], "sales_stage": stage("Proposal").await, "amount": "500"}))
+        .await);
+    refused(anna.k.run_action(&anna.ctx, "Opportunity", won, "reopen", json!({})).await, "not available");
+    anna.action("Opportunity", won, "mark_won", json!({})).await;
+    anna.action("Opportunity", won, "reopen", json!({})).await;
+    let opp = anna.get("Opportunity", won).await;
+    assert_eq!((opp["status"].clone(), opp["sales_stage"].clone(), opp["closed_on"].clone()), (json!("Open"), stage("Proposal").await, Value::Null));
+    assert_eq!(dec(&opp["probability"]), n("60"), "the stage's probability again");
+    anna.update("Opportunity", won, json!({"sales_stage": stage("Negotiation").await})).await;
+    anna.action("Opportunity", won, "mark_lost", json!({"lost_reason": "Price", "lost_detail": "Went local"})).await;
+    anna.action("Opportunity", won, "reopen", json!({})).await;
+    let opp = anna.get("Opportunity", won).await;
+    assert_eq!((opp["sales_stage"].clone(), opp["lost_reason"].clone(), opp["lost_detail"].clone()), (stage("Negotiation").await, Value::Null, Value::Null));
+    let story = anna.list("Activity", json!({"opportunity": won.to_string(), "subject": "Reopened"})).await;
+    assert_eq!(story.len(), 2);
+    assert!(
+        story.iter().any(|a| a["details"].as_str().is_some_and(|d| d.contains("It was Lost") && d.contains("Price") && d.contains("Went local"))),
+        "{story:?}"
+    );
+
+    // A deal open before this release reopens where it stood: the release's backfill.
+    let older = uid(&anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": back["id"], "sales_stage": stage("Proposal").await})).await);
+    let mut tx = k.db.system_tx().await.unwrap();
+    sqlx::query("update e_opportunity set open_stage = null where id = $1").bind(older).execute(&mut *tx).await.unwrap();
+    sqlx::raw_sql(include_str!("../packages/crm/sql/001_open_stage.sql")).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    anna.action("Opportunity", older, "mark_won", json!({})).await;
+    anna.action("Opportunity", older, "reopen", json!({})).await;
+    assert_eq!(anna.get("Opportunity", older).await["sales_stage"], stage("Proposal").await);
+
+    // ───────────── a prospect's deal ─────────────
+    let initech = maria.insert("Prospect", json!({"prospect_name": "Initech Labs"})).await;
+    let pdeal = maria.insert("Opportunity", json!({"opportunity_from": "Prospect", "prospect": initech["id"], "amount": "900"})).await;
+    assert_eq!((pdeal["party_name"].clone(), pdeal["customer"].clone()), (json!("Initech Labs"), Value::Null), "a prospect with no leads");
+    refused(maria.k.insert(&maria.ctx, "Opportunity", obj(json!({"opportunity_from": "Prospect"}))).await, "prospect");
+    maria.update("Opportunity", uid(&pdeal), json!({"items": [{"item": widget, "qty": "9", "rate": "100"}]})).await;
+    let pq = vid(&maria.action("Opportunity", uid(&pdeal), "make_quotation", json!({})).await);
+    let quote = maria.get("Quotation", pq).await;
+    assert_eq!(
+        (quote["party_type"].clone(), quote["prospect"].clone(), quote["party_name"].clone()),
+        (json!("Prospect"), initech["id"].clone(), json!("Initech Labs"))
+    );
+    maria.submit("Quotation", pq).await;
+    refused(maria.k.run_action(&maria.ctx, "Quotation", pq, "make_sales_order", json!({})).await, "not a customer yet");
+    let pat = maria.insert("Lead", json!({"first_name": "Pat", "prospect": initech["id"]})).await;
+    let became = maria.action("Lead", uid(&pat), "convert_to_customer", json!({})).await;
+    assert_eq!(maria.get("Prospect", uid(&initech)).await["customer"], became["id"]);
+    assert_eq!(maria.get("Opportunity", uid(&pdeal)).await["customer"], became["id"], "its deal moves to the customer");
+    assert_eq!(maria.get("Quotation", pq).await["customer"], became["id"], "so does its quotation");
+    let so = vid(&maria.action("Quotation", pq, "make_sales_order", json!({})).await);
+    assert_eq!(maria.get("SalesOrder", so).await["customer"], became["id"]);
+
+    // ───────────── what an erasure takes ─────────────
+    let kim = anna
+        .insert(
+            "Lead",
+            json!({"first_name": "Kim", "organization_name": "Kim Consulting", "email": "kim@private.test", "address_line1": "4 Quiet Lane", "postal_code": "411001",
+                   "city": "Pune", "need": "A new website", "notes": "Her husband is the other director"}),
+        )
+        .await;
+    let met =
+        anna.insert("Activity", json!({"activity_type": "Meeting", "subject": "Lunch with Kim", "details": "Talked about her move", "lead": kim["id"]})).await;
+    let solo = maria
+        .insert("Prospect", json!({"prospect_name": "Kim Consulting", "email": "kim@private.test", "phone": "+91 99999 00000", "notes": "Sole trader"}))
+        .await;
+    k.erase_personal_data(&admin.ctx, "kim@private.test", "Request 9").await.expect("erased");
+    let kim = admin.get("Lead", uid(&kim)).await;
+    for f in ["organization_name", "address_line1", "postal_code", "need", "notes", "email"] {
+        assert!(kim[f].is_null(), "Lead.{f}: {kim:?}");
+    }
+    let met = admin.get("Activity", uid(&met)).await;
+    assert!(met["subject"].as_str().is_some_and(|s| s.starts_with("Erased ")) && met["details"].is_null(), "{met:?}");
+    let solo = admin.get("Prospect", uid(&solo)).await;
+    assert!(solo["email"].is_null() && solo["phone"].is_null() && solo["notes"].is_null() && solo["prospect_name"] == json!("Kim Consulting"), "{solo:?}");
 }

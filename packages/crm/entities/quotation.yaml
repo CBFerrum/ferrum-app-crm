@@ -30,9 +30,10 @@
   owner_fields: [assigned_to]
   fields:
     - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", in_filter: true}
-    - {name: party_type, type: select, options: [Customer, Lead], required: true, default: Customer, label: Quotation To, in_filter: true}
-    - {name: customer, type: link, to: Customer, required_if: "doc.party_type == 'Customer'", in_filter: true, description: "For a lead: set once the lead is converted"}
+    - {name: party_type, type: select, options: [Customer, Lead, Prospect], required: true, default: Customer, label: Quotation To, in_filter: true}
+    - {name: customer, type: link, to: Customer, required_if: "doc.party_type == 'Customer'", in_filter: true, description: "For a lead or a prospect: set once it becomes a customer"}
     - {name: lead, type: link, to: Lead, visible_if: "doc.party_type == 'Lead'", required_if: "doc.party_type == 'Lead'", in_filter: true}
+    - {name: prospect, type: link, to: Prospect, visible_if: "doc.party_type == 'Prospect'", required_if: "doc.party_type == 'Prospect'", in_filter: true}
     - {name: party_name, type: data, read_only: true, in_list: true}
     - {name: contact, type: link, to: Contact}
     - {name: opportunity, type: link, to: Opportunity, in_filter: true}
@@ -69,7 +70,7 @@
     - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
        description: "What was approved: the party, each line as quoted, the additional discount, taxes, currency, terms and validity. Any of them changed, it is approved again"}
   form:
-    - {label: Quotation, fields: [company, party_type, customer, lead, party_name, contact, opportunity, posting_date, valid_till, assigned_to]}
+    - {label: Quotation, fields: [company, party_type, customer, lead, prospect, party_name, contact, opportunity, posting_date, valid_till, assigned_to]}
     - {label: Currency and Price List, collapsible: true, fields: [currency, conversion_rate, price_list]}
     - {label: Items, fields: [items]}
     - {label: Taxes, fields: [tax_template, taxes, discount_percent]}
