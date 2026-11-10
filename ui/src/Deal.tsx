@@ -51,10 +51,12 @@ const outcomes = (): [string, string][] => [
   ["Wrong Number", t("Wrong Number")],
 ];
 
-/** Writes down what happened, or what is to happen, on the deal. */
-function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
+/** Writes down what happened, or what is to happen, on the deal. A call to a primary contact on
+ *  do-not-call says why it is made. */
+function Composer({ deal, onSaved, doNotCall }: { deal: Doc; onSaved: () => void; doNotCall: boolean }) {
   const [kind, setKind] = useState<Log>("Note");
   const [text, setText] = useState("");
+  const [reason, setReason] = useState("");
   const [due, setDue] = useState("");
   const [outcome, setOutcome] = useState("");
   const [minutes, setMinutes] = useState("");
@@ -77,10 +79,12 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
         details: rest.join("\n").trim() || null,
         opportunity: deal.id,
         due_at: kind === "Task" && due ? new Date(due).toISOString() : kind === "Call" ? new Date().toISOString() : null,
+        call_reason: kind === "Call" && doNotCall ? reason.trim() || null : null,
       });
       // A call being logged has happened: its outcome, length and the next follow-up go with it.
       if (kind === "Call") await api.post(docPath("Activity", made.id, "actions", "complete"), completion(outcome, minutes, next));
       setText("");
+      setReason("");
       setDue("");
       setOutcome("");
       setMinutes("");
@@ -138,10 +142,13 @@ function Composer({ deal, onSaved }: { deal: Doc; onSaved: () => void }) {
             </select>
             <input className="input crm-minutes" type="number" min={0} inputMode="numeric" aria-label={t("Minutes")} placeholder={t("Minutes")} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
             <input className="input" type="date" aria-label={t("Next follow-up")} title={t("Next follow-up")} value={next} onChange={(e) => setNext(e.target.value)} />
+            {doNotCall && (
+              <input className="input" required aria-label={t("Reason for calling")} placeholder={t("On do-not-call: the reason for calling")} value={reason} onChange={(e) => setReason(e.target.value)} />
+            )}
           </>
         )}
         <span className="spacer" />
-        <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!text.trim()}>
+        <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!text.trim() || (kind === "Call" && doNotCall && !reason.trim())}>
           {t("Save")}
         </Button>
       </div>
@@ -193,13 +200,18 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
     enabled: contactIds.length > 0,
     queryFn: async () => {
       const [contacts, roles] = await Promise.all([
-        api.get<{ rows: { id: string; full_name?: string | null; email?: string | null }[] }>("/api/v1/Contact", { filters: JSON.stringify({ id: ["in", contactIds] }), fields: "full_name,email", limit: 100 }),
+        api.get<{ rows: { id: string; full_name?: string | null; email?: string | null; do_not_call?: boolean | null }[] }>("/api/v1/Contact", {
+          filters: JSON.stringify({ id: ["in", contactIds] }),
+          fields: "full_name,email,do_not_call",
+          limit: 100,
+        }),
         roleIds.length
           ? api.get<{ rows: { id: string; role_name: string }[] }>("/api/v1/BuyingRole", { filters: JSON.stringify({ id: ["in", roleIds] }), fields: "role_name", limit: 100 })
           : Promise.resolve({ rows: [] as { id: string; role_name: string }[] }),
       ]);
       return {
         names: Object.fromEntries(contacts.rows.map((c) => [c.id, c.full_name || c.email || ""])),
+        refused: new Set(contacts.rows.filter((c) => c.do_not_call).map((c) => c.id)),
         roles: Object.fromEntries(roles.rows.map((r) => [r.id, r.role_name])),
       };
     },
@@ -267,6 +279,9 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
   const inStage = isOpen ? daysSince(doc.stage_changed_at as string | null) : null;
   const lastDone = daysSince(doc.last_activity_at as string | null);
   const writable = can(meta.permissions, "write");
+  // Its account's page: the customer's, else the prospect's.
+  const account = doc.customer ? `/e/Customer/${doc.customer}` : doc.prospect ? `/e/Prospect/${doc.prospect}` : null;
+  const refused = who.data?.refused ?? new Set<string>();
   const done = async (activity: string) => {
     try {
       await api.post(docPath("Activity", activity, "actions", "complete"), {});
@@ -307,6 +322,12 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
       <div className="crumbs">
         <Link to="/">{t("Pipeline")}</Link>
         <Icon name="chevronRight" size={12} />
+        {account && (
+          <>
+            <Link to={account}>{isolate(String(doc.party_name ?? ""))}</Link>
+            <Icon name="chevronRight" size={12} />
+          </>
+        )}
       </div>
       <header className="crm-deal-head">
         <div className="crm-deal-title">
@@ -356,7 +377,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
             <CollabPanel entity="Opportunity" id={id} canWrite={writable} />
           ) : (
             <>
-              {writable && <Composer deal={doc} onSaved={refresh} />}
+              {writable && <Composer deal={doc} onSaved={refresh} doNotCall={!!doc.contact && refused.has(doc.contact as string)} />}
               {story.error ? (
                 <ErrorState error={story.error} onRetry={() => void story.refetch()} />
               ) : !told ? (
@@ -398,6 +419,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
                     <Link to={`/e/Contact/${p.id}`}>{isolate(p.name || t("Contact"))}</Link>
                     {p.role && <span className="faint"> · {isolate(p.role)}</span>}
                     {p.primary && <Badge tone="blue">{t("Primary")}</Badge>}
+                    {refused.has(p.id) && <Badge tone="red">{t("Do not call")}</Badge>}
                   </li>
                 ))}
               </ul>

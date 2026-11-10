@@ -208,6 +208,36 @@ async fn mine(k: &Kernel, user: &Ctx, entity: &str, filters: Vec<Filter>, fields
     }
 }
 
+/// The calls among `activities` to someone on do-not-call (its contact, else its lead, else its
+/// deal's primary contact), by id, as far as the caller may read them.
+async fn not_to_call(k: &Kernel, user: &Ctx, activities: &[Doc]) -> Result<Vec<String>> {
+    let calls: Vec<&Doc> = activities.iter().filter(|a| s(a, "activity_type") == Some("Call")).collect();
+    if calls.is_empty() {
+        return Ok(vec![]);
+    }
+    let ids = |f: &str| -> Vec<String> { calls.iter().filter_map(|a| s(a, f).map(str::to_string)).collect() };
+    let deals = mine(k, user, "Opportunity", vec![Filter { field: "id".into(), op: Op::In, value: json!(ids("opportunity")) }], "contact").await?;
+    let mut contacts = ids("contact");
+    contacts.extend(deals.iter().filter_map(|d| s(d, "contact").map(str::to_string)));
+    let refused = |entity: &'static str, list: Vec<String>| async move {
+        if list.is_empty() {
+            return Ok::<Vec<String>, Error>(vec![]);
+        }
+        let found = mine(k, user, entity, vec![Filter { field: "id".into(), op: Op::In, value: json!(list) }, Filter::eq("do_not_call", true)], "id").await?;
+        Ok(found.iter().filter_map(|r| s(r, "id").map(str::to_string)).collect())
+    };
+    let (contacts, leads) = (refused("Contact", contacts).await?, refused("Lead", ids("lead")).await?);
+    let deal_contact = |o: &str| deals.iter().find(|d| s(d, "id") == Some(o)).and_then(|d| s(d, "contact"));
+    Ok(calls
+        .iter()
+        .filter(|a| {
+            let theirs = s(a, "contact").or_else(|| s(a, "lead").is_none().then(|| s(a, "opportunity").and_then(deal_contact)).flatten());
+            theirs.is_some_and(|c| contacts.iter().any(|x| x == c)) || (s(a, "contact").is_none() && s(a, "lead").is_some_and(|l| leads.iter().any(|x| x == l)))
+        })
+        .filter_map(|a| s(a, "id").map(str::to_string))
+        .collect())
+}
+
 /// The caller's open activities due by the end of their day, and their open leads and deals whose
 /// follow-up is due, each linking to its record (an activity to its deal or lead).
 async fn work(k: &Kernel, user: &Ctx) -> Result<Value> {
@@ -225,9 +255,10 @@ async fn work(k: &Kernel, user: &Ctx) -> Result<Value> {
         user,
         "Activity",
         vec![Filter::eq("assigned_to", me.clone()), Filter::eq("status", "Open"), Filter { field: "due_at".into(), op: Op::Lt, value: json!(end) }],
-        "subject,activity_type,due_at,opportunity,lead",
+        "subject,activity_type,due_at,opportunity,lead,contact",
     )
     .await?;
+    let not_to_call = not_to_call(k, user, &activities).await?;
     for a in &activities {
         let at = s(a, "due_at").and_then(|t| parse_datetime(t).ok());
         let due = at.map(|t| t.with_timezone(&offset).date_naive());
@@ -238,7 +269,11 @@ async fn work(k: &Kernel, user: &Ctx) -> Result<Value> {
         };
         let about = ["opportunity", "lead"].iter().find_map(|f| a.get("_titles").and_then(|t| t.get(*f)).and_then(Value::as_str));
         let kind = s(a, "activity_type").unwrap_or("Activity");
-        items.push(json!({"title": s(a, "subject").unwrap_or(kind), "subtitle": about.map_or(kind.to_string(), |w| format!("{kind} · {w}")),
+        let mut subtitle = about.map_or(kind.to_string(), |w| format!("{kind} · {w}"));
+        if a.get("id").and_then(Value::as_str).is_some_and(|i| not_to_call.iter().any(|n| n == i)) {
+            subtitle.push_str(" · Do not call");
+        }
+        items.push(json!({"title": s(a, "subject").unwrap_or(kind), "subtitle": subtitle,
             "url": url, "due": due.map(|d| d.to_string()), "priority": if at.is_some_and(|t| t < Utc::now()) { Some("High") } else { None }}));
     }
     let follow = |extra: Vec<Filter>| {

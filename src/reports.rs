@@ -30,6 +30,8 @@ impl ReportSource for CrmReports {
             json!({"name": "sales_forecast", "label": "Sales Forecast", "module": "crm", "entity": "Opportunity", "params": [
                 param_def("company"), param_def("from_date"), param_def("to_date"), pipeline(), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"},
                 {"name": "group_by", "label": "Group By", "type": "select", "options": ["Owner", "Month"], "default": "Owner"}]}),
+            json!({"name": "sales_targets", "label": "Sales Targets", "module": "crm", "entity": "SalesTarget", "params": [
+                param_def("company"), date("from_date", "Targets From"), date("to_date", "Targets To"), pipeline()]}),
             json!({"name": "lead_funnel", "label": "Lead Funnel and Conversion", "module": "crm", "entity": "Lead", "params": [
                 param_def("company"), param_def("from_date"), param_def("to_date"),
                 {"name": "group_by", "label": "Group By", "type": "select", "options": ["Source", "Campaign", "Territory", "Lead Owner"], "default": "Source"}]}),
@@ -62,6 +64,7 @@ impl ReportSource for CrmReports {
         let mut out = match name {
             "sales_pipeline" => pipeline(k, ctx, &mut tx, &co, &p).await?,
             "sales_forecast" => forecast(k, ctx, &mut tx, &co, &p).await?,
+            "sales_targets" => crate::targets::report(k, ctx, &mut tx, &co, &p).await?,
             "lead_funnel" => funnel(k, ctx, &mut tx, &co, &p).await?,
             "campaign_performance" => campaigns(k, ctx, &mut tx, &co, &p).await?,
             "campaign_attribution" => attribution(k, ctx, &mut tx, &co, &p).await?,
@@ -82,7 +85,7 @@ impl ReportSource for CrmReports {
 }
 
 /// Restricts `alias` to the rows of `entity` the caller may read (owner and company scopes).
-fn scope(k: &Kernel, ctx: &Ctx, entity: &str, qb: &mut QueryBuilder<Postgres>, alias: &str) -> Result<()> {
+pub(crate) fn scope(k: &Kernel, ctx: &Ctx, entity: &str, qb: &mut QueryBuilder<Postgres>, alias: &str) -> Result<()> {
     let ent = k.entity(ctx, entity)?;
     row_scope(ctx, &ent, Action::Read)?.push_sql(qb, alias);
     Ok(())
@@ -108,7 +111,7 @@ fn next_day(d: NaiveDate) -> NaiveDate {
 
 /// What a deal counts as in the forecast: Closed once won; while open, the category a person set on
 /// it, else its stage's, else Pipeline (SQL over the deal `o` and its stage `s`).
-const CATEGORY: &str = "case when o.status = 'Won' then 'Closed' else coalesce(o.forecast_category, s.forecast_category, 'Pipeline') end";
+pub(crate) const CATEGORY: &str = "case when o.status = 'Won' then 'Closed' else coalesce(o.forecast_category, s.forecast_category, 'Pipeline') end";
 
 /// The forecast of a period, by owner (or by month): what was won in it (Closed, by the day it was
 /// won), and the open deals expected to close in it by forecast category (Commit, Best Case,
@@ -926,7 +929,7 @@ mod tests {
     #[test]
     fn catalog_names_entities_and_params() {
         let c = CrmReports.catalog();
-        assert_eq!(c.len(), 10);
+        assert_eq!(c.len(), 11);
         assert!(c.iter().all(|r| r["entity"].is_string() && r["params"].as_array().is_some_and(|p| p.iter().any(|x| x["name"] == "company"))));
     }
 }

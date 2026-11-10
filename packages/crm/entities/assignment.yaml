@@ -35,12 +35,16 @@
   label: CRM Settings
   kind: settings
   module: crm
-  description: "When CRM reminds people of their work. Zero switches a reminder off; each person can also switch each kind off in their notification settings."
+  description: "When CRM reminds people of their work (zero switches a reminder off; each person can also switch each kind off in their notification settings), and what a lead's recent activity adds to its score."
   fields:
     - {name: overdue_activity_hours, type: int, default: 1, min: 0, max: 720, label: Overdue Activity After (Hours), description: "Tell an activity's assignee once it is this many hours past due"}
     - {name: untouched_lead_hours, type: int, default: 24, min: 0, max: 8760, label: Untouched New Lead After (Hours), description: "Tell a new lead's owner when nothing has been logged or planned on it this many hours after it arrived"}
     - {name: quiet_deal_days, type: int, default: 14, min: 0, max: 3650, label: Quiet Deal After (Days), description: "Tell an open deal's owner when no activity was logged and its stage did not move for this many days"}
     - {name: no_next_step_days, type: int, default: 1, min: 0, max: 3650, label: Deal Without Next Step After (Days),
        description: "Tell an open deal's owner when it has no open activity, next step or follow-up date, and nothing moved on it for this many days"}
+    - {name: activity_points, type: int, default: 10, min: 0, max: 1000, label: Points for a Recent Activity,
+       description: "What a done call, meeting or email adds to its lead's score the day it happens; zero leaves activities out of scores"}
+    - {name: activity_half_life_days, type: int, default: 14, min: 1, max: 3650, label: Activity Points Halve Every (Days)}
   form:
     - {label: Reminders, fields: [overdue_activity_hours, untouched_lead_hours, quiet_deal_days, no_next_step_days]}
+    - {label: Lead Scoring, fields: [activity_points, activity_half_life_days]}

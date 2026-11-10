@@ -76,6 +76,8 @@ pub struct QuotationHook;
 #[async_trait]
 impl DocHook for QuotationHook {
     async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
+        let old = crate::stored(hc, doc).await?;
+        crate::accounts::follow_team(hc, doc, old.as_ref()).await?;
         // A lead's (or a prospect's) quotation follows it to its customer once it becomes one.
         match s(doc, "party_type") {
             Some("Lead") => {
