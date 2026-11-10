@@ -401,6 +401,11 @@ impl DocHook for ContactHook {
         Ok(())
     }
 
+    /// A contact deleted takes its links along (they would hold it back otherwise).
+    async fn before_delete(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
+        unlink(hc, id(doc, "id"), None).await
+    }
+
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
         if name != "move_to_account" {
             return Ok(None);
