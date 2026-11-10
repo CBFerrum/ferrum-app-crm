@@ -1,6 +1,6 @@
 id: crm
 name: CRM
-version: 0.8.0
+version: 0.9.0
 publisher: cbferrum
 summary: Leads, opportunities and pipeline, contacts, campaigns, activities and quotations
 description: README.md
@@ -38,6 +38,17 @@ contributes:
     - {id: contact, label: Contact, path: crm/e/Contact/new, entity: Contact}
     - {id: quotation, label: Quotation, path: crm/e/Quotation/new, entity: Quotation}
     - {id: activity, label: Activity, path: crm/e/Activity/new, entity: Activity}
+  # Home's My work: the person's activities due or overdue, and leads and deals to follow up.
+  shell.work:
+    - {id: work, title: Sales follow-ups, endpoint: /api/app/crm/work}
+  # The kinds of notification CRM sends ({app}.{id}, as src/ sends them, with these defaults); each
+  # person chooses how each reaches them, or switches it off. When reminders come is CRM Settings'.
+  shell.notification:
+    - {id: assigned, label: Leads given to you, default: [inapp, email]}
+    - {id: activity_overdue, label: Your activities that are overdue, default: [inapp]}
+    - {id: lead_untouched, label: Your new leads nobody has touched, default: [inapp]}
+    - {id: deal_quiet, label: Your deals with nothing done lately, default: [inapp]}
+    - {id: deal_no_step, label: Your deals with no next step, default: [inapp]}
   # What the assistant should know in CRM's pages, and what it suggests asking there.
   shell.assistant:
     - id: crm
@@ -45,9 +56,10 @@ contributes:
       instructions: >-
         A Lead is New, Contacted, Qualified, Converted, Lost or Junk; converted, it becomes a customer (Undo
         Conversion gives it back), and a lead with an open lead's email or phone is refused unless Allow Duplicate
-        is ticked (it is then linked as Duplicate Of). A deal or quotation is for a Lead, a Prospect or a Customer. An Opportunity is Open until Won, Lost or Closed (Reopen opens it again), and its stage (SalesStage) and amount make the
+        is ticked (it is then linked as Duplicate Of). A lead arriving with no owner is given one by the first Lead Assignment Rule that
+        takes it (Assigned By Rule says which); Last Touched is when an activity on it was last logged or completed. A deal or quotation is for a Lead, a Prospect or a Customer. An Opportunity is Open until Won, Lost or Closed (Reopen opens it again), and its stage (SalesStage) and amount make the
         pipeline, in the opportunity's currency. A Quotation counts once submitted and becomes an ERP Sales Order when
-        ordered. An Activity (Open, Done, Cancelled) is a call, meeting or task with its due time.
+        ordered. A deal's In Stage Since and Last Activity say how long it stood and when something was last done. An Activity (Open, Done, Cancelled) is a call, meeting or task with its due time; a call keeps its Outcome and Duration.
       suggestions:
         - "What does the pipeline look like by stage?"
         - "Which opportunities close this month?"
