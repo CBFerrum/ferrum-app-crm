@@ -241,6 +241,13 @@ export function Board() {
               {tr("Mine")}
             </button>
           </div>
+          {/* Closed deals leave the board; their lists open them, to reopen one. */}
+          <Link className="btn btn-default btn-md" to="e/Opportunity?f.status=Won">
+            {tr("Won deals")}
+          </Link>
+          <Link className="btn btn-default btn-md" to="e/Opportunity?f.status=Lost">
+            {tr("Lost deals")}
+          </Link>
           <input className="input crm-search" type="search" placeholder={tr("Find a deal…")} aria-label={tr("Find a deal")} value={search} onChange={(e) => setSearch(e.target.value)} />
           <Link className="btn btn-primary btn-md" to="e/Opportunity/new">
             <Icon name="plus" />
