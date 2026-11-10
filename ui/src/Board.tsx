@@ -2,7 +2,8 @@
 // and a drag to move one on. A move shows at once and goes back with the reason if the server
 // refuses it; the server works out status, probability and weighted amounts, so the card is redrawn
 // from what it answers. Won and Lost appear as places to drop while a card is held. Touch screens
-// and keyboards get the same moves from each card's menu.
+// and keyboards get the same moves from each card's menu. A workspace with several pipelines sees
+// one at a time, the one last chosen on this device.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type DragEvent, useCallback, useMemo, useState } from "react";
@@ -13,11 +14,12 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { useMe } from "@ferrum/records";
 import { LostDialog } from "./Lost";
 import { Tabs } from "./Tabs";
-import { attention, type Column, type Deal, initials, isOpenStage, matches, money, overview, pipeline, type Stage, today } from "./pipeline";
+import { attention, choosePipeline, type Column, type Deal, initials, isOpenStage, matches, money, ofPipeline, overview, type Pipeline, pipeline, type Stage, today } from "./pipeline";
 
 const rows = <T,>(entity: string, query: Record<string, string | number>) => api.get<{ rows: T[] }>(`/api/v1/${entity}`, query).then((r) => r.rows);
 
 interface Data {
+  pipelines: Pipeline[];
   stages: Stage[];
   deals: Deal[];
 }
@@ -25,15 +27,33 @@ interface Data {
 const KEY = ["crm", "pipeline"];
 
 async function load(): Promise<Data> {
-  const [stages, deals] = await Promise.all([
-    rows<Stage>("SalesStage", { filters: JSON.stringify({ disabled: false }), fields: "stage_name,stage_order,probability,outcome", limit: 100 }),
+  const [pipelines, stages, deals] = await Promise.all([
+    rows<Pipeline>("SalesPipeline", { filters: JSON.stringify({ disabled: false }), fields: "pipeline_name,is_default", limit: 100 }),
+    rows<Stage>("SalesStage", { filters: JSON.stringify({ disabled: false }), fields: "stage_name,stage_order,probability,outcome,pipeline", limit: 500 }),
     rows<Deal>("Opportunity", {
       filters: JSON.stringify({ status: "Open" }),
-      fields: "title,party_name,sales_stage,base_amount,base_weighted_amount,expected_close_date,assigned_to,next_step,next_follow_up,probability,version",
+      fields: "title,party_name,sales_stage,pipeline,base_amount,base_weighted_amount,expected_close_date,assigned_to,next_step,next_follow_up,probability,version",
       limit: 500,
     }),
   ]);
-  return { stages, deals };
+  return { pipelines, stages, deals };
+}
+
+/** The pipeline last shown on this device. */
+const REMEMBER = "crm.pipeline";
+function remembered(): string | null {
+  try {
+    return localStorage.getItem(REMEMBER);
+  } catch {
+    return null;
+  }
+}
+function remember(id: string) {
+  try {
+    localStorage.setItem(REMEMBER, id);
+  } catch {
+    // A browser that keeps nothing shows the default next time.
+  }
 }
 
 function Card({ deal, stages, day, held, onHold, onMove, onWon, onLost }: {
@@ -157,14 +177,22 @@ export function Board() {
   const [search, setSearch] = useState("");
   const [held, setHeld] = useState<string | null>(null);
   const [losing, setLosing] = useState<Deal | null>(null);
+  const [wanted, setWanted] = useState<string | null>(remembered);
   const q = useQuery({ queryKey: KEY, queryFn: load });
   useLiveEntity("Opportunity", useCallback(() => void qc.invalidateQueries({ queryKey: KEY }), [qc]));
 
-  const stages = useMemo(() => (q.data?.stages ?? []).filter(isOpenStage).sort((a, b) => Number(a.stage_order ?? 0) - Number(b.stage_order ?? 0)), [q.data]);
+  const pipelines = q.data?.pipelines ?? [];
+  const chosen = choosePipeline(pipelines, wanted);
+  const view = useMemo(() => ofPipeline(q.data?.stages ?? [], q.data?.deals ?? [], chosen, choosePipeline(q.data?.pipelines ?? [], null)), [q.data, chosen]);
+  const stages = useMemo(() => view.stages.filter(isOpenStage).sort((a, b) => Number(a.stage_order ?? 0) - Number(b.stage_order ?? 0)), [view]);
   const columns = useMemo(() => {
-    const shown = (q.data?.deals ?? []).filter((d) => matches(d, search) && (!mine || d.assigned_to?.toLowerCase() === me?.user.email.toLowerCase()));
-    return pipeline(q.data?.stages ?? [], shown);
-  }, [q.data, search, mine, me]);
+    const shown = view.deals.filter((d) => matches(d, search) && (!mine || d.assigned_to?.toLowerCase() === me?.user.email.toLowerCase()));
+    return pipeline(view.stages, shown);
+  }, [view, search, mine, me]);
+  const choose = (id: string) => {
+    setWanted(id);
+    remember(id);
+  };
   const total = overview(columns);
   const day = today();
   const patchDeal = (id: string, change: Partial<Deal>) => qc.setQueryData<Data>(KEY, (d) => d && { ...d, deals: d.deals.map((x) => (x.id === id ? { ...x, ...change } : x)) });
@@ -216,7 +244,7 @@ export function Board() {
       <Link to="e/SalesStage">{tr("Set up your stages")}</Link>
     </EmptyState>
   ) : (
-    <div className="crm-board" role="group" aria-label={tr("Pipeline by sales stage")}>
+    <div className="crm-board" role="group" aria-label={chosen ? tr("{pipeline_name} by sales stage", { pipeline_name: chosen.pipeline_name }) : tr("Pipeline by sales stage")}>
       {columns.map((c) => (
         <StageColumn key={c.stage?.id ?? "none"} column={c} stages={stages} day={day} held={held} onHold={setHeld} onMove={(d, t) => void move(d, t)} onWon={(d) => void won(d)} onLost={setLosing} onDrop={onDrop} />
       ))}
@@ -233,6 +261,17 @@ export function Board() {
           </p>
         </div>
         <div className="crm-tools">
+          {pipelines.length > 1 && chosen && (
+            <select className="input crm-pipeline" aria-label={tr("Pipeline")} value={chosen.id} onChange={(e) => choose(e.target.value)}>
+              {[...pipelines]
+                .sort((a, b) => a.pipeline_name.localeCompare(b.pipeline_name))
+                .map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {isolate(p.pipeline_name)}
+                  </option>
+                ))}
+            </select>
+          )}
           <div className="segmented" role="group" aria-label={tr("Whose deals")}>
             <button type="button" aria-pressed={!mine} onClick={() => setSp({}, { replace: true })}>
               {tr("Everyone")}
@@ -249,7 +288,7 @@ export function Board() {
             {tr("Lost deals")}
           </Link>
           <input className="input crm-search" type="search" placeholder={tr("Find a deal…")} aria-label={tr("Find a deal")} value={search} onChange={(e) => setSearch(e.target.value)} />
-          <Link className="btn btn-primary btn-md" to="e/Opportunity/new">
+          <Link className="btn btn-primary btn-md" to={chosen ? `e/Opportunity/new?pipeline=${chosen.id}` : "e/Opportunity/new"}>
             <Icon name="plus" />
             {tr("New deal")}
           </Link>

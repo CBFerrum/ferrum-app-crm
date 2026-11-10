@@ -1,16 +1,59 @@
+- name: SalesPipeline
+  label: Pipeline
+  label_plural: Pipelines
+  kind: master
+  module: crm
+  title_field: pipeline_name
+  description: "A sales process with its own stages, such as New Business or Renewals. A deal is in one pipeline; one pipeline is the default."
+  fields:
+    - {name: pipeline_name, type: data, required: true, unique: true, label: Name, in_list: true}
+    - {name: is_default, type: check, label: Default, in_list: true, description: "Where a deal goes when no pipeline is chosen; making one the default makes it the only one"}
+    - {name: disabled, type: check, in_list: true, in_filter: true, description: "No deal can be put in it; refused while open deals stand in it"}
+    - {name: description, type: text}
+  list: {columns: [pipeline_name, is_default, disabled], sort: pipeline_name asc}
+
 - name: SalesStage
   label: Sales Stage
   kind: master
   module: crm
   title_field: stage_name
-  description: Steps of the sales pipeline with the win probability opportunities default to.
+  description: Steps of a pipeline with the win probability its deals default to, and what a deal must have before it enters one.
   fields:
-    - {name: stage_name, type: data, required: true, unique: true, in_list: true}
+    - {name: pipeline, type: link, to: SalesPipeline, required: true, in_list: true, in_filter: true, description: "The pipeline it is a step of; empty, the default one"}
+    - {name: stage_name, type: data, required: true, in_list: true, description: "Unique within its pipeline"}
     - {name: probability, type: percent, required: true, default: 0, min: "0", max: "100", in_list: true, description: Default win probability of opportunities in this stage}
     - {name: stage_order, type: int, required: true, default: 0, label: Order, in_list: true}
     - {name: outcome, type: select, options: [Open, Won, Lost], required: true, default: Open, in_list: true, in_filter: true, description: Won and Lost stages close the opportunity}
-    - {name: disabled, type: check, in_filter: true}
-  list: {columns: [stage_name, probability, stage_order, outcome], sort: stage_order asc}
+    - name: forecast_category
+      type: select
+      options: [Pipeline, Best Case, Commit, Omitted]
+      default: Pipeline
+      visible_if: "doc.outcome == 'Open'"
+      description: "Where its open deals count in the forecast unless a deal says otherwise (empty: Pipeline); won deals count as Closed"
+    - {name: requires_amount, type: check, label: An Amount, visible_if: "doc.outcome != 'Lost'",
+       description: "What a deal moved forward into this stage must have; moving it back or losing it is never held up"}
+    - {name: requires_close_date, type: check, label: An Expected Close Date, visible_if: "doc.outcome != 'Lost'"}
+    - {name: requires_primary_contact, type: check, label: A Primary Contact, visible_if: "doc.outcome != 'Lost'"}
+    - {name: requires_next_step, type: check, label: A Next Step, visible_if: "doc.outcome != 'Lost'"}
+    - {name: requires_lines, type: check, label: At Least One Line, visible_if: "doc.outcome != 'Lost'"}
+    - {name: requires_quotation, type: check, label: A Submitted Quotation, visible_if: "doc.outcome != 'Lost'"}
+    - {name: disabled, type: check, in_filter: true, description: "Refused while open deals stand in it"}
+  unique: [[pipeline, stage_name]]
+  form:
+    - {label: Stage, fields: [pipeline, stage_name, probability, stage_order, outcome, forecast_category, disabled]}
+    - {label: Before a Deal Enters It, visible_if: "doc.outcome != 'Lost'", fields: [requires_amount, requires_close_date, requires_primary_contact, requires_next_step, requires_lines, requires_quotation]}
+  list: {columns: [stage_name, pipeline, probability, stage_order, outcome], sort: stage_order asc}
+
+- name: BuyingRole
+  label: Buying Role
+  kind: master
+  module: crm
+  title_field: role_name
+  description: "What a person does in a deal's decision: decides, influences, uses it, pays or signs."
+  fields:
+    - {name: role_name, type: data, required: true, unique: true, label: Role, in_list: true}
+    - {name: description, type: text}
+  list: {sort: role_name asc}
 
 - name: LostReason
   label: Lost Reason

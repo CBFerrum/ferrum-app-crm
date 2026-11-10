@@ -1,16 +1,19 @@
-//! Opportunities: party (a lead, a prospect or a customer) and amounts, the sales stage ↔ status ↔
-//! probability rules, weighted amounts in the company currency, quotations made from them, winning
-//! (or reopening) them as their quotations are ordered (or those orders cancelled), and reopening a
-//! closed one by hand.
+//! Opportunities: party (a lead, a prospect or a customer) and amounts, the pipeline ↔ sales stage ↔
+//! status ↔ probability rules, what a stage asks of a deal entering it, its contacts and their buying
+//! roles, lines priced from its price list, weighted amounts in the company currency, quotations made
+//! from them, winning (or reopening) them as their quotations are ordered (or those orders
+//! cancelled), and reopening a closed one by hand.
 
+use crate::pipeline::{default_pipeline, stage_with};
 use crate::{check_assignee, lookup, lost_reason, stored};
 use async_trait::async_trait;
 use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::created;
 use ferrum_domain::util::{b, company, currency, d, elevated, exchange_rate, find, id, money, round, rows, s, set, sys};
-use ferrum_kernel::{Doc, DocHook, Error, Filter, HookCtx, Op, Result};
+use ferrum_kernel::{Doc, DocHook, Error, FieldError, Filter, HookCtx, Op, Result};
 use rust_decimal::Decimal;
 use serde_json::{Map, Value, json};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub struct OpportunityHook;
@@ -23,6 +26,7 @@ impl DocHook for OpportunityHook {
         if s(doc, "title").is_none() {
             set(doc, "title", json!(s(doc, "party_name")));
         }
+        contacts(doc, old.as_ref())?;
         stage(hc, doc, old.as_ref()).await?;
         // Since when it stands where it stands.
         if old.as_ref().is_none_or(|o| o.get("sales_stage") != doc.get("sales_stage")) || s(doc, "stage_changed_at").is_none() {
@@ -44,6 +48,11 @@ impl DocHook for OpportunityHook {
             set(doc, "lost_detail", Value::Null);
         }
         Ok(())
+    }
+
+    /// On saving only: a form's live preview is not refused while a person fills in what a stage asks.
+    async fn validate_change(&self, hc: &mut HookCtx<'_>, old: Option<&Doc>, doc: &Doc) -> Result<()> {
+        requirements(hc, doc, old).await
     }
 
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
@@ -109,35 +118,107 @@ async fn party(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result
     Ok(())
 }
 
-/// The first (or last) enabled sales stage with this outcome.
-pub(crate) async fn stage_with(hc: &mut HookCtx<'_>, outcome: &str, last: bool) -> Result<Option<Doc>> {
-    let sort = if last { "stage_order desc" } else { "stage_order asc" };
-    let found = find(hc.kernel, hc.ctx, hc.tx, "SalesStage", vec![Filter::eq("outcome", outcome), Filter::eq("disabled", false)], Some(sort), 1).await?;
-    Ok(found.into_iter().next())
-}
-
 fn outcome(stage: &Option<Doc>) -> String {
     stage.as_ref().and_then(|x| s(x, "outcome")).unwrap_or("Open").to_string()
 }
 
-/// Keeps stage, status and probability consistent: choosing a Won/Lost stage closes the
-/// opportunity, closing it moves it to the matching stage, an open opportunity needs an open
-/// stage, and a new stage brings its default probability unless the user set one in the same edit.
+/// One contact is the primary, and it is the deal's `contact`, so that what reads the deal's contact
+/// (its quotations, the reports) reads the primary. A contact set on the deal itself (by a person,
+/// an import or the API) joins its contacts as the primary; otherwise the row marked primary, else
+/// the first, is.
+fn contacts(doc: &mut Doc, old: Option<&Doc>) -> Result<()> {
+    let mut list = rows(doc, "contacts");
+    let contact = id(doc, "contact");
+    for (i, r) in list.iter().enumerate() {
+        if list[..i].iter().any(|o| id(o, "contact").is_some() && id(o, "contact") == id(r, "contact")) {
+            return Err(Error::Validation(vec![FieldError::new("contact", "this contact is on the deal already").in_row("contacts", i)]));
+        }
+    }
+    let marked: Vec<usize> = (0..list.len()).filter(|&i| b(&list[i], "is_primary")).collect();
+    let set_here = contact.is_some() && old.is_none_or(|o| id(o, "contact") != contact);
+    let primary = if set_here {
+        match list.iter().position(|r| id(r, "contact") == contact) {
+            Some(i) => Some(i),
+            None => {
+                let mut row = Doc::new();
+                row.insert("id".into(), json!(Uuid::now_v7().to_string()));
+                row.insert("contact".into(), json!(contact.map(|c| c.to_string())));
+                list.push(row);
+                Some(list.len() - 1)
+            }
+        }
+    } else if marked.len() > 1 {
+        return Err(Error::Validation(vec![FieldError::new("is_primary", "one contact is the primary").in_row("contacts", marked[1])]));
+    } else if list.is_empty() {
+        // A deal from before contacts had roles: its contact becomes the first of them.
+        contact.map(|c| {
+            let mut row = Doc::new();
+            row.insert("id".into(), json!(Uuid::now_v7().to_string()));
+            row.insert("contact".into(), json!(c.to_string()));
+            list.push(row);
+            0
+        })
+    } else {
+        Some(marked.first().copied().unwrap_or(0))
+    };
+    for (i, r) in list.iter_mut().enumerate() {
+        set(r, "is_primary", Some(i) == primary);
+    }
+    let now = primary.and_then(|i| id(&list[i], "contact"));
+    set(doc, "contact", json!(now.map(|c| c.to_string())));
+    set(doc, "contacts", Value::Array(list.into_iter().map(Value::Object).collect()));
+    Ok(())
+}
+
+/// Keeps pipeline, stage, status and probability consistent. A deal is in one pipeline (empty: its
+/// stage's, else the default one) and its stage is one of that pipeline's: another pipeline chosen
+/// alone puts it at that pipeline's first open stage (or its won or lost stage, for a closed deal);
+/// another pipeline's stage chosen alone takes the deal there. Choosing a Won/Lost stage closes the
+/// opportunity, closing it moves it to its pipeline's matching stage, an open opportunity needs an
+/// open stage, and a new stage brings its default probability unless the user set one in the same
+/// edit.
 async fn stage(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result<()> {
     let mut status = s(doc, "status").unwrap_or("Open").to_string();
     let stage_id = id(doc, "sales_stage");
     let mut stage = lookup(hc, "SalesStage", stage_id).await?;
     let stage_changed = old.is_none_or(|o| id(o, "sales_stage") != stage_id);
     let status_changed = old.is_none_or(|o| s(o, "status") != Some(&status));
+    let chosen = id(doc, "pipeline");
+    let pipeline_changed = old.is_some_and(|o| id(o, "pipeline") != chosen);
+    let of_stage = stage.as_ref().and_then(|x| id(x, "pipeline"));
+    let pipeline = match (chosen, of_stage) {
+        (None, Some(p)) => Some(p),
+        (None, None) => default_pipeline(hc).await?,
+        (Some(p), Some(q)) if p != q => {
+            if pipeline_changed && !stage_changed {
+                stage = None;
+                Some(p)
+            } else if stage_changed && !pipeline_changed && old.is_some() {
+                Some(q)
+            } else {
+                let pl = lookup(hc, "SalesPipeline", Some(p)).await?;
+                let (st, pn) =
+                    (stage.as_ref().and_then(|x| s(x, "stage_name")).unwrap_or_default(), pl.as_ref().and_then(|x| s(x, "pipeline_name")).unwrap_or_default());
+                return Err(Error::field("sales_stage", format!("{st} is not a stage of pipeline {pn}")));
+            }
+        }
+        (Some(p), _) => Some(p),
+    };
+    if old.is_none_or(|o| id(o, "pipeline") != pipeline)
+        && let Some(pl) = lookup(hc, "SalesPipeline", pipeline).await?
+        && b(&pl, "disabled")
+    {
+        return Err(Error::field("pipeline", format!("pipeline {} is disabled", s(&pl, "pipeline_name").unwrap_or_default())));
+    }
     let closing = status == "Won" || status == "Lost";
     if stage.is_none() {
-        stage = stage_with(hc, if closing { &status } else { "Open" }, false).await?;
+        stage = stage_with(hc, pipeline, if closing { &status } else { "Open" }, false).await?;
     } else if stage_changed && outcome(&stage) != "Open" {
         status = outcome(&stage);
     } else if status_changed
         && closing
         && outcome(&stage) != status
-        && let Some(st) = stage_with(hc, &status, false).await?
+        && let Some(st) = stage_with(hc, pipeline, &status, false).await?
     {
         stage = Some(st);
     }
@@ -163,6 +244,7 @@ async fn stage(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result
         }
     };
     set(doc, "sales_stage", json!(new_stage.map(|u| u.to_string())));
+    set(doc, "pipeline", json!(pipeline.map(|u| u.to_string())));
     set(doc, "status", json!(status));
     if let Some(p) = probability {
         set(doc, "probability", money(p));
@@ -170,13 +252,189 @@ async fn stage(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result
     Ok(())
 }
 
+/// What a stage asks of a deal entering it: refused, naming what is missing, when a deal moves
+/// forward into it (or is made in it) without them. Moving back in its pipeline, losing it, reopening
+/// it and what the engine does (an order winning it) are never held up.
+async fn requirements(hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
+    if hc.ctx.is_system {
+        return Ok(());
+    }
+    let was = old.and_then(|o| id(o, "sales_stage"));
+    if was == id(doc, "sales_stage") {
+        return Ok(());
+    }
+    let Some(new) = lookup(hc, "SalesStage", id(doc, "sales_stage")).await? else { return Ok(()) };
+    if s(&new, "outcome") == Some("Lost") {
+        return Ok(());
+    }
+    if let Some(o) = old {
+        if s(o, "status").is_some_and(|st| st != "Open") {
+            return Ok(());
+        }
+        if let Some(before) = lookup(hc, "SalesStage", was).await?
+            && (s(&before, "outcome").is_some_and(|x| x != "Open")
+                || (id(&before, "pipeline") == id(&new, "pipeline") && d(&new, "stage_order") < d(&before, "stage_order")))
+        {
+            return Ok(());
+        }
+    }
+    let mut missing = Vec::new();
+    if b(&new, "requires_amount") && d(doc, "amount") <= Decimal::ZERO {
+        missing.push("an amount");
+    }
+    if b(&new, "requires_close_date") && s(doc, "expected_close_date").is_none() {
+        missing.push("an expected close date");
+    }
+    if b(&new, "requires_primary_contact") && id(doc, "contact").is_none() {
+        missing.push("a primary contact");
+    }
+    if b(&new, "requires_next_step") && s(doc, "next_step").is_none_or(|n| n.trim().is_empty()) {
+        missing.push("a next step");
+    }
+    if b(&new, "requires_lines") && rows(doc, "items").is_empty() {
+        missing.push("at least one line");
+    }
+    if b(&new, "requires_quotation") {
+        let quoted = match id(doc, "id") {
+            Some(deal) => {
+                let f = vec![Filter::eq("opportunity", deal.to_string()), Filter::eq("docstatus", 1)];
+                !find(hc.kernel, &sys(hc.ctx), hc.tx, "Quotation", f, None, 1).await?.is_empty()
+            }
+            None => false,
+        };
+        if !quoted {
+            missing.push("a submitted quotation");
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let list = match missing.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => missing.concat(),
+    };
+    let title = s(doc, "title").or(s(doc, "number")).unwrap_or_default();
+    Err(Error::field("sales_stage", format!("{} needs {list} before deal {title} enters it", s(&new, "stage_name").unwrap_or_default())))
+}
+
 /// Amount of `probability` percent, at the currency's precision.
 pub(crate) fn weighted(amount: Decimal, probability: Decimal, precision: u32) -> Decimal {
     round(amount * probability / Decimal::ONE_HUNDRED, precision)
 }
 
-/// Currency and rate, item amounts and total, weighted amount, and both in company currency so
-/// the pipeline can add up opportunities in different currencies.
+/// The line's unit (its item's stock unit unless another of its units is chosen) and how many stock
+/// units one holds; a unit the item has no conversion for is refused.
+fn unit(row: &mut Doc, item: &Doc, i: usize) -> Result<(Option<Uuid>, Decimal)> {
+    let stock = id(item, "stock_uom");
+    let uom = id(row, "uom").or(stock);
+    let factor = if uom == stock {
+        Decimal::ONE
+    } else {
+        let found = rows(item, "uoms").iter().find(|u| id(u, "uom") == uom).map(|u| d(u, "conversion_factor")).filter(|f| *f > Decimal::ZERO);
+        found.ok_or_else(|| {
+            let name = s(item, "item_name").unwrap_or("this item");
+            Error::Validation(vec![
+                FieldError::new("uom", format!("{name} has no conversion from this unit to its stock unit; add the unit to the item")).in_row("items", i),
+            ])
+        })?
+    };
+    set(row, "uom", json!(uom.map(|u| u.to_string())));
+    Ok((uom, factor))
+}
+
+/// The item's price for one `uom` of it in `price_list` (a price kept for that unit, else the stock
+/// unit's times `factor`), else its standard rate, as a quotation prices it, in the price list's
+/// currency (the company's for the standard rate or a list without one).
+async fn list_price(hc: &mut HookCtx<'_>, item: &Doc, price_list: Option<&Doc>, uom: Option<Uuid>, factor: Decimal) -> Result<Option<(Decimal, Option<Uuid>)>> {
+    let today = hc.ctx.today().to_string();
+    if let Some(pl) = price_list
+        && let (Some(list), Some(item_id)) = (id(pl, "id"), id(item, "id"))
+    {
+        let f = vec![
+            Filter::eq("item", item_id.to_string()),
+            Filter::eq("price_list", list.to_string()),
+            Filter { field: "valid_from".into(), op: Op::Lte, value: json!(today) },
+        ];
+        let prices = find(hc.kernel, &sys(hc.ctx), hc.tx, "ItemPrice", f, Some("valid_from desc"), 20).await?;
+        let valid: Vec<&Doc> = prices.iter().filter(|p| s(p, "valid_upto").is_none_or(|u| u >= today.as_str())).collect();
+        let stock = id(item, "stock_uom");
+        let price = match valid.iter().find(|p| uom.is_some() && id(p, "uom") == uom) {
+            Some(p) => Some(d(p, "rate")),
+            None => valid.iter().find(|p| id(p, "uom").is_none() || id(p, "uom") == stock).map(|p| (d(p, "rate") * factor).round_dp(9)),
+        };
+        if let Some(p) = price {
+            return Ok(Some((p, id(pl, "currency"))));
+        }
+    }
+    let standard = d(item, "standard_rate");
+    Ok((!standard.is_zero()).then(|| ((standard * factor).round_dp(9), None)))
+}
+
+/// The deal's price list (its customer's, else the first enabled selling one, as a quotation's), and
+/// each line's unit and rate: a line gets its item's price in that list, in the deal's currency,
+/// when it has none, or when its item, unit, the price list or the currency changed and its rate was
+/// not changed with them. A rate a person typed stays theirs.
+async fn price_lines(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>, currency_id: Uuid, rate: Decimal, co_currency: Uuid) -> Result<()> {
+    if id(doc, "price_list").is_none() {
+        let theirs = lookup(hc, "Customer", id(doc, "customer")).await?.and_then(|c| id(&c, "default_price_list"));
+        let list = match theirs {
+            Some(p) => Some(p),
+            None => {
+                let f = vec![Filter::eq("selling", true), Filter::eq("enabled", true)];
+                find(hc.kernel, &sys(hc.ctx), hc.tx, "PriceList", f, Some("created_at asc"), 1).await?.first().and_then(|p| id(p, "id"))
+            }
+        };
+        if let Some(p) = list {
+            set(doc, "price_list", p.to_string());
+        }
+    }
+    let mut items = rows(doc, "items");
+    if items.is_empty() {
+        return Ok(());
+    }
+    let price_list = lookup(hc, "PriceList", id(doc, "price_list")).await?;
+    let header_moved = old.is_some_and(|o| id(o, "price_list") != id(doc, "price_list") || id(o, "currency") != Some(currency_id));
+    let before = old.map(|o| rows(o, "items")).unwrap_or_default();
+    let mut cache: HashMap<Uuid, Doc> = HashMap::new();
+    for (i, r) in items.iter_mut().enumerate() {
+        let Some(item_id) = id(r, "item") else { continue };
+        let item = match cache.get(&item_id) {
+            Some(item) => item.clone(),
+            None => {
+                let Some(item) = lookup(hc, "Item", Some(item_id)).await? else { continue };
+                cache.insert(item_id, item.clone());
+                item
+            }
+        };
+        let (uom, factor) = unit(r, &item, i)?;
+        let typed = d(r, "rate");
+        let was = s(r, "id").and_then(|rid| before.iter().find(|o| s(o, "id") == Some(rid)));
+        let fresh = typed.is_zero() || was.is_some_and(|w| (id(w, "item") != Some(item_id) || id(w, "uom") != uom || header_moved) && d(w, "rate") == typed);
+        if !fresh {
+            continue;
+        }
+        let Some((price, in_currency)) = list_price(hc, &item, price_list.as_ref(), uom, factor).await? else { continue };
+        // From the list's currency to the deal's: the same, or through the company's.
+        let from = in_currency.unwrap_or(co_currency);
+        let price = if from == currency_id {
+            price
+        } else {
+            let to_company = exchange_rate(hc.kernel, hc.ctx, hc.tx, from, co_currency, hc.ctx.today()).await?;
+            (price * to_company / rate).round_dp(9)
+        };
+        set(r, "rate", money(price));
+    }
+    set(doc, "items", Value::Array(items.into_iter().map(Value::Object).collect()));
+    Ok(())
+}
+
+/// A line's amount: its quantity at its rate, less its discount, at the currency's precision.
+pub(crate) fn line_amount(qty: Decimal, rate: Decimal, discount: Decimal, precision: u32) -> Decimal {
+    round(qty * rate * (Decimal::ONE_HUNDRED - discount) / Decimal::ONE_HUNDRED, precision)
+}
+
+/// Currency and rate, line prices and amounts and their total, weighted amount, and both in company
+/// currency so the pipeline can add up opportunities in different currencies.
 async fn amounts(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result<()> {
     let Some(company_id) = id(doc, "company") else { return Ok(()) };
     let co = company(hc.kernel, hc.ctx, hc.tx, company_id).await?;
@@ -199,11 +457,12 @@ async fn amounts(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Resu
         }
     };
     set(doc, "conversion_rate", money(rate));
+    price_lines(hc, doc, old, currency_id, rate, co.currency_id).await?;
     let mut items = rows(doc, "items");
     if !items.is_empty() {
         let mut total = Decimal::ZERO;
         for r in items.iter_mut() {
-            let a = round(d(r, "qty") * d(r, "rate"), precision);
+            let a = line_amount(d(r, "qty"), d(r, "rate"), d(r, "discount_percent"), precision);
             set(r, "amount", money(a));
             total += a;
         }
@@ -218,8 +477,9 @@ async fn amounts(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Resu
     Ok(())
 }
 
-/// A draft quotation for the opportunity's customer (or its lead until converted), carrying the
-/// items and any rates already discussed.
+/// A draft quotation for the opportunity's customer (or its lead until converted), carrying its
+/// price list and lines as the deal has them: units, rates and discounts (none is no discount, so no
+/// pricing rule changes what was discussed).
 async fn make_quotation(hc: &mut HookCtx<'_>, opp: &Doc) -> Result<Value> {
     let mut q = Map::new();
     match (id(opp, "customer"), s(opp, "opportunity_from")) {
@@ -236,7 +496,7 @@ async fn make_quotation(hc: &mut HookCtx<'_>, opp: &Doc) -> Result<Value> {
             q.insert("lead".into(), opp.get("lead").cloned().unwrap_or(Value::Null));
         }
     }
-    for f in ["company", "currency", "conversion_rate", "contact", "campaign", "assigned_to"] {
+    for f in ["company", "currency", "conversion_rate", "price_list", "contact", "campaign", "assigned_to"] {
         if let Some(v) = opp.get(f).filter(|v| !v.is_null()) {
             q.insert(f.into(), v.clone());
         }
@@ -245,7 +505,8 @@ async fn make_quotation(hc: &mut HookCtx<'_>, opp: &Doc) -> Result<Value> {
     let items: Vec<Value> = rows(opp, "items")
         .iter()
         .map(|r| {
-            let mut line = json!({"item": r.get("item"), "qty": r.get("qty"), "description": r.get("description")});
+            let mut line = json!({"item": r.get("item"), "qty": r.get("qty"), "description": r.get("description"), "uom": r.get("uom"),
+                                  "discount_percent": money(d(r, "discount_percent"))});
             if d(r, "rate") > Decimal::ZERO {
                 line["price_list_rate"] = json!(r.get("rate"));
             }
@@ -287,10 +548,13 @@ async fn reopen(hc: &mut HookCtx<'_>, opp: &Doc) -> Result<Value> {
             s(q, "number").unwrap_or_default()
         )));
     }
-    let last = lookup(hc, "SalesStage", id(opp, "open_stage")).await?.filter(|st| s(st, "outcome") == Some("Open") && !b(st, "disabled"));
+    let pipeline = id(opp, "pipeline");
+    let last = lookup(hc, "SalesStage", id(opp, "open_stage"))
+        .await?
+        .filter(|st| s(st, "outcome") == Some("Open") && !b(st, "disabled") && (pipeline.is_none() || id(st, "pipeline") == pipeline));
     let stage = match last {
         Some(st) => Some(st),
-        None => stage_with(hc, "Open", false).await?,
+        None => stage_with(hc, pipeline, "Open", false).await?,
     };
     let reason = lookup(hc, "LostReason", id(opp, "lost_reason")).await?;
     let mut was = format!("It was {status}");
@@ -340,7 +604,7 @@ pub(crate) async fn follow_orders(hc: &mut HookCtx<'_>, opp: Uuid) -> Result<()>
             patch.insert("status".into(), json!("Won"));
         }
         (Some("Won"), true) => {
-            let Some(stage) = stage_with(hc, "Open", true).await? else { return Ok(()) };
+            let Some(stage) = stage_with(hc, id(&doc, "pipeline"), "Open", true).await? else { return Ok(()) };
             patch.insert("status".into(), json!("Open"));
             patch.insert("sales_stage".into(), stage.get("id").cloned().unwrap_or(Value::Null));
         }
@@ -365,7 +629,7 @@ pub(crate) async fn lose_with_quotation(hc: &mut HookCtx<'_>, opp: Uuid, quotati
             Filter::eq("opportunity", opp.to_string()),
             Filter::eq("docstatus", 1),
             Filter { field: "id".into(), op: Op::Ne, value: json!(quotation.to_string()) },
-            Filter { field: "status".into(), op: Op::In, value: json!(["Open", "Partially Ordered", "Ordered"]) },
+            Filter { field: "status".into(), op: Op::In, value: json!(["Open", "Sent", "Accepted", "Partially Ordered", "Ordered"]) },
         ],
         None,
         1,
@@ -394,5 +658,35 @@ mod tests {
         assert_eq!(weighted(n("333.33"), n("33.333"), 2), n("111.11"));
         assert_eq!(weighted(n("1000"), n("12.5"), 0), n("125"));
         assert_eq!(weighted(n("10"), Decimal::ZERO, 3), n("0.000"));
+    }
+
+    #[test]
+    fn a_line_is_its_quantity_at_its_rate_less_its_discount() {
+        let n = |s: &str| Decimal::from_str(s).unwrap();
+        assert_eq!(line_amount(n("10"), n("150"), Decimal::ZERO, 2), n("1500"));
+        assert_eq!(line_amount(n("3"), n("99.99"), n("10"), 2), n("269.97"));
+        assert_eq!(line_amount(n("1"), n("10"), n("100"), 2), Decimal::ZERO);
+    }
+
+    #[test]
+    fn one_contact_is_the_primary_and_the_deals_contact() {
+        let (a, c) = ("00000000-0000-0000-0000-00000000000a", "00000000-0000-0000-0000-00000000000c");
+        let doc = |v: Value| v.as_object().cloned().unwrap();
+        // Two contacts, none marked: the first is the primary.
+        let mut deal = doc(json!({"contacts": [{"contact": a}, {"contact": c}]}));
+        contacts(&mut deal, None).unwrap();
+        assert_eq!((deal["contact"].clone(), deal["contacts"][0]["is_primary"].clone()), (json!(a), json!(true)));
+        // The second marked primary instead.
+        let old = deal.clone();
+        let mut moved = doc(json!({"contact": a, "contacts": [{"contact": a, "is_primary": false}, {"contact": c, "is_primary": true}]}));
+        contacts(&mut moved, Some(&old)).unwrap();
+        assert_eq!(moved["contact"], json!(c));
+        // The deal's contact set by itself joins the list as the primary.
+        let mut legacy = doc(json!({"contact": a}));
+        contacts(&mut legacy, None).unwrap();
+        assert_eq!((legacy["contacts"][0]["contact"].clone(), legacy["contacts"][0]["is_primary"].clone()), (json!(a), json!(true)));
+        // Twice the same person, or two primaries, is refused.
+        assert!(contacts(&mut doc(json!({"contacts": [{"contact": a}, {"contact": a}]})), None).is_err());
+        assert!(contacts(&mut doc(json!({"contacts": [{"contact": a, "is_primary": true}, {"contact": c, "is_primary": true}]})), None).is_err());
     }
 }

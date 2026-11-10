@@ -1,5 +1,7 @@
-//! Quotations: priced by the selling engine, submitted to a customer or a lead, turned into sales
-//! orders for the quantities still open, declared lost, and expired once past their validity.
+//! Quotations: priced by the selling engine, submitted to a customer or a lead, sent, accepted or
+//! rejected by the customer, revised (cancelled and amended: the next revision, linked both ways),
+//! turned into sales orders for the quantities still open, declared lost, and expired once past
+//! their validity.
 //! Sales orders made from a quotation add their quantities to its lines on submit and take them
 //! back on cancel. An approval is of the quotation's terms, and what is ordered or billed from it
 //! keeps them (FEO-025).
@@ -24,16 +26,29 @@ use uuid::Uuid;
 // ponytail: fixed 30 days; a per-company setting when tenants need another default.
 const DEFAULT_VALIDITY_DAYS: i64 = 30;
 
-/// Status from the lifecycle, the ordered share, a declared loss and the validity. Ordering wins
-/// over a loss or expiry (the customer ordered after all); only cancellation wins over ordering.
-pub(crate) fn status(docstatus: i64, per_ordered: Decimal, lost: bool, valid_till: Option<NaiveDate>, today: NaiveDate) -> &'static str {
+/// Status from the lifecycle, the ordered share, a declared loss, the customer's answer, its being
+/// sent and the validity. Ordering wins over a loss, an answer or expiry (the customer ordered after
+/// all); only cancellation wins over ordering. An answer stands past the validity; expiry applies to
+/// an open or a sent one.
+pub(crate) fn status(
+    docstatus: i64,
+    per_ordered: Decimal,
+    lost: bool,
+    answer: Option<&str>,
+    sent: bool,
+    valid_till: Option<NaiveDate>,
+    today: NaiveDate,
+) -> &'static str {
     match docstatus {
         0 => "Draft",
         2 => "Cancelled",
         _ if per_ordered >= Decimal::ONE_HUNDRED => "Ordered",
         _ if per_ordered > Decimal::ZERO => "Partially Ordered",
         _ if lost => "Lost",
+        _ if answer == Some("Rejected") => "Rejected",
+        _ if answer == Some("Accepted") => "Accepted",
         _ if valid_till.is_some_and(|v| v < today) => "Expired",
+        _ if sent => "Sent",
         _ => "Open",
     }
 }
@@ -50,7 +65,8 @@ pub(crate) async fn refresh(k: &Kernel, ctx: &Ctx, tx: &mut Tx, quotation: Uuid)
     let docstatus = q.get("docstatus").and_then(Value::as_i64).unwrap_or(0);
     let mut v = Doc::new();
     v.insert("per_ordered".into(), money(pct));
-    v.insert("status".into(), json!(status(docstatus, pct, id(&q, "lost_reason").is_some(), valid_till, ctx.today())));
+    let st = status(docstatus, pct, id(&q, "lost_reason").is_some(), s(&q, "answer"), s(&q, "sent_on").is_some(), valid_till, ctx.today());
+    v.insert("status".into(), json!(st));
     k.set_values_tx(&sctx, tx, "Quotation", quotation, v).await?;
     Ok(q)
 }
@@ -76,6 +92,13 @@ impl DocHook for QuotationHook {
                 let c = lookup(hc, "Customer", id(doc, "customer")).await?;
                 set(doc, "party_name", json!(c.as_ref().and_then(|c| s(c, "customer_name"))));
             }
+        }
+        // A revision: the one it replaces (cancelled, then amended) and the next number.
+        if doc.get("revision").and_then(Value::as_i64).is_none() {
+            let was = lookup(hc, "Quotation", id(doc, "amended_from")).await?;
+            let revision = was.as_ref().map_or(1, |w| w.get("revision").and_then(Value::as_i64).unwrap_or(1) + 1);
+            set(doc, "revision", revision);
+            set(doc, "revision_of", json!(was.as_ref().and_then(|w| s(w, "id"))));
         }
         if s(doc, "valid_till").is_none()
             && let Ok(on) = date(doc, "posting_date")
@@ -108,6 +131,14 @@ impl DocHook for QuotationHook {
     }
 
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
+        // The quotation it revises shows it was replaced, and by which.
+        if old.is_none()
+            && let Some(was) = id(doc, "revision_of")
+        {
+            let mut v = Doc::new();
+            v.insert("replaced_by".into(), json!(s(doc, "id")));
+            hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Quotation", was, v).await?;
+        }
         check_assignee(hc, doc, old).await
     }
 
@@ -141,6 +172,7 @@ impl DocHook for QuotationHook {
         match name {
             "make_sales_order" => make_sales_order(hc, doc).await.map(Some),
             "mark_lost" => mark_lost(hc, doc, params).await.map(Some),
+            "mark_sent" | "mark_accepted" | "mark_rejected" => answer(hc, name, doc, params).await.map(Some),
             "add_rule_needs" => add_rule_needs(hc, doc).await.map(Some),
             "approve_quotation" => approve(hc, doc).await.map(Some),
             _ => Ok(None),
@@ -328,6 +360,14 @@ async fn approve(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
 async fn make_sales_order(hc: &mut HookCtx<'_>, q: &Doc) -> Result<Value> {
     let qid = id(q, "id").ok_or_else(|| Error::internal("quotation without id"))?;
     let number = s(q, "number").unwrap_or_default().to_string();
+    if s(q, "answer") == Some("Rejected") {
+        let reason = lookup(hc, "LostReason", id(q, "answer_reason")).await?;
+        let why = reason.as_ref().and_then(|r| s(r, "reason")).map(|r| format!(" ({r})")).unwrap_or_default();
+        return Err(Error::invalid(format!(
+            "the customer rejected quotation {number} on {}{why}; cancel and amend it to quote again",
+            s(q, "answered_on").unwrap_or_default()
+        )));
+    }
     if let Some(v) = s(q, "valid_till").and_then(|v| parse_date(v).ok())
         && v < hc.ctx.today()
     {
@@ -386,6 +426,35 @@ async fn mark_lost(hc: &mut HookCtx<'_>, q: &Doc, params: &Value) -> Result<Valu
         lose_with_quotation(hc, opp, qid, reason, detail).await?;
     }
     Ok(json!({"status": "Lost"}))
+}
+
+/// Records that the quotation was sent to the customer, or the customer's answer: accepted, or
+/// rejected with a reason, by whom it was recorded and when. A rejection leaves its deal open:
+/// another revision may follow.
+async fn answer(hc: &mut HookCtx<'_>, name: &str, q: &Doc, params: &Value) -> Result<Value> {
+    let qid = id(q, "id").ok_or_else(|| Error::internal("quotation without id"))?;
+    let today = json!(hc.ctx.today().to_string());
+    let mut v = Doc::new();
+    match name {
+        "mark_sent" => {
+            v.insert("sent_on".into(), today);
+        }
+        _ => {
+            let rejected = name == "mark_rejected";
+            if rejected {
+                let reason = lost_reason(hc, params).await?.ok_or_else(|| Error::field("lost_reason", "Reason is required"))?;
+                v.insert("answer_reason".into(), json!(reason.to_string()));
+                v.insert("answer_detail".into(), params.get("lost_detail").cloned().filter(Value::is_string).unwrap_or(Value::Null));
+            }
+            v.insert("answer".into(), json!(if rejected { "Rejected" } else { "Accepted" }));
+            v.insert("answered_on".into(), today);
+            v.insert("answered_by".into(), json!(hc.ctx.email));
+        }
+    }
+    hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Quotation", qid, v).await?;
+    refresh(hc.kernel, hc.ctx, hc.tx, qid).await?;
+    let now = hc.kernel.get_tx(&sys(hc.ctx), hc.tx, "Quotation", qid, false).await?;
+    Ok(json!({"status": now.get("status")}))
 }
 
 /// Keeps quotations' ordered quantities in step with the sales orders made from them, and an order
@@ -490,7 +559,7 @@ async fn track_orders(hc: &mut HookCtx<'_>, order: &Doc, sign: Decimal) -> Resul
     Ok(())
 }
 
-/// Moves open quotations past their validity to Expired, tenant by tenant. Idempotent, and safe on
+/// Moves open and sent quotations past their validity to Expired, tenant by tenant. Idempotent, and safe on
 /// several replicas at once: one replica handles a tenant per round and only Open → Expired moves.
 pub(crate) async fn expire_all(k: &Kernel) -> Result<()> {
     let mut tx = k.db.system_tx().await?;
@@ -513,8 +582,11 @@ async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
         return Ok(0);
     }
     let ctx = Ctx::system(tenant, schema);
-    let filters =
-        [Filter::eq("docstatus", 1), Filter::eq("status", "Open"), Filter { field: "valid_till".into(), op: Op::Lt, value: json!(ctx.today().to_string()) }];
+    let filters = [
+        Filter::eq("docstatus", 1),
+        Filter { field: "status".into(), op: Op::In, value: json!(["Open", "Sent"]) },
+        Filter { field: "valid_till".into(), op: Op::Lt, value: json!(ctx.today().to_string()) },
+    ];
     let mut tx = k.db.tenant_tx(tenant).await?;
     let mine: bool =
         sqlx::query_scalar("select pg_try_advisory_xact_lock(hashtext($1))").bind(format!("ferrum:crm:expire:{tenant}")).fetch_one(&mut *tx).await?;
@@ -527,13 +599,12 @@ async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
         let Some(qid) = id(q, "id") else { continue };
         // Re-read under the row lock: an order submitted meanwhile wins over expiry.
         let current = k.get_tx(&ctx, &mut tx, "Quotation", qid, true).await?;
-        if s(&current, "status") != Some("Open") {
-            continue;
-        }
+        let Some(was @ ("Open" | "Sent")) = s(&current, "status") else { continue };
+        let was = was.to_string();
         let mut v = Doc::new();
         v.insert("status".into(), json!("Expired"));
         k.set_values_tx(&ctx, &mut tx, "Quotation", qid, v).await?;
-        ferrum_kernel::audit::record(&mut tx, &ctx, "Quotation", qid, "expire", None, json!({"status": ["Open", "Expired"]})).await?;
+        ferrum_kernel::audit::record(&mut tx, &ctx, "Quotation", qid, "expire", None, json!({"status": [was, "Expired"]})).await?;
         expired += 1;
     }
     tx.commit().await?;
@@ -566,13 +637,18 @@ mod tests {
     fn status_follows_orders_loss_and_validity() {
         let day = |d: u32| NaiveDate::from_ymd_opt(2026, 10, d).unwrap();
         let (today, pct) = (day(15), |p: i64| Decimal::from(p));
-        assert_eq!(status(0, pct(0), false, None, today), "Draft");
-        assert_eq!(status(1, pct(0), false, Some(day(15)), today), "Open", "valid through the last day");
-        assert_eq!(status(1, pct(0), false, Some(day(14)), today), "Expired");
-        assert_eq!(status(1, pct(0), false, None, today), "Open");
-        assert_eq!(status(1, pct(40), false, Some(day(1)), today), "Partially Ordered", "orders win over expiry");
-        assert_eq!(status(1, pct(100), true, None, today), "Ordered", "and over a loss");
-        assert_eq!(status(1, pct(0), true, Some(day(1)), today), "Lost");
-        assert_eq!(status(2, pct(100), false, None, today), "Cancelled");
+        assert_eq!(status(0, pct(0), false, None, false, None, today), "Draft");
+        assert_eq!(status(1, pct(0), false, None, false, Some(day(15)), today), "Open", "valid through the last day");
+        assert_eq!(status(1, pct(0), false, None, false, Some(day(14)), today), "Expired");
+        assert_eq!(status(1, pct(0), false, None, false, None, today), "Open");
+        assert_eq!(status(1, pct(40), false, None, false, Some(day(1)), today), "Partially Ordered", "orders win over expiry");
+        assert_eq!(status(1, pct(100), true, None, false, None, today), "Ordered", "and over a loss");
+        assert_eq!(status(1, pct(0), true, Some("Rejected"), false, Some(day(1)), today), "Lost");
+        assert_eq!(status(2, pct(100), false, None, false, None, today), "Cancelled");
+        assert_eq!(status(1, pct(0), false, None, true, Some(day(15)), today), "Sent");
+        assert_eq!(status(1, pct(0), false, None, true, Some(day(14)), today), "Expired", "a sent one expires too");
+        assert_eq!(status(1, pct(0), false, Some("Accepted"), true, Some(day(1)), today), "Accepted", "an answer stands past the validity");
+        assert_eq!(status(1, pct(0), false, Some("Rejected"), true, None, today), "Rejected");
+        assert_eq!(status(1, pct(50), false, Some("Accepted"), true, None, today), "Partially Ordered");
     }
 }

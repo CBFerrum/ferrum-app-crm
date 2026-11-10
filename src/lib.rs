@@ -10,6 +10,7 @@ mod activity;
 mod assign;
 mod lead;
 mod opportunity;
+mod pipeline;
 mod quotation;
 mod remind;
 mod reports;
@@ -29,6 +30,8 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("Opportunity", Arc::new(opportunity::OpportunityHook))
         .register("Quotation", Arc::new(quotation::QuotationHook))
         .register("Activity", Arc::new(activity::ActivityHook))
+        .register("SalesPipeline", Arc::new(pipeline::PipelineHook))
+        .register("SalesStage", Arc::new(pipeline::StageHook))
         .register("LeadAssignmentRule", Arc::new(assign::RuleHook));
     hooks.add_site("crm", Arc::new(remind::CrmSite));
     hooks.scoped(&[CONNECTOR_PACKAGE.to_string()], |h| {
@@ -188,6 +191,8 @@ mod tests {
         let items = &crm.manifest.modules[0].items;
         for item in [
             "ProductRule",
+            "SalesPipeline",
+            "BuyingRole",
             "report:campaign_attribution",
             "Customer",
             "LeadAssignmentRule",
