@@ -78,7 +78,8 @@ impl DocHook for LeadHook {
 
 /// A new lead's owner: the one chosen, else the one its assignment rules give (Assigned By Rule
 /// says which), else the person entering it, as before rules (a form's or a mail's lead, entered by
-/// the engine, its placeholder address). An owner changed later is a person's choice, not a rule's.
+/// the engine, its placeholder address). A lead a person enters or imports goes only to rules that
+/// take those too: who types a lead in owns it. An owner changed later is a person's choice.
 async fn owner(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result<()> {
     if let Some(o) = old {
         if s(o, "assigned_to") != s(doc, "assigned_to") {
@@ -92,7 +93,7 @@ async fn owner(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result
         set(doc, "assignment_rule", Value::Null);
         return Ok(());
     }
-    match assign::by_rules(hc, doc).await? {
+    match assign::by_rules(hc, doc, !hc.ctx.is_system).await? {
         Some((owner, rule)) => {
             set(doc, "assigned_to", owner);
             set(doc, "assignment_rule", rule.to_string());

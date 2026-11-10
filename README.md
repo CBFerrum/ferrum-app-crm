@@ -42,7 +42,7 @@ same selling engine that invoices them, so what sales promises is what accountin
 <td width="50%" valign="top">
 
 ### 🎯 Lead capture and qualification
-One open lead per email or phone, however it is written; enquiries from forms and mail kept and linked to the lead they repeat, and given an owner by assignment rules, in turn or to whoever holds fewest. Conversion to a new or an existing customer and contact, taking the lead's notes along, and undone while nothing else hangs on it.
+One open lead per email or phone, however it is written; enquiries from forms and mail kept and linked to the lead they repeat, and given an owner by assignment rules, in turn or to whoever holds fewest; a lead a rep types in stays theirs unless a rule says otherwise. Conversion to a new or an existing customer and contact, taking the lead's notes along, and undone while nothing else hangs on it.
 
 </td>
 <td width="50%" valign="top">
