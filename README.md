@@ -5,7 +5,7 @@
   <img alt="Ferrum CRM" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.6.4-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.8.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -25,14 +25,14 @@ same selling engine that invoices them, so what sales promises is what accountin
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.6.4` |
+| 📦 Version | `0.8.0` |
 | 🧱 Platform | Ferrum `>=0.3.2, <0.4` |
 | 🔗 Requires | nothing else |
 | 🖥️ Interface | its own, at `/crm/` |
 | 🗃️ Records | 12 entities in 2 packages |
 | 👥 Roles | 4: Sales User, Sales Manager, Marketing Manager, CRM Viewer |
-| 📊 Reports | 4 |
-| 🧪 Tests | 8 Rust tests, 1 interface test file |
+| 📊 Reports | 6 |
+| 🧪 Tests | 13 Rust tests, 2 interface test files |
 
 
 ## Highlights
@@ -42,13 +42,13 @@ same selling engine that invoices them, so what sales promises is what accountin
 <td width="50%" valign="top">
 
 ### 🎯 Lead capture and qualification
-Duplicate-safe capture, qualification and one-step conversion to customer, contact and address.
+One open lead per email or phone, however it is written; enquiries from forms and mail kept and linked to the lead they repeat. Conversion to a new or an existing customer and contact, taking the lead's notes along, and undone while nothing else hangs on it.
 
 </td>
 <td width="50%" valign="top">
 
 ### 📈 A pipeline you can trust
-Configurable stages and probabilities, a weighted pipeline, competitors and won or lost reasons.
+Configurable stages and probabilities, a weighted pipeline, competitors and won or lost reasons; deals for a lead, a prospect or a customer, and a closed deal reopened where it stood.
 
 </td>
 </tr>
@@ -101,7 +101,7 @@ Assignees own their leads, deals and activities; managers see the team's.
 ```mermaid
 flowchart LR
     L["🧲 Lead<br/><small>captured, deduplicated</small>"] -->|qualify| Q{{"Qualified?"}}
-    Q -->|yes, convert| C["🏢 Customer + contact<br/>+ address"]
+    Q -->|yes, convert| C["🏢 Customer + contact<br/>+ address<br/><small>new or existing; undoable</small>"]
     Q -->|no| X["Lost · reason kept"]
     C --> O["💼 Opportunity<br/><small>stage · probability · amount</small>"]
     O -->|quote| QT["🧾 Quotation<br/><small>selling engine prices and taxes</small>"]
@@ -146,6 +146,9 @@ with them under the same rules as people.
 | 🚀 Launcher | **CRM** at `/crm/` |
 | ➕ Create menu | Lead |
 | ➕ Create menu | Deal |
+| ➕ Create menu | Contact |
+| ➕ Create menu | Quotation |
+| ➕ Create menu | Activity |
 
 ## Data model
 
@@ -191,13 +194,16 @@ erDiagram
     Campaign ||--o{ Opportunity : "campaign"
     Territory ||--o{ Opportunity : "territory"
     Customer ||--o{ Quotation : "customer"
+    Lead ||--o{ Quotation : "lead"
+    Prospect ||--o{ Quotation : "prospect"
+    Lead ||--o{ Lead : "duplicate_of"
 ```
 
 ### Roles
 
 | Role | What it is for | Entities |
 |---|---|---|
-| **Sales User** | Works the leads, opportunities and activities they own, and their quotations. | 12 |
+| **Sales User** | Works the leads, opportunities and activities they own, and their quotations. | 14 |
 | **Sales Manager** | The whole team's CRM records, pipeline and quotations. | 24 |
 | **Marketing Manager** | Campaigns and lead generation. | 12 |
 | **CRM Viewer** | Read-only access to CRM records and reports. | 11 |
@@ -289,6 +295,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.8.0** | Duplicates by email or phone, kept or refused; conversion onto existing contacts, and undone; deals reopened, and for prospects. |
 | **0.7.0** | An approval is of a quotation's terms; the orders and invoices made from it keep what it quoted. |
 | **0.6.17** | Its reports' names in Arabic and Hindi. |
 | **0.6.16** | Its names in Arabic and Hindi; the last English sentences translated. |

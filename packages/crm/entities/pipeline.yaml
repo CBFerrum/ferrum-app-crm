@@ -56,10 +56,15 @@
     - {name: contact, type: link, to: Contact, read_only: true, no_copy: true}
     - {name: converted_on, type: date, read_only: true, no_copy: true}
     - {name: unsubscribed, type: check, in_filter: true, description: Do not send marketing communication}
+    - {name: allow_duplicate, type: check, no_copy: true, description: "Save it although an open lead has the same email or phone; it is linked to that lead, to merge later"}
+    - {name: phone_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The phone's national part, by which the same person is found"}
+    - {name: mobile_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The mobile's national part, by which the same person is found"}
+    - {name: duplicate_of, type: link, to: Lead, read_only: true, no_copy: true, in_filter: true, description: "An earlier lead with the same email or phone, to merge with or keep apart"}
+    - {name: conversion, type: json, read_only: true, hidden: true, no_copy: true, description: "What converting it made and changed, so that it can be undone"}
     - {name: notes, type: text}
   form:
     - {label: Lead, fields: [first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, next_follow_up, last_contacted_on]}
-    - {label: Contact Details, fields: [email, phone, mobile, website, unsubscribed]}
+    - {label: Contact Details, fields: [email, phone, mobile, website, unsubscribed, allow_duplicate, duplicate_of]}
     - {label: Source and Segment, fields: [source, campaign, prospect, territory, industry, company_size, annual_revenue, company]}
     - {label: Qualification, collapsible: true, fields: [budget, is_decision_maker, need, timeline, qualified_on, qualified_by]}
     - {label: Address, collapsible: true, fields: [address_line1, address_line2, city, state, postal_code, country]}
@@ -75,7 +80,14 @@
       confirm: "Create a customer, contact and address from this lead?"
       params:
         - {name: customer, type: link, to: Customer, label: Existing Customer, description: "A new customer is made from the lead when empty"}
+        - {name: contact, type: link, to: Contact, label: Existing Contact, description: "The person as a contact already; its customer is taken when none is chosen"}
         - {name: customer_group, type: link, to: CustomerGroup, label: Customer Group, description: "For a new customer"}
+        - {name: create_new, type: check, label: Create New Anyway, description: "Make a new customer and contact although one already has the lead's email or phone"}
+    - name: undo_conversion
+      label: Undo Conversion
+      permission: write
+      condition: "doc.status == 'Converted'"
+      confirm: "Give the lead back its deals, quotations and activities, and remove the customer, contact and address the conversion made?"
     - {name: make_opportunity, label: Create Opportunity, permission: read, condition: "doc.status != 'Lost' && doc.status != 'Junk'"}
   list: {columns: [number, lead_name, organization_name, status, assigned_to, next_follow_up], sort: created_at desc}
 
@@ -110,14 +122,15 @@
   owner_fields: [assigned_to]
   fields:
     - {name: title, type: data, required: true, in_list: true, description: Defaults to the party name}
-    - {name: opportunity_from, type: select, options: [Lead, Customer], required: true, default: Lead, in_filter: true}
+    - {name: opportunity_from, type: select, options: [Lead, Customer, Prospect], required: true, default: Lead, in_filter: true}
     - {name: lead, type: link, to: Lead, visible_if: "doc.opportunity_from == 'Lead'", required_if: "doc.opportunity_from == 'Lead'", in_filter: true}
-    - {name: customer, type: link, to: Customer, required_if: "doc.opportunity_from == 'Customer'", in_filter: true, description: "For a lead: set once the lead is converted"}
+    - {name: customer, type: link, to: Customer, required_if: "doc.opportunity_from == 'Customer'", in_filter: true, description: "For a lead or a prospect: set once it becomes a customer"}
     - {name: party_name, type: data, read_only: true, in_list: true}
-    - {name: prospect, type: link, to: Prospect, in_filter: true}
+    - {name: prospect, type: link, to: Prospect, required_if: "doc.opportunity_from == 'Prospect'", in_filter: true}
     - {name: contact, type: link, to: Contact}
     - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", in_filter: true}
     - {name: sales_stage, type: link, to: SalesStage, required: true, in_list: true, in_filter: true, description: Defaults to the first open stage}
+    - {name: open_stage, type: link, to: SalesStage, read_only: true, hidden: true, no_copy: true, label: Last Open Stage, description: Where it stood while open; reopening takes it back there}
     - {name: probability, type: percent, min: "0", max: "100", in_list: true, description: Defaults from the sales stage}
     - {name: status, type: select, options: [Open, Won, Lost, Closed], required: true, default: Open, in_list: true, in_filter: true}
     - {name: lost_reason, type: link, to: LostReason, visible_if: "doc.status == 'Lost'", required_if: "doc.status == 'Lost'"}
@@ -159,6 +172,11 @@
       params:
         - {name: lost_reason, type: link, to: LostReason, label: Lost Reason, required: true}
         - {name: lost_detail, type: text, label: Detail}
+    - name: reopen
+      label: Reopen
+      permission: write
+      condition: "doc.status != 'Open'"
+      confirm: "Open this deal again, at the stage it last held?"
   list: {columns: [number, title, party_name, sales_stage, amount, expected_close_date, status], sort: expected_close_date asc}
 
 - name: Activity

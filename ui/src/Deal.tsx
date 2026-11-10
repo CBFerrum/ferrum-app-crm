@@ -206,6 +206,15 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
       toast(errorMessage(e), "error");
     }
   };
+  const reopen = async () => {
+    try {
+      await api.post(docPath("Opportunity", id, "actions", "reopen"), {});
+      toast(t("Reopened"));
+      refresh();
+    } catch (e) {
+      toast(errorMessage(e), "error");
+    }
+  };
   const quote = async () => {
     try {
       const made = await api.post<{ entity?: string; id?: string }>(docPath("Opportunity", id, "actions", "make_quotation"), {});
@@ -230,6 +239,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
         </div>
         <div className="page-actions">
           {!isOpen && <Badge tone={statusTone(doc.status)}>{isolate(String(doc.status))}</Badge>}
+          {!isOpen && writable && <Button onClick={() => void reopen()}>{t("Reopen")}</Button>}
           {isOpen && writable && <Button onClick={() => void won()}>{t("Won")}</Button>}
           {isOpen && writable && <Button onClick={() => setLosing(true)}>{t("Lost")}</Button>}
           {isOpen && (
