@@ -1,5 +1,7 @@
-//! Lead assignment rules: a lead that arrives with no owner goes to one of a rule's people, in turn
-//! or to whoever holds the fewest open leads. Rules are tried in their order; the first whose
+//! Lead assignment rules: a lead that arrives by itself (a form, a mail, an integration: the
+//! engine's context) goes to one of a rule's people, in turn or to whoever holds the fewest open
+//! leads. A lead a person enters or imports without an owner is theirs, as a rep expects, unless a
+//! rule says it takes those too (Takes). Rules are tried in their order; the first whose
 //! criteria the lead meets (source, territory or one above it, campaign, company; empty is any) and
 //! that has an active person gives it. The rule's row is locked while it chooses, so two leads
 //! arriving at once take two turns, and the turn is kept on the rule (Last Given To).
@@ -62,8 +64,12 @@ async fn takes(hc: &mut HookCtx<'_>, rule: &Doc, lead: &Doc) -> Result<bool> {
     }
 }
 
-/// The owner the rules give `lead`, and the rule that gave it; the rule takes its turn.
-pub(crate) async fn by_rules(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Option<(String, Uuid)>> {
+/// Takes: also the leads people enter or import without an owner.
+const ENTERED_TOO: &str = "Also leads people enter or import without an owner";
+
+/// The owner the rules give `lead`, and the rule that gave it; the rule takes its turn. A lead a
+/// person `entered` is offered only to the rules that take those too.
+pub(crate) async fn by_rules(hc: &mut HookCtx<'_>, lead: &Doc, entered: bool) -> Result<Option<(String, Uuid)>> {
     if hc.ctx.schema.entity("LeadAssignmentRule").is_none() {
         return Ok(None);
     }
@@ -72,6 +78,9 @@ pub(crate) async fn by_rules(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Option<
     rules.sort_by_key(|r| (r.get("rule_order").and_then(|v| v.as_i64()).unwrap_or(0), s(r, "rule_name").unwrap_or_default().to_string()));
     for rule in rules {
         let Some(rule_id) = id(&rule, "id") else { continue };
+        if entered && s(&rule, "takes") != Some(ENTERED_TOO) {
+            continue;
+        }
         if !takes(hc, &rule, lead).await? {
             continue;
         }
@@ -114,7 +123,8 @@ pub(crate) async fn by_rules(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Option<
 }
 
 /// "Assign by Rules": a lead with no owner, or whose owner is no longer an active user, goes to
-/// whom its rules choose; its story records who asked, and the new owner is told.
+/// whom its rules choose (every enabled rule: it is asked for); its story records who asked, and the
+/// new owner is told.
 pub(crate) async fn assign_by_rules(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<serde_json::Value> {
     let lead_id = id(lead, "id").ok_or_else(|| Error::internal("lead without id"))?;
     let number = s(lead, "number").unwrap_or_default().to_string();
@@ -124,7 +134,7 @@ pub(crate) async fn assign_by_rules(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<
     {
         return Err(Error::invalid(format!("lead {number} is {owner}'s; assigning by rules is for a lead with no owner or whose owner left")));
     }
-    let Some((owner, rule)) = by_rules(hc, lead).await? else {
+    let Some((owner, rule)) = by_rules(hc, lead, false).await? else {
         return Err(Error::invalid(format!("no assignment rule takes lead {number}, or none of its people is active")));
     };
     let mut v = Doc::new();

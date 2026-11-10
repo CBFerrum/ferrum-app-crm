@@ -1332,16 +1332,32 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     let chosen = maria.insert("Lead", json!({"first_name": "Yours", "source": "Website", "assigned_to": "ben@rem.test"})).await;
     assert_eq!(owner(&chosen), "ben@rem.test");
     assert_eq!(told(k, tenant, "crm.assigned", uid(&own)).await.len(), 0, "nobody tells themself");
-    // Entered with the owner left empty, the rules choose; the creator still sees it.
-    let left_empty = anna.insert("Lead", json!({"first_name": "Open", "source": "Website"})).await;
-    assert_eq!(left_empty["assignment_rule"], web["id"]);
+    // A rep's own lead, typed in with no owner, is theirs: the rules here take what arrives by itself.
+    assert_eq!(web["takes"], json!("Leads that arrive by themselves (forms, mail, integrations)"), "the default");
+    let typed = anna.insert("Lead", json!({"first_name": "Typed", "source": "Website"})).await;
+    assert_eq!((owner(&typed).as_str(), typed["assignment_rule"].clone()), ("anna@rem.test", Value::Null));
+    let from_form = arrive(json!({"first_name": "Formed", "source": "Website"})).await;
+    assert_eq!(from_form["assignment_rule"], web["id"], "while a form's lead goes round");
+    // A rule that takes leads people enter too: an ownerless one goes round, one a rep chose stays.
+    let cold = maria
+        .insert(
+            "LeadAssignmentRule",
+            json!({"rule_name": "Cold calls", "rule_order": 3, "source": "Cold Call", "takes": "Also leads people enter or import without an owner",
+                   "people": [{"user": "ben@rem.test"}]}),
+        )
+        .await;
+    let left_empty = anna.insert("Lead", json!({"first_name": "Open", "source": "Cold Call"})).await;
+    assert_eq!((owner(&left_empty).as_str(), left_empty["assignment_rule"].clone()), ("ben@rem.test", cold["id"].clone()));
     anna.get("Lead", uid(&left_empty)).await;
+    let kept = anna.insert("Lead", json!({"first_name": "Kept", "source": "Cold Call", "assigned_to": "anna@rem.test"})).await;
+    assert_eq!((owner(&kept).as_str(), kept["assignment_rule"].clone()), ("anna@rem.test", Value::Null));
     // An owner changed by hand is that person's choice, not the rule's.
     let moved = maria.update("Lead", uid(&l1), json!({"assigned_to": "ben@rem.test"})).await;
     assert!(moved["assignment_rule"].is_null());
     assert_eq!(told(k, tenant, "crm.assigned", uid(&l1)).await, ["anna@rem.test", "ben@rem.test"]);
     // Assign by Rules: for a lead whose owner left, not one with an owner.
     refused(maria.k.run_action(&maria.ctx, "Lead", uid(&l1), "assign_by_rules", json!({})).await, "is ben@rem.test's");
+    // Asked for, by a person: every enabled rule, the default Website one included.
     let done = maria.action("Lead", uid(&hers), "assign_by_rules", json!({})).await;
     let hal = maria.get("Lead", uid(&hers)).await;
     assert_eq!((hal["assigned_to"].clone(), hal["assignment_rule"].clone()), (done["assigned_to"].clone(), web["id"].clone()));

@@ -21,7 +21,7 @@
     - {name: website, type: url}
     - {name: status, type: select, options: [New, Contacted, Qualified, Converted, Lost, Junk], required: true, default: New, in_list: true, in_filter: true}
     - {name: lost_reason, type: link, to: LostReason, visible_if: "doc.status == 'Lost'", required_if: "doc.status == 'Lost'"}
-    - {name: assigned_to, type: email, label: Lead Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the lead. Left empty, the assignment rules choose one, else it is yours"}
+    - {name: assigned_to, type: email, label: Lead Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the lead. Left empty, it is yours, unless an assignment rule takes leads people enter"}
     - {name: assignment_rule, type: link, to: LeadAssignmentRule, read_only: true, no_copy: true, in_filter: true, label: Assigned By Rule}
     - {name: next_follow_up, type: date, in_list: true, in_filter: true}
     - {name: last_contacted_on, type: date, read_only: true, no_copy: true}

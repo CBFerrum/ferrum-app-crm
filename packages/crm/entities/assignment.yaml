@@ -9,7 +9,7 @@
   kind: master
   module: crm
   title_field: rule_name
-  description: "Gives a lead that arrives with no owner (from a form, a mail, an integration, an import, or entered with the owner left empty) to one of its people. Rules are tried in order; the first that matches and has an active person wins."
+  description: "Gives a lead that arrives by itself (from a form, a mail, an integration), or one entered or imported with no owner where the rule says so, to one of its people. Rules are tried in order; the first that matches and has an active person wins."
   fields:
     - {name: rule_name, type: data, label: Name, required: true, unique: true, in_list: true}
     - {name: enabled, type: check, default: true, in_list: true, in_filter: true}
@@ -19,13 +19,15 @@
     - {name: territory, type: link, to: Territory, in_list: true, description: "Empty: any territory; a territory takes the ones under it too"}
     - {name: campaign, type: link, to: Campaign, description: "Empty: any campaign"}
     - {name: company, type: link, to: Company, description: "Empty: any company"}
+    - {name: takes, type: select, options: ["Leads that arrive by themselves (forms, mail, integrations)", "Also leads people enter or import without an owner"], required: true, default: "Leads that arrive by themselves (forms, mail, integrations)", label: Takes,
+       description: "Whose leads it takes. With the second, a lead a rep enters or imports without an owner goes round too: reps choose themselves as owner to keep a lead they enter"}
     - {name: method, type: select, options: [In Turn, Fewest Open Leads], required: true, default: In Turn, in_list: true, label: Share Out,
        description: "In Turn gives each person the next lead in their turn; Fewest Open Leads gives it to whoever holds the fewest new, contacted or qualified leads"}
     - {name: people, type: table, of: LeadAssignmentMember, label: People}
     - {name: last_assigned_to, type: email, read_only: true, no_copy: true, label: Last Given To, description: "Whose turn it was last"}
   form:
     - {label: Rule, fields: [rule_name, enabled, rule_order, method]}
-    - {label: Which Leads, fields: [source, territory, campaign, company]}
+    - {label: Which Leads, fields: [takes, source, territory, campaign, company]}
     - {label: People, fields: [people, last_assigned_to]}
   list: {columns: [rule_name, rule_order, source, territory, method, enabled], sort: rule_order asc}
 
