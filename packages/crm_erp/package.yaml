@@ -1,5 +1,5 @@
 package: crm_erp
-version: 0.1.0
+version: 0.1.1
 label: CRM and ERP
 description: Quotations take ERP's taxes and become sales orders, which remember the quotation they came from.
 depends: [crm, selling]
@@ -10,7 +10,7 @@ overlays:
     ops:
       - {op: add_field, column: true, after: price_list, field: {name: tax_template, type: link, to: TaxTemplate}}
       - {op: add_field, column: true, after: items, field: {name: taxes, type: table, of: TaxRow}}
-      - {op: add_action, action: {name: make_sales_order, label: Create Sales Order, docstatus: [1], permission: read, condition: "doc.status == 'Open' || doc.status == 'Partially Ordered' || doc.status == 'Expired'"}}
+      - {op: add_action, action: {name: make_sales_order, label: Create Sales Order, docstatus: [1], permission: read, condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Accepted' || doc.status == 'Partially Ordered' || doc.status == 'Expired' || doc.status == 'Rejected'"}}
   - entity: SalesOrder
     ops:
       - {op: add_field, after: customer_name, field: {name: crm_quotation, type: link, to: Quotation, label: Quotation, read_only: true, in_filter: true}}

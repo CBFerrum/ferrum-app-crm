@@ -55,9 +55,18 @@
     - {name: base_grand_total, type: currency, read_only: true}
     - {name: base_rounded_total, type: currency, read_only: true}
     - {name: per_ordered, type: percent, read_only: true, no_copy: true}
-    - {name: status, type: select, options: [Draft, Open, Partially Ordered, Ordered, Lost, Expired, Cancelled], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "Ordered once ERP makes sales orders from it: a submitted quotation offers Create Sales Order where ERP and the CRM and ERP connector are installed"}
+    - {name: status, type: select, options: [Draft, Open, Sent, Accepted, Rejected, Partially Ordered, Ordered, Lost, Expired, Cancelled], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "Ordered once ERP makes sales orders from it: a submitted quotation offers Create Sales Order where ERP and the CRM and ERP connector are installed"}
     - {name: lost_reason, type: link, to: LostReason, read_only: true, no_copy: true}
     - {name: lost_detail, type: text, read_only: true, no_copy: true}
+    - {name: revision, type: int, read_only: true, no_copy: true, in_list: true, description: "1, then one more each time it is cancelled and amended"}
+    - {name: revision_of, type: link, to: Quotation, read_only: true, no_copy: true, on_delete: set_null, label: Revises, description: The quotation this revision replaces}
+    - {name: replaced_by, type: link, to: Quotation, read_only: true, no_copy: true, on_delete: set_null, in_filter: true, label: Replaced By, description: Its next revision}
+    - {name: sent_on, type: date, read_only: true, no_copy: true, description: "When it was marked sent to the customer"}
+    - {name: answer, type: select, options: [Accepted, Rejected], read_only: true, no_copy: true, in_filter: true, label: Customer's Answer}
+    - {name: answered_on, type: date, read_only: true, no_copy: true}
+    - {name: answered_by, type: email, read_only: true, no_copy: true, description: Who recorded the customer's answer}
+    - {name: answer_reason, type: link, to: LostReason, read_only: true, no_copy: true, label: Reason Rejected}
+    - {name: answer_detail, type: text, read_only: true, no_copy: true, label: Rejection Detail}
     - {name: campaign, type: link, to: Campaign, in_filter: true}
     - {name: assigned_to, type: email, default_expr: "user.email", label: Quotation Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the quotation"}
     - {name: terms, type: text}
@@ -75,6 +84,7 @@
     - {label: Items, fields: [items]}
     - {label: Taxes, fields: [tax_template, taxes, discount_percent]}
     - {label: Totals, fields: [total, discount_amount, net_total, total_taxes, grand_total, rounding_adjustment, rounded_total, per_ordered, status]}
+    - {label: Customer's Answer, collapsible: true, fields: [revision, revision_of, replaced_by, sent_on, answer, answered_on, answered_by, answer_reason, answer_detail]}
     - {label: More, collapsible: true, fields: [base_net_total, base_grand_total, base_rounded_total, lost_reason, lost_detail, campaign, terms]}
   rules:
     - {name: validity_after_date, check: "doc.valid_till == null || doc.valid_till >= doc.posting_date", message: "Valid till cannot be before the quotation date"}
@@ -82,12 +92,22 @@
   actions:
     - {name: approve_quotation, label: Approve, docstatus: [0], permission: write, condition: "doc.needs_approval && doc.approved_by == null"}
     - {name: add_rule_needs, label: Add What the Rules Need, docstatus: [0], permission: write, condition: "doc.rule_issues != null && doc.rule_issues != ''"}
+    - {name: mark_sent, label: Mark as Sent, docstatus: [1], permission: submit, condition: "doc.status == 'Open'"}
+    - {name: mark_accepted, label: Accepted, docstatus: [1], permission: submit, condition: "doc.status == 'Open' || doc.status == 'Sent'", confirm: "Record that the customer accepted this quotation?"}
+    - name: mark_rejected
+      label: Rejected
+      docstatus: [1]
+      permission: submit
+      condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Expired'"
+      params:
+        - {name: lost_reason, type: link, to: LostReason, label: Reason, required: true}
+        - {name: lost_detail, type: text, label: Detail}
     - name: mark_lost
       label: Mark as Lost
       docstatus: [1]
       permission: submit
-      condition: "doc.status == 'Open' || doc.status == 'Expired'"
+      condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Accepted' || doc.status == 'Rejected' || doc.status == 'Expired'"
       params:
         - {name: lost_reason, type: link, to: LostReason, label: Lost Reason, required: true}
         - {name: lost_detail, type: text, label: Detail}
-  list: {columns: [number, party_name, posting_date, valid_till, grand_total, status], sort: posting_date desc}
+  list: {columns: [number, revision, party_name, posting_date, valid_till, grand_total, status], sort: posting_date desc}

@@ -22,12 +22,14 @@ pub struct CrmReports;
 impl ReportSource for CrmReports {
     fn catalog(&self) -> Vec<Value> {
         let date = |name: &str, label: &str| json!({"name": name, "label": label, "type": "date"});
+        let pipeline = || json!({"name": "pipeline", "label": "Pipeline", "type": "link", "to": "SalesPipeline"});
         vec![
             json!({"name": "sales_pipeline", "label": "Sales Pipeline", "module": "crm", "entity": "Opportunity", "params": [
-                param_def("company"), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"},
+                param_def("company"), pipeline(), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"},
                 date("from_date", "Expected Close From"), date("to_date", "Expected Close To")]}),
             json!({"name": "sales_forecast", "label": "Sales Forecast", "module": "crm", "entity": "Opportunity", "params": [
-                param_def("company"), param_def("from_date"), param_def("to_date"), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"}]}),
+                param_def("company"), param_def("from_date"), param_def("to_date"), pipeline(), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"},
+                {"name": "group_by", "label": "Group By", "type": "select", "options": ["Owner", "Month"], "default": "Owner"}]}),
             json!({"name": "lead_funnel", "label": "Lead Funnel and Conversion", "module": "crm", "entity": "Lead", "params": [
                 param_def("company"), param_def("from_date"), param_def("to_date"),
                 {"name": "group_by", "label": "Group By", "type": "select", "options": ["Source", "Campaign", "Territory", "Lead Owner"], "default": "Source"}]}),
@@ -38,15 +40,15 @@ impl ReportSource for CrmReports {
                 {"name": "model", "label": "Model", "type": "select", "options": ["Linear", "First Touch", "Last Touch"], "default": "Linear"}]}),
             json!({"name": "quotation_register", "label": "Quotation Register", "module": "crm", "entity": "Quotation", "params": [
                 param_def("company"), param_def("from_date"), param_def("to_date"), param_def("customer"),
-                {"name": "status", "label": "Status", "type": "select", "options": ["Open", "Partially Ordered", "Ordered", "Lost", "Expired"]}]}),
+                {"name": "status", "label": "Status", "type": "select", "options": ["Open", "Sent", "Accepted", "Rejected", "Partially Ordered", "Ordered", "Lost", "Expired"]}]}),
             json!({"name": "win_rate", "label": "Win Rate", "module": "crm", "entity": "Opportunity", "params": [
-                param_def("company"), date("from_date", "Closed From"), date("to_date", "Closed To"),
+                param_def("company"), date("from_date", "Closed From"), date("to_date", "Closed To"), pipeline(),
                 {"name": "group_by", "label": "Group By", "type": "select", "options": ["Owner", "Source", "Month"], "default": "Owner"}]}),
             json!({"name": "sales_cycle", "label": "Sales Cycle", "module": "crm", "entity": "Opportunity", "params": [
-                param_def("company"), date("from_date", "Won From"), date("to_date", "Won To"),
+                param_def("company"), date("from_date", "Won From"), date("to_date", "Won To"), pipeline(),
                 {"name": "group_by", "label": "Group By", "type": "select", "options": ["Owner", "Stage"], "default": "Owner"}]}),
             json!({"name": "lost_reasons", "label": "Lost Reasons", "module": "crm", "entity": "Opportunity", "params": [
-                param_def("company"), date("from_date", "Lost From"), date("to_date", "Lost To"), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"}]}),
+                param_def("company"), date("from_date", "Lost From"), date("to_date", "Lost To"), pipeline(), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"}]}),
             json!({"name": "activity_by_person", "label": "Activity by Person", "module": "crm", "entity": "Activity", "params": [
                 param_def("company"), date("from_date", "Done From"), date("to_date", "Done To"),
                 {"name": "period", "label": "Period", "type": "select", "options": ["Month", "Week", "Day"], "default": "Month"}]}),
@@ -86,6 +88,15 @@ fn scope(k: &Kernel, ctx: &Ctx, entity: &str, qb: &mut QueryBuilder<Postgres>, a
     Ok(())
 }
 
+/// Restricts `alias` (deals) to the `pipeline` parameter's pipeline, when one is given.
+fn in_pipeline(p: &Params<'_>, qb: &mut QueryBuilder<Postgres>, alias: &str) -> Result<Option<Uuid>> {
+    let pipeline = p.uuid("pipeline")?;
+    if let Some(id) = pipeline {
+        qb.push(format!(" and {alias}.pipeline = ")).push_bind(id);
+    }
+    Ok(pipeline)
+}
+
 /// `part` as a percentage of `whole`, to two decimals.
 pub(crate) fn pct(part: Decimal, whole: Decimal) -> Decimal {
     if whole.is_zero() { Decimal::ZERO } else { (part / whole * Decimal::ONE_HUNDRED).round_dp(2) }
@@ -95,44 +106,71 @@ fn next_day(d: NaiveDate) -> NaiveDate {
     d.succ_opt().unwrap_or(d)
 }
 
-/// Open deals by the month they should close, at their value and weighted by their probability,
-/// beside what was won in that month. Deals with no expected date are not forecast: they are counted
-/// apart, so nobody takes them for nothing.
+/// What a deal counts as in the forecast: Closed once won; while open, the category a person set on
+/// it, else its stage's, else Pipeline (SQL over the deal `o` and its stage `s`).
+const CATEGORY: &str = "case when o.status = 'Won' then 'Closed' else coalesce(o.forecast_category, s.forecast_category, 'Pipeline') end";
+
+/// The forecast of a period, by owner (or by month): what was won in it (Closed, by the day it was
+/// won), and the open deals expected to close in it by forecast category (Commit, Best Case,
+/// Pipeline; Omitted ones left out) at their value, and weighted by their probability. Open deals
+/// with no expected date are not forecast: they are counted apart, so nobody takes them for nothing.
 async fn forecast(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Params<'_>) -> Result<Value> {
     let (from, to) = period(p, co)?;
-    let mut qb = QueryBuilder::new(
-        "select to_char(o.expected_close_date, 'YYYY-MM'), count(*) filter (where o.status = 'Open'), \
-         coalesce(sum(o.base_amount) filter (where o.status = 'Open'), 0), coalesce(sum(o.base_weighted_amount) filter (where o.status = 'Open'), 0), \
-         coalesce(sum(o.base_amount) filter (where o.status = 'Won'), 0) \
-         from e_opportunity o where o.status in ('Open', 'Won') and o.tenant_id = ",
-    );
+    let group_by = p.str("group_by").unwrap_or("Owner");
+    let label = match group_by {
+        "Owner" => "coalesce(o.assigned_to, '(unassigned)')",
+        "Month" => "to_char(case when o.status = 'Won' then o.closed_on else o.expected_close_date end, 'YYYY-MM')",
+        other => return Err(Error::field("group_by", format!("cannot group by '{other}'"))),
+    };
+    let sum = |cat: &str| format!("coalesce(sum(o.base_amount) filter (where {CATEGORY} = '{cat}'), 0)");
+    let mut qb = QueryBuilder::new(format!(
+        "select {label}, count(*) filter (where o.status = 'Open'), {}, {}, {}, {}, \
+         coalesce(sum(o.base_weighted_amount) filter (where o.status = 'Open'), 0) \
+         from e_opportunity o left join e_sales_stage s on s.tenant_id = o.tenant_id and s.id = o.sales_stage \
+         where {CATEGORY} <> 'Omitted' and o.tenant_id = ",
+        sum("Closed"),
+        sum("Commit"),
+        sum("Best Case"),
+        sum("Pipeline")
+    ));
     qb.push_bind(ctx.tenant).push(" and o.company = ").push_bind(co.id);
-    qb.push(" and o.expected_close_date >= ").push_bind(from).push(" and o.expected_close_date <= ").push_bind(to);
-    if let Some(owner) = p.str("assigned_to") {
-        qb.push(" and o.assigned_to = ").push_bind(owner.to_lowercase());
+    qb.push(" and ((o.status = 'Open' and o.expected_close_date between ").push_bind(from).push(" and ").push_bind(to);
+    qb.push(") or (o.status = 'Won' and o.closed_on between ").push_bind(from).push(" and ").push_bind(to).push("))");
+    let owner = p.str("assigned_to").map(str::to_lowercase);
+    if let Some(owner) = &owner {
+        qb.push(" and o.assigned_to = ").push_bind(owner.clone());
     }
+    let pipeline = in_pipeline(p, &mut qb, "o")?;
     scope(k, ctx, "Opportunity", &mut qb, "o")?;
     qb.push(" group by 1 order by 1");
-    let data: Vec<(String, i64, Decimal, Decimal, Decimal)> = qb.build_query_as().fetch_all(&mut **tx).await?;
+    let data: Vec<(String, i64, Decimal, Decimal, Decimal, Decimal, Decimal)> = qb.build_query_as().fetch_all(&mut **tx).await?;
     let mut undated = QueryBuilder::new("select count(*) from e_opportunity o where o.status = 'Open' and o.expected_close_date is null and o.tenant_id = ");
     undated.push_bind(ctx.tenant).push(" and o.company = ").push_bind(co.id);
+    if let Some(owner) = owner {
+        undated.push(" and o.assigned_to = ").push_bind(owner);
+    }
+    in_pipeline(p, &mut undated, "o")?;
     scope(k, ctx, "Opportunity", &mut undated, "o")?;
     let undated: i64 = undated.build_query_scalar().fetch_one(&mut **tx).await?;
-    let (mut amount, mut weighted, mut won) = (Decimal::ZERO, Decimal::ZERO, Decimal::ZERO);
+    let row = |group: &str, n: i64, v: [Decimal; 5]| json!({"group": group, "count": n, "closed": money(v[0]), "commit": money(v[1]), "best_case": money(v[2]), "pipeline": money(v[3]), "weighted": money(v[4])});
+    let (mut count, mut t) = (0i64, [Decimal::ZERO; 5]);
     let rows: Vec<Value> = data
         .into_iter()
-        .map(|(month, count, a, w, x)| {
-            amount += a;
-            weighted += w;
-            won += x;
-            json!({"month": month, "count": count, "amount": money(a), "weighted": money(w), "won": money(x)})
+        .map(|(group, n, closed, commit, best, pipe, weighted)| {
+            let v = [closed, commit, best, pipe, weighted];
+            count += n;
+            for (x, y) in t.iter_mut().zip(v) {
+                *x += y;
+            }
+            row(&group, n, v)
         })
         .collect();
     Ok(json!({
-        "columns": [col("month", "Month", "data"), col("count", "Open Deals", "int"), col("amount", "Amount", "currency"), col("weighted", "Weighted", "currency"), col("won", "Won", "currency")],
+        "columns": [col("group", group_by, "data"), col("count", "Open Deals", "int"), col("closed", "Closed", "currency"), col("commit", "Commit", "currency"),
+            col("best_case", "Best Case", "currency"), col("pipeline", "Pipeline", "currency"), col("weighted", "Weighted", "currency")],
         "rows": rows,
-        "totals": {"amount": money(amount), "weighted": money(weighted), "won": money(won)},
-        "meta": {"from_date": from, "to_date": to, "without_a_date": undated},
+        "totals": row("Total", count, t),
+        "meta": {"from_date": from, "to_date": to, "group_by": group_by, "pipeline": pipeline, "without_a_date": undated},
     }))
 }
 
@@ -152,15 +190,22 @@ async fn pipeline(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Pa
     if let Some(t) = to {
         qb.push(" and o.expected_close_date <= ").push_bind(t);
     }
+    let only = in_pipeline(p, &mut qb, "o")?;
     scope(k, ctx, "Opportunity", &mut qb, "o")?;
     qb.push(" group by o.sales_stage");
     let data: Vec<(Option<Uuid>, i64, Decimal, Decimal)> = qb.build_query_as().fetch_all(&mut **tx).await?;
     let mut by_stage: HashMap<Option<Uuid>, (i64, Decimal, Decimal)> = data.into_iter().map(|(s, c, a, w)| (s, (c, a, w))).collect();
-    let stages: Vec<(Uuid, Option<String>, Option<Decimal>, Option<String>)> =
-        sqlx::query_as("select id, stage_name, probability, outcome from e_sales_stage where tenant_id = $1 order by stage_order, stage_name")
-            .bind(ctx.tenant)
-            .fetch_all(&mut **tx)
-            .await?;
+    // A stage is named with its pipeline where the report spans several.
+    let stages: Vec<(Uuid, Option<String>, Option<Decimal>, Option<String>)> = sqlx::query_as(
+        "select s.id, case when (select count(*) from e_sales_pipeline p where p.tenant_id = $1) > 1 and $2::uuid is null \
+         then coalesce(p.pipeline_name || ': ', '') || s.stage_name else s.stage_name end, s.probability, s.outcome \
+         from e_sales_stage s left join e_sales_pipeline p on p.tenant_id = s.tenant_id and p.id = s.pipeline \
+         where s.tenant_id = $1 and ($2::uuid is null or s.pipeline = $2) order by p.pipeline_name nulls first, s.stage_order, s.stage_name",
+    )
+    .bind(ctx.tenant)
+    .bind(only)
+    .fetch_all(&mut **tx)
+    .await?;
     let (mut count, mut amount, mut weighted) = (0i64, Decimal::ZERO, Decimal::ZERO);
     let mut rows = Vec::new();
     let mut push = |stage: String, probability: Option<Decimal>, (c, a, w): (i64, Decimal, Decimal)| {
@@ -576,7 +621,7 @@ async fn quotations(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &
             col("per_ordered", "% Ordered", "decimal"), col("ordered_amount", "Ordered (Company Currency)", "currency")],
         "rows": rows,
         "totals": {"count": count, "quoted": money(quoted), "ordered": money(ordered), "open": sum("Open"), "partially_ordered": sum("Partially Ordered"),
-            "lost": sum("Lost"), "expired": sum("Expired"), "conversion_pct": money(pct(ordered, quoted)),
+            "lost": sum("Lost"), "expired": sum("Expired"), "sent": sum("Sent"), "accepted": sum("Accepted"), "rejected": sum("Rejected"), "conversion_pct": money(pct(ordered, quoted)),
             "win_rate_pct": money(pct(Decimal::from(converted), Decimal::from(count)))},
         "meta": {"from_date": from, "to_date": to, "truncated": truncated},
     }))
@@ -600,6 +645,7 @@ async fn win_rate(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: &Pa
     ));
     qb.push_bind(ctx.tenant).push(" and o.company = ").push_bind(co.id);
     qb.push(" and o.closed_on >= ").push_bind(from).push(" and o.closed_on <= ").push_bind(to);
+    in_pipeline(p, &mut qb, "o")?;
     scope(k, ctx, "Opportunity", &mut qb, "o")?;
     qb.push(" group by 1 order by 1");
     let data: Vec<(String, i64, i64, Decimal, Decimal)> = qb.build_query_as().fetch_all(&mut **tx).await?;
@@ -651,6 +697,7 @@ async fn sales_cycle(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: 
     qb.push_bind(zone).push(")::date)::int from e_opportunity o where o.status = 'Won' and o.tenant_id = ").push_bind(ctx.tenant);
     qb.push(" and o.company = ").push_bind(co.id);
     qb.push(" and o.closed_on >= ").push_bind(from).push(" and o.closed_on <= ").push_bind(to);
+    let only = in_pipeline(p, &mut qb, "o")?;
     scope(k, ctx, "Opportunity", &mut qb, "o")?;
     qb.push(" limit ").push_bind(MAX_ROWS);
     let deals: Vec<(Uuid, String, i32)> = qb.build_query_as().fetch_all(&mut **tx).await?;
@@ -682,10 +729,17 @@ async fn sales_cycle(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p: 
             .bind(&ids)
             .fetch_all(&mut **tx)
             .await?;
-            let stages: Vec<(Uuid, String)> = sqlx::query_as("select id, stage_name from e_sales_stage where tenant_id = $1 order by stage_order, stage_name")
-                .bind(ctx.tenant)
-                .fetch_all(&mut **tx)
-                .await?;
+            // Stages are named with their pipeline where the deals span several.
+            let stages: Vec<(Uuid, String)> = sqlx::query_as(
+                "select s.id, case when (select count(*) from e_sales_pipeline p where p.tenant_id = $1) > 1 and $2::uuid is null \
+                 then coalesce(p.pipeline_name || ': ', '') || s.stage_name else s.stage_name end \
+                 from e_sales_stage s left join e_sales_pipeline p on p.tenant_id = s.tenant_id and p.id = s.pipeline \
+                 where s.tenant_id = $1 order by p.pipeline_name nulls first, s.stage_order, s.stage_name",
+            )
+            .bind(ctx.tenant)
+            .bind(only)
+            .fetch_all(&mut **tx)
+            .await?;
             for deal in &ids {
                 let mine: Vec<_> = events.iter().filter(|e| e.0 == *deal).map(|e| (e.1, e.2.as_deref().and_then(|v| v.parse().ok()))).collect();
                 for (stage, days) in stage_days(&mine) {
@@ -729,6 +783,7 @@ async fn lost_reasons(k: &Kernel, ctx: &Ctx, tx: &mut Tx, co: &ReportCompany, p:
     if let Some(owner) = p.str("assigned_to") {
         qb.push(" and o.assigned_to = ").push_bind(owner.to_lowercase());
     }
+    in_pipeline(p, &mut qb, "o")?;
     scope(k, ctx, "Opportunity", &mut qb, "o")?;
     qb.push(" limit ").push_bind(MAX_ROWS);
     let data: Vec<(String, Decimal, Vec<String>)> = qb.build_query_as().fetch_all(&mut **tx).await?;
