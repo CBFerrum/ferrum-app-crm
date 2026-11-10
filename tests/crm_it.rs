@@ -708,8 +708,9 @@ async fn scenario() {
 
     // ── a forecast by month, weighted, and honest about what has no date ──
     let month = today().format("%Y-%m").to_string();
-    let forecast = maria.report("sales_forecast", &[company_param.clone(), ("from_date", today().to_string()), ("to_date", today().to_string())]).await;
-    let row = forecast["rows"].as_array().unwrap().iter().find(|r| r["month"] == json!(month)).cloned();
+    let by_month = [company_param.clone(), ("from_date", today().to_string()), ("to_date", today().to_string()), ("group_by", "Month".into())];
+    let forecast = maria.report("sales_forecast", &by_month).await;
+    let row = forecast["rows"].as_array().unwrap().iter().find(|r| r["group"] == json!(month)).cloned();
     assert!(row.is_some(), "{forecast}");
     assert!(forecast["meta"]["without_a_date"].as_i64().unwrap() >= 1, "their deal has no date: counted apart, {forecast}");
 
@@ -828,6 +829,7 @@ async fn scenario() {
     crm_alone(&k).await;
     day_one(&k).await;
     assign_and_remind(&k).await;
+    pipelines_and_quotes(&k).await;
 }
 
 /// CRM in a workspace without ERP (docs/plan/apps-ui.md §13): contacts, customers and items are the
@@ -1589,4 +1591,435 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
         [2, 1, 7, 1, 1, 0, 4]
     );
     assert!(maria.report("activity_by_person", &with(("period", "Week"))).await["rows"].as_array().is_some_and(|r| !r.is_empty()));
+}
+
+/// A team arriving with two pipelines (new business and renewals): the upgrade's migration on data
+/// made the old way, a stage name in both, deals moved across, the board's and the reports' data per
+/// pipeline, what a stage asks of a deal entering it, contacts with buying roles, lines priced from a
+/// price list in another currency, a quotation sent, rejected, revised twice and ordered, and the
+/// forecast by owner and category on known figures.
+async fn pipelines_and_quotes(k: &Arc<Kernel>) {
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: "pipes".into(),
+            name: "Pipes".into(),
+            admin_email: "admin@pipes.test".into(),
+            admin_password: PASSWORD.into(),
+            admin_name: None,
+            packages: vec!["crm".into(), "crm_erp".into()],
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": *ZONE})),
+        })
+        .await
+        .expect("tenant");
+    let session = k.login("pipes", "admin@pipes.test", PASSWORD).await.expect("login");
+    let admin = U { k: k.clone(), ctx: k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx") };
+    let inr = admin.one("Currency", json!({"code": "INR"})).await;
+    let usd = admin.one("Currency", json!({"code": "USD"})).await;
+    let company = admin.insert("Company", json!({"company_name": "Pipes", "abbr": "PP", "default_currency": inr["id"]})).await;
+    let cid = uid(&company).to_string();
+    let group = admin.one("ItemGroup", json!({"group_name": "Products"})).await;
+    let nos = admin.one("Uom", json!({"uom_name": "Nos"})).await;
+    let pack = admin.insert("Uom", json!({"uom_name": "Pack"})).await;
+    let widget = uid(&admin
+        .insert(
+            "Item",
+            json!({"item_code": "W", "item_name": "Widget", "item_group": group["id"], "stock_uom": nos["id"], "standard_rate": "100",
+                   "uoms": [{"uom": pack["id"], "conversion_factor": "10"}]}),
+        )
+        .await)
+    .to_string();
+    let gadget = uid(&admin
+        .insert("Item", json!({"item_code": "G", "item_name": "Gadget", "item_group": group["id"], "stock_uom": nos["id"], "standard_rate": "40"}))
+        .await)
+    .to_string();
+    let user = |email: &'static str, roles: &'static [&'static str]| {
+        let (k, admin_ctx) = (k.clone(), admin.ctx.clone());
+        async move {
+            let roles: Vec<String> = roles.iter().map(|r| r.to_string()).collect();
+            let id = k.create_user(&admin_ctx, email, email, Some(PASSWORD), &roles, false).await.expect("user");
+            U { ctx: k.load_ctx(tenant, id, None, "it".into()).await.expect("user ctx"), k }
+        }
+    };
+    let anna = user("anna@pipes.test", &["Sales User"]).await;
+    let maria = user("maria@pipes.test", &["Sales Manager"]).await;
+    user("ben@pipes.test", &["Sales User"]).await;
+    let acme = admin.insert("Customer", json!({"customer_name": "Acme"})).await["id"].clone();
+    let idv = |v: &Value| -> Uuid { v.as_str().unwrap().parse().unwrap() };
+    let deal = |title: &str, extra: Value| {
+        let mut v = json!({"opportunity_from": "Customer", "customer": acme.clone(), "title": title});
+        v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap());
+        v
+    };
+
+    // ───────────── one pipeline out of the box, and the upgrade's migration ─────────────
+    let sales = admin.one("SalesPipeline", json!({})).await;
+    assert_eq!((sales["pipeline_name"].clone(), sales["is_default"].clone()), (json!("Sales Pipeline"), json!(true)));
+    let stages = admin.list("SalesStage", json!({"pipeline": sales["id"]})).await;
+    assert_eq!(stages.len(), 7, "the seeded stages are its");
+    let stage = |pipeline: &Value, name: &'static str| {
+        let (admin, pipeline) = (&admin, pipeline.clone());
+        async move { admin.one("SalesStage", json!({"pipeline": pipeline, "stage_name": name})).await["id"].clone() }
+    };
+    let proposal = stage(&sales["id"], "Proposal").await;
+    let negotiation = stage(&sales["id"], "Negotiation").await;
+    // Deals made as 0.9.0 made them: an open one, a won one and a lost one, each remembering its last open stage.
+    let open = uid(&anna.insert("Opportunity", deal("Open one", json!({"sales_stage": proposal, "amount": "100"}))).await);
+    let won = uid(&anna.insert("Opportunity", deal("Won one", json!({"sales_stage": negotiation, "amount": "200"}))).await);
+    anna.action("Opportunity", won, "mark_won", json!({})).await;
+    let lost = uid(&anna.insert("Opportunity", deal("Lost one", json!({"sales_stage": proposal}))).await);
+    anna.action("Opportunity", lost, "mark_lost", json!({"lost_reason": "Price"})).await;
+    let mut before = Vec::new();
+    for d in [open, won, lost] {
+        before.push(admin.get("Opportunity", d).await);
+    }
+    let stages_before = admin.list("SalesStage", json!({})).await;
+    sql(k, "update e_opportunity set pipeline = null where tenant_id = $1", tenant).await;
+    sql(k, "update e_sales_stage set pipeline = null where tenant_id = $1", tenant).await;
+    sql(k, "delete from e_sales_pipeline where tenant_id = $1", tenant).await;
+    let mut tx = k.db.system_tx().await.unwrap();
+    sqlx::raw_sql(include_str!("../packages/crm/sql/004_pipelines.sql")).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let sales = admin.one("SalesPipeline", json!({})).await;
+    assert_eq!((sales["pipeline_name"].clone(), sales["is_default"].clone()), (json!("Sales Pipeline"), json!(true)), "one pipeline, the default");
+    let without = |mut d: Doc| {
+        d.remove("pipeline");
+        d.remove("_titles");
+        d
+    };
+    let stages_after = admin.list("SalesStage", json!({})).await;
+    assert!(stages_after.iter().all(|s| s["pipeline"] == sales["id"]), "every stage in it");
+    assert_eq!(
+        stages_after.into_iter().map(without).collect::<Vec<_>>(),
+        stages_before.into_iter().map(without).collect::<Vec<_>>(),
+        "stages otherwise untouched"
+    );
+    for (d, was) in [open, won, lost].into_iter().zip(before) {
+        let now = admin.get("Opportunity", d).await;
+        assert_eq!(now["pipeline"], sales["id"], "every deal in it");
+        assert_eq!(without(now), without(was), "nothing else changed");
+    }
+    // The won deal reopens where it last stood open, in its pipeline.
+    anna.action("Opportunity", won, "reopen", json!({})).await;
+    assert_eq!(anna.get("Opportunity", won).await["sales_stage"], negotiation);
+    let (proposal, negotiation) = (stage(&sales["id"], "Proposal").await, stage(&sales["id"], "Negotiation").await);
+    let prospecting = stage(&sales["id"], "Prospecting").await;
+    let qualification = stage(&sales["id"], "Qualification").await;
+
+    // ───────────── a second pipeline, with a stage of the same name ─────────────
+    refused(anna.k.insert(&anna.ctx, "SalesPipeline", obj(json!({"pipeline_name": "Mine"}))).await, "not permitted");
+    let renewals = maria.insert("SalesPipeline", json!({"pipeline_name": "Renewals"})).await;
+    assert_eq!(renewals["is_default"], json!(false));
+    let rp = renewals["id"].clone();
+    for (name, order, probability, outcome, category) in [
+        ("Up for Renewal", 1, "50", "Open", "Pipeline"),
+        ("Proposal", 2, "70", "Open", "Commit"),
+        ("Renewed", 3, "100", "Won", "Pipeline"),
+        ("Churned", 4, "0", "Lost", "Pipeline"),
+    ] {
+        maria
+            .insert(
+                "SalesStage",
+                json!({"pipeline": rp, "stage_name": name, "stage_order": order, "probability": probability, "outcome": outcome, "forecast_category": category}),
+            )
+            .await;
+    }
+    let twice = maria.k.insert(&maria.ctx, "SalesStage", obj(json!({"pipeline": rp, "stage_name": "Proposal", "probability": "1"}))).await;
+    assert!(matches!(&twice, Err(Error::Conflict(m)) if m.contains("already has this Pipeline and Stage Name")), "{twice:?}");
+    let (up, r_proposal) = (stage(&rp, "Up for Renewal").await, stage(&rp, "Proposal").await);
+    assert_ne!(r_proposal, proposal, "two stages called Proposal, one in each");
+    // A stage made without a pipeline is the default's.
+    let demo = maria.insert("SalesStage", json!({"stage_name": "Demo", "probability": "30", "stage_order": 3})).await;
+    assert_eq!(demo["pipeline"], sales["id"]);
+
+    // A deal is where its stage is; with neither, at the default's first open stage.
+    let r1 = uid(&anna.insert("Opportunity", deal("Acme renewal", json!({"sales_stage": r_proposal, "amount": "1000"}))).await);
+    let r1d = anna.get("Opportunity", r1).await;
+    assert_eq!((r1d["pipeline"].clone(), dec(&r1d["probability"])), (rp.clone(), n("70")));
+    let plain = anna.insert("Opportunity", deal("Plain", json!({}))).await;
+    assert_eq!((plain["pipeline"].clone(), plain["sales_stage"].clone()), (sales["id"].clone(), prospecting.clone()));
+    refused(
+        anna.k.insert(&anna.ctx, "Opportunity", obj(deal("Mixed", json!({"pipeline": rp, "sales_stage": proposal})))).await,
+        "is not a stage of pipeline Renewals",
+    );
+    // Moved to another pipeline: its first open stage, and its history says so.
+    let moved = anna.update("Opportunity", uid(&plain), json!({"pipeline": rp})).await;
+    assert_eq!((moved["sales_stage"].clone(), dec(&moved["probability"])), (up.clone(), n("50")));
+    let story = k.audit_trail(&anna.ctx, "Opportunity", uid(&plain)).await.unwrap();
+    assert!(story["events"].as_array().unwrap().iter().any(|e| e["diff"].get("pipeline").is_some() && e["diff"].get("sales_stage").is_some()), "{story}");
+    // With a stage of it given: that stage.
+    let given = anna.update("Opportunity", open, json!({"pipeline": rp, "sales_stage": r_proposal})).await;
+    assert_eq!((given["pipeline"].clone(), given["sales_stage"].clone()), (rp.clone(), r_proposal.clone()));
+    // Another pipeline's stage chosen alone takes the deal there.
+    let back = anna.update("Opportunity", open, json!({"sales_stage": negotiation})).await;
+    assert_eq!(back["pipeline"], sales["id"]);
+    // Won, reopened and lost within its pipeline.
+    anna.action("Opportunity", r1, "mark_won", json!({})).await;
+    assert_eq!(anna.get("Opportunity", r1).await["sales_stage"], stage(&rp, "Renewed").await);
+    anna.action("Opportunity", r1, "reopen", json!({})).await;
+    assert_eq!(anna.get("Opportunity", r1).await["sales_stage"], r_proposal, "where it stood, in Renewals");
+    // The board's data, one pipeline at a time.
+    let board = |p: Value| {
+        let maria = &maria;
+        async move {
+            let stages: Vec<String> = maria
+                .list("SalesStage", json!({"pipeline": p, "disabled": false, "outcome": "Open"}))
+                .await
+                .iter()
+                .map(|s| s["stage_name"].as_str().unwrap().to_string())
+                .collect();
+            let mut deals: Vec<String> =
+                maria.list("Opportunity", json!({"pipeline": p, "status": "Open"})).await.iter().map(|d| d["title"].as_str().unwrap().to_string()).collect();
+            deals.sort();
+            (stages.len(), deals)
+        }
+    };
+    assert_eq!(board(rp.clone()).await, (2, vec!["Acme renewal".to_string(), "Plain".to_string()]));
+    assert_eq!(board(sales["id"].clone()).await, (6, vec!["Open one".to_string(), "Won one".to_string()]));
+    let span = [("company", cid.clone())];
+    let pipe = maria.report("sales_pipeline", &[span[0].clone(), ("pipeline", rp.as_str().unwrap().to_string())]).await;
+    let names: Vec<&str> = pipe["rows"].as_array().unwrap().iter().map(|r| r["sales_stage"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Up for Renewal", "Proposal"], "the pipeline's own stages");
+    assert_eq!((pipe["totals"]["count"].clone(), dec(&pipe["totals"]["amount"])), (json!(2), n("1000")));
+    let all = maria.report("sales_pipeline", &span).await;
+    assert!(all["rows"].as_array().unwrap().iter().any(|r| r["sales_stage"] == json!("Renewals: Proposal")), "named with their pipeline: {all}");
+
+    // Neither a stage nor a pipeline deals stand in is disabled or deleted; the refusal counts them.
+    refused(maria.k.update(&maria.ctx, "SalesStage", idv(&r_proposal), obj(json!({"disabled": true})), None).await, "1 open deal stands in stage Proposal");
+    refused(maria.k.delete(&maria.ctx, "SalesStage", idv(&up), None).await, "1 deal stands in stage Up for Renewal");
+    refused(maria.k.update(&maria.ctx, "SalesPipeline", uid(&renewals), obj(json!({"disabled": true})), None).await, "2 open deals stand in pipeline Renewals");
+    refused(maria.k.delete(&maria.ctx, "SalesPipeline", uid(&renewals), None).await, "2 deals stand in pipeline Renewals");
+    refused(maria.k.update(&maria.ctx, "SalesPipeline", uid(&sales), obj(json!({"disabled": true})), None).await, "is the default");
+    refused(maria.k.update(&maria.ctx, "SalesPipeline", uid(&sales), obj(json!({"is_default": false})), None).await, "make another one the default");
+    // One default: making Renewals the default makes it the only one.
+    maria.update("SalesPipeline", uid(&renewals), json!({"is_default": true})).await;
+    assert_eq!(maria.get("SalesPipeline", uid(&sales)).await["is_default"], json!(false));
+    maria.update("SalesPipeline", uid(&sales), json!({"is_default": true})).await;
+    assert_eq!(maria.get("SalesPipeline", uid(&renewals)).await["is_default"], json!(false));
+    // An empty pipeline goes with its stages; a disabled one takes no deal.
+    let trials = maria.insert("SalesPipeline", json!({"pipeline_name": "Trials"})).await;
+    let trial = maria.insert("SalesStage", json!({"pipeline": trials["id"], "stage_name": "Trying", "probability": "5"})).await;
+    maria.update("SalesPipeline", uid(&trials), json!({"disabled": true})).await;
+    refused(anna.k.update(&anna.ctx, "Opportunity", open, obj(json!({"pipeline": trials["id"]})), None).await, "pipeline Trials is disabled");
+    maria.k.delete(&maria.ctx, "SalesPipeline", uid(&trials), None).await.expect("an empty pipeline goes");
+    refused(maria.k.get(&maria.ctx, "SalesStage", uid(&trial), false).await, "not found");
+
+    // ───────────── the forecast: by owner and category, on known figures ─────────────
+    let co2 = admin.insert("Company", json!({"company_name": "Forecast Co", "abbr": "FC", "default_currency": inr["id"]})).await;
+    let c2 = uid(&co2).to_string();
+    let day = today().to_string();
+    let forecast_deal = |who: &'static str, amount: &'static str, at: Value, extra: Value| {
+        let (maria, c2, acme, day) = (&maria, c2.clone(), acme.clone(), day.clone());
+        async move {
+            let mut v = json!({"opportunity_from": "Customer", "customer": acme, "company": c2, "amount": amount, "assigned_to": who, "sales_stage": at,
+                               "expected_close_date": day, "title": format!("{who} {amount}")});
+            v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap());
+            uid(&maria.insert("Opportunity", v).await)
+        }
+    };
+    let needs = stage(&sales["id"], "Needs Analysis").await;
+    forecast_deal("anna@pipes.test", "1000", negotiation.clone(), json!({})).await; // Commit, 80%
+    forecast_deal("anna@pipes.test", "2000", proposal.clone(), json!({})).await; // Best Case, 60%
+    forecast_deal("anna@pipes.test", "500", prospecting.clone(), json!({"forecast_category": "Commit"})).await; // a person's call, 10%
+    forecast_deal("anna@pipes.test", "700", qualification.clone(), json!({"forecast_category": "Omitted"})).await;
+    forecast_deal("anna@pipes.test", "999", r_proposal.clone(), json!({})).await; // Renewals' Proposal: Commit, 70%
+    let closed = forecast_deal("ben@pipes.test", "3000", negotiation.clone(), json!({})).await;
+    maria.action("Opportunity", closed, "mark_won", json!({})).await;
+    forecast_deal("ben@pipes.test", "400", prospecting.clone(), json!({"expected_close_date": null})).await;
+    forecast_deal("ben@pipes.test", "600", needs.clone(), json!({})).await; // Pipeline, 40%
+    let gone = forecast_deal("ben@pipes.test", "900", proposal.clone(), json!({})).await;
+    maria.action("Opportunity", gone, "mark_lost", json!({"lost_reason": "Price"})).await;
+    let period = |extra: &[(&'static str, String)]| {
+        let mut p = vec![
+            ("company", c2.clone()),
+            ("from_date", (today() - chrono::Duration::days(30)).to_string()),
+            ("to_date", (today() + chrono::Duration::days(30)).to_string()),
+        ];
+        p.extend_from_slice(extra);
+        p
+    };
+    let figures = |r: &Value, group: &str| {
+        let row = if group == "Total" {
+            r["totals"].clone()
+        } else {
+            r["rows"].as_array().unwrap().iter().find(|x| x["group"] == json!(group)).cloned().unwrap_or_else(|| panic!("{group} in {r}"))
+        };
+        (row["count"].as_i64().unwrap(), ["closed", "commit", "best_case", "pipeline", "weighted"].map(|f| dec(&row[f])))
+    };
+    let f = maria.report("sales_forecast", &period(&[])).await;
+    assert_eq!(figures(&f, "anna@pipes.test"), (4, [n("0"), n("2499"), n("2000"), n("0"), n("2749.30")]), "{f}");
+    assert_eq!(figures(&f, "ben@pipes.test"), (1, [n("3000"), n("0"), n("0"), n("600"), n("240")]), "{f}");
+    assert_eq!(figures(&f, "Total"), (5, [n("3000"), n("2499"), n("2000"), n("600"), n("2989.30")]));
+    assert_eq!(f["meta"]["without_a_date"], json!(1), "counted apart");
+    let only = maria.report("sales_forecast", &period(&[("pipeline", sales["id"].as_str().unwrap().to_string())])).await;
+    assert_eq!(figures(&only, "anna@pipes.test"), (3, [n("0"), n("1500"), n("2000"), n("0"), n("2050")]), "{only}");
+    let bens = maria.report("sales_forecast", &period(&[("assigned_to", "Ben@pipes.test".into())])).await;
+    assert_eq!(bens["rows"].as_array().map(Vec::len), Some(1));
+    let mine = anna.report("sales_forecast", &period(&[])).await;
+    assert!(mine["rows"].as_array().unwrap().iter().all(|r| r["group"] != json!("ben@pipes.test")), "a rep's forecast is their own: {mine}");
+
+    // ───────────── contacts with buying roles ─────────────
+    let role = |name: &'static str| {
+        let admin = &admin;
+        async move { admin.one("BuyingRole", json!({"role_name": name})).await["id"].clone() }
+    };
+    let ann = admin.insert("Contact", json!({"first_name": "Ann", "customer": acme})).await["id"].clone();
+    let raj = admin.insert("Contact", json!({"first_name": "Raj", "customer": acme})).await["id"].clone();
+    let rollout = uid(&anna.insert("Opportunity", deal("Acme rollout", json!({}))).await);
+    let two = anna
+        .update(
+            "Opportunity",
+            rollout,
+            json!({"contacts": [{"contact": ann, "role": role("Decision Maker").await}, {"contact": raj, "role": role("Finance").await}]}),
+        )
+        .await;
+    assert_eq!(two["contact"], ann, "the first is the primary");
+    assert_eq!(two["contacts"].as_array().unwrap().iter().filter(|c| c["is_primary"] == json!(true)).count(), 1);
+    let rows = two["contacts"].as_array().unwrap().clone();
+    let swapped =
+        anna.update("Opportunity", rollout, json!({"contacts": [{"id": rows[0]["id"], "is_primary": false}, {"id": rows[1]["id"], "is_primary": true}]})).await;
+    assert_eq!(swapped["contact"], raj, "the primary changed, and the deal's contact with it");
+    refused(
+        anna.k.update(&anna.ctx, "Opportunity", rollout, obj(json!({"contacts": [{"contact": ann}, {"contact": ann}]})), None).await,
+        "on the deal already",
+    );
+    // A contact on many deals; the deal's contact set alone joins its contacts as the primary.
+    let other = anna.update("Opportunity", open, json!({"contact": ann})).await;
+    assert_eq!((other["contacts"][0]["contact"].clone(), other["contacts"][0]["is_primary"].clone()), (ann.clone(), json!(true)));
+
+    // ───────────── what a stage asks of a deal entering it ─────────────
+    maria.update("SalesStage", idv(&proposal), json!({"requires_amount": true, "requires_close_date": true, "requires_primary_contact": true})).await;
+    maria.update("SalesStage", idv(&negotiation), json!({"requires_quotation": true, "requires_lines": true})).await;
+    let bare = uid(&anna.insert("Opportunity", deal("Bare", json!({}))).await);
+    refused(
+        anna.k.update(&anna.ctx, "Opportunity", bare, obj(json!({"sales_stage": proposal})), None).await,
+        "Proposal needs an amount, an expected close date and a primary contact before deal Bare enters it",
+    );
+    refused(anna.k.insert(&anna.ctx, "Opportunity", obj(deal("Straight in", json!({"sales_stage": proposal, "amount": "5"})))).await, "an expected close date");
+    // Losing it, or moving it back, is never held up.
+    let backwards = uid(&anna.insert("Opportunity", deal("Back", json!({"sales_stage": qualification}))).await);
+    anna.update("Opportunity", backwards, json!({"sales_stage": prospecting})).await;
+    anna.action("Opportunity", backwards, "mark_lost", json!({"lost_reason": "Timing"})).await;
+    // Met: the stage takes it.
+    let ready = anna.update("Opportunity", rollout, json!({"amount": "5000", "expected_close_date": day, "sales_stage": proposal})).await;
+    assert_eq!(ready["sales_stage"], proposal);
+    anna.update("Opportunity", rollout, json!({"sales_stage": qualification})).await;
+    refused(
+        anna.k.update(&anna.ctx, "Opportunity", rollout, obj(json!({"sales_stage": proposal, "expected_close_date": null})), None).await,
+        "an expected close date",
+    );
+    anna.update("Opportunity", rollout, json!({"sales_stage": proposal})).await;
+
+    // ───────────── lines priced from a price list in another currency ─────────────
+    let yesterday = (today() - chrono::Duration::days(1)).to_string();
+    admin.insert("ExchangeRate", json!({"from_currency": usd["id"], "to_currency": inr["id"], "rate": "83", "valid_from": yesterday})).await;
+    let usd_list = admin.insert("PriceList", json!({"price_list_name": "Export USD", "currency": usd["id"], "selling": true})).await["id"].clone();
+    admin.insert("ItemPrice", json!({"item": widget, "price_list": usd_list, "rate": "10", "valid_from": yesterday})).await;
+    let priced = anna
+        .update(
+            "Opportunity",
+            rollout,
+            json!({"price_list": usd_list, "items": [{"item": widget, "qty": "2", "discount_percent": "10"}, {"item": widget, "uom": pack["id"], "qty": "1"},
+                   {"item": gadget, "qty": "1", "rate": "35"}]}),
+        )
+        .await;
+    let lines = priced["items"].as_array().unwrap().clone();
+    assert_eq!(
+        lines.iter().map(|l| (dec(&l["rate"]), dec(&l["amount"]))).collect::<Vec<_>>(),
+        [(n("830"), n("1494")), (n("8300"), n("8300")), (n("35"), n("35"))],
+        "10 USD at 83, a pack of ten, and a rate a person typed"
+    );
+    assert_eq!((lines[0]["uom"].clone(), lines[1]["uom"].clone()), (nos["id"].clone(), pack["id"].clone()));
+    assert_eq!(dec(&priced["amount"]), n("9829"));
+    // The item changed on a line whose rate was not touched: priced again; a typed rate stays.
+    let repriced =
+        anna.update("Opportunity", rollout, json!({"items": [{"id": lines[0]["id"]}, {"id": lines[1]["id"]}, {"id": lines[2]["id"], "item": widget}]})).await;
+    assert_eq!(dec(&repriced["items"][2]["rate"]), n("830"), "another item, the rate left as it was: priced again");
+    let repriced = anna
+        .update(
+            "Opportunity",
+            rollout,
+            json!({"items": [{"id": lines[0]["id"]}, {"id": lines[1]["id"]}, {"id": lines[2]["id"], "item": gadget, "rate": "36"}]}),
+        )
+        .await;
+    assert_eq!(dec(&repriced["items"][2]["rate"]), n("36"), "a rate typed with it stays the person's");
+    refused(
+        anna.k.update(&anna.ctx, "Opportunity", rollout, obj(json!({"items": [{"item": gadget, "uom": pack["id"], "qty": "1"}]})), None).await,
+        "no conversion",
+    );
+    // The same list for a deal in dollars: no conversion.
+    let dollars =
+        anna.insert("Opportunity", deal("In dollars", json!({"currency": usd["id"], "price_list": usd_list, "items": [{"item": widget, "qty": "3"}]}))).await;
+    assert_eq!((dec(&dollars["items"][0]["rate"]), dec(&dollars["amount"])), (n("10"), n("30")));
+
+    // ───────────── a quotation sent, rejected, revised twice and ordered ─────────────
+    refused(anna.k.update(&anna.ctx, "Opportunity", rollout, obj(json!({"sales_stage": negotiation})), None).await, "a submitted quotation");
+    admin.insert("QuotationApprovalRule", json!({"rule_name": "Discounts", "discount_over": "5", "approver_role": "Sales Manager"})).await;
+    let q1 = vid(&anna.action("Opportunity", rollout, "make_quotation", json!({})).await);
+    let quote = anna.get("Quotation", q1).await;
+    assert_eq!((quote["price_list"].clone(), quote["contact"].clone(), quote["revision"].clone()), (usd_list.clone(), raj.clone(), json!(1)));
+    let carried: Vec<_> =
+        quote["items"].as_array().unwrap().iter().map(|l| (l["uom"].clone(), dec(&l["price_list_rate"]), dec(&l["discount_percent"]))).collect();
+    let dealt: Vec<_> = repriced["items"].as_array().unwrap().iter().map(|l| (l["uom"].clone(), dec(&l["rate"]), dec(&l["discount_percent"]))).collect();
+    assert_eq!(carried, dealt, "price list, units, rates and discounts carried unchanged");
+    assert_eq!(dec(&quote["net_total"]), dec(&repriced["amount"]));
+    anna.update("Quotation", q1, json!({"discount_percent": "8"})).await;
+    refused(anna.k.submit(&anna.ctx, "Quotation", q1, None).await, "approval");
+    maria.action("Quotation", q1, "approve_quotation", json!({})).await;
+    anna.submit("Quotation", q1).await;
+    let entered = anna.update("Opportunity", rollout, json!({"sales_stage": negotiation})).await;
+    assert_eq!(entered["sales_stage"], negotiation, "a submitted quotation and lines: Negotiation takes it");
+    assert_eq!(anna.action("Quotation", q1, "mark_sent", json!({})).await["status"], json!("Sent"));
+    assert_eq!(anna.get("Quotation", q1).await["sent_on"], json!(day));
+    refused(anna.k.run_action(&anna.ctx, "Quotation", q1, "mark_rejected", json!({})).await, "lost_reason");
+    let said = anna.action("Quotation", q1, "mark_rejected", json!({"lost_reason": "Price", "lost_detail": "Wants 15% off"})).await;
+    assert_eq!(said["status"], json!("Rejected"));
+    let rejected = anna.get("Quotation", q1).await;
+    assert_eq!(
+        (rejected["answer"].clone(), rejected["answered_by"].clone(), rejected["answered_on"].clone()),
+        (json!("Rejected"), json!("anna@pipes.test"), json!(day))
+    );
+    assert_eq!(anna.get("Opportunity", rollout).await["status"], json!("Open"), "rejecting its only quotation does not lose the deal");
+    refused(anna.k.run_action(&anna.ctx, "Quotation", q1, "make_sales_order", json!({})).await, "the customer rejected quotation");
+    refused(anna.k.run_action(&anna.ctx, "Quotation", q1, "mark_accepted", json!({})).await, "not available");
+    // Revised: the next number, linked both ways, and approved again.
+    anna.cancel("Quotation", q1).await;
+    let q2 = uid(&k.amend(&anna.ctx, "Quotation", q1).await.expect("amend"));
+    let second = anna.get("Quotation", q2).await;
+    assert_eq!((second["revision"].clone(), second["revision_of"].clone(), second["status"].clone()), (json!(2), json!(q1.to_string()), json!("Draft")));
+    assert!(second["approved_by"].is_null() && second["answer"].is_null() && second["sent_on"].is_null(), "{second:?}");
+    assert_eq!(anna.get("Quotation", q1).await["replaced_by"], json!(q2.to_string()), "the old one shows it was replaced");
+    anna.update("Quotation", q2, json!({"discount_percent": "12"})).await;
+    refused(anna.k.submit(&anna.ctx, "Quotation", q2, None).await, "approval");
+    maria.action("Quotation", q2, "approve_quotation", json!({})).await;
+    anna.submit("Quotation", q2).await;
+    anna.action("Quotation", q2, "mark_sent", json!({})).await;
+    anna.cancel("Quotation", q2).await;
+    let q3 = uid(&k.amend(&anna.ctx, "Quotation", q2).await.expect("amend"));
+    assert_eq!(anna.get("Quotation", q3).await["revision"], json!(3));
+    refused(anna.k.submit(&anna.ctx, "Quotation", q3, None).await, "approval");
+    maria.action("Quotation", q3, "approve_quotation", json!({})).await;
+    anna.submit("Quotation", q3).await;
+    let latest: Vec<Value> = anna.list("Quotation", json!({"opportunity": rollout.to_string()})).await.iter().map(|q| q["revision"].clone()).collect();
+    assert_eq!(latest, [json!(3), json!(2), json!(1)], "the latest revision first");
+    assert_eq!(anna.action("Quotation", q3, "mark_accepted", json!({})).await["status"], json!("Accepted"));
+    let order = vid(&anna.action("Quotation", q3, "make_sales_order", json!({})).await);
+    anna.submit("SalesOrder", order).await;
+    assert_eq!(anna.get("Quotation", q3).await["status"], json!("Ordered"));
+    let won_now = anna.get("Opportunity", rollout).await;
+    assert_eq!(
+        (won_now["status"].clone(), won_now["sales_stage"].clone()),
+        (json!("Won"), stage(&sales["id"], "Won").await),
+        "won by its order, in its pipeline"
+    );
+    // A sent quotation expires past its validity; an expired one is not ordered, and says why.
+    let late = uid(&anna.insert("Quotation", json!({"customer": acme, "items": [{"item": widget, "qty": "1"}], "valid_till": day})).await);
+    anna.submit("Quotation", late).await;
+    anna.action("Quotation", late, "mark_sent", json!({})).await;
+    sql(k, "update e_quotation set valid_till = current_date - 3 where id = $1", late).await;
+    ferrum_app_crm::maintenance(k).await.expect("maintenance");
+    assert_eq!(anna.get("Quotation", late).await["status"], json!("Expired"));
+    refused(anna.k.run_action(&anna.ctx, "Quotation", late, "make_sales_order", json!({})).await, "expired");
+    refused(anna.k.run_action(&anna.ctx, "Quotation", late, "mark_accepted", json!({})).await, "not available");
+    let reg = maria.report("quotation_register", &[("company", cid.clone()), ("status", "Rejected".into())]).await;
+    assert_eq!(reg["totals"]["count"], json!(0), "a rejected revision since replaced is cancelled");
 }
