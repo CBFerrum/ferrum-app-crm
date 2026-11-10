@@ -21,9 +21,12 @@
     - {name: website, type: url}
     - {name: status, type: select, options: [New, Contacted, Qualified, Converted, Lost, Junk], required: true, default: New, in_list: true, in_filter: true}
     - {name: lost_reason, type: link, to: LostReason, visible_if: "doc.status == 'Lost'", required_if: "doc.status == 'Lost'"}
-    - {name: assigned_to, type: email, default_expr: "user.email", label: Lead Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the lead"}
+    - {name: assigned_to, type: email, label: Lead Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the lead. Left empty, the assignment rules choose one, else it is yours"}
+    - {name: assignment_rule, type: link, to: LeadAssignmentRule, read_only: true, no_copy: true, in_filter: true, label: Assigned By Rule}
     - {name: next_follow_up, type: date, in_list: true, in_filter: true}
     - {name: last_contacted_on, type: date, read_only: true, no_copy: true}
+    - {name: last_touched_at, type: datetime, read_only: true, no_copy: true, in_filter: true, label: Last Touched, description: "When an activity on it was last logged or completed"}
+    - {name: untouched_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its owner was told nobody had touched it yet"}
     - name: source
       type: select
       in_filter: true
@@ -63,7 +66,7 @@
     - {name: conversion, type: json, read_only: true, hidden: true, no_copy: true, description: "What converting it made and changed, so that it can be undone"}
     - {name: notes, type: text}
   form:
-    - {label: Lead, fields: [first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, next_follow_up, last_contacted_on]}
+    - {label: Lead, fields: [first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, assignment_rule, next_follow_up, last_contacted_on, last_touched_at]}
     - {label: Contact Details, fields: [email, phone, mobile, website, unsubscribed, allow_duplicate, duplicate_of]}
     - {label: Source and Segment, fields: [source, campaign, prospect, territory, industry, company_size, annual_revenue, company]}
     - {label: Qualification, collapsible: true, fields: [budget, is_decision_maker, need, timeline, qualified_on, qualified_by]}
@@ -89,6 +92,11 @@
       condition: "doc.status == 'Converted'"
       confirm: "Give the lead back its deals, quotations and activities, and remove the customer, contact and address the conversion made?"
     - {name: make_opportunity, label: Create Opportunity, permission: read, condition: "doc.status != 'Lost' && doc.status != 'Junk'"}
+    - name: assign_by_rules
+      label: Assign by Rules
+      permission: write
+      condition: "doc.status == 'New' || doc.status == 'Contacted' || doc.status == 'Qualified'"
+      confirm: "Give this lead to the person its assignment rules choose?"
   list: {columns: [number, lead_name, organization_name, status, assigned_to, next_follow_up], sort: created_at desc}
 
 - name: OpportunityItem
@@ -154,10 +162,14 @@
     - {name: campaign, type: link, to: Campaign, in_filter: true}
     - {name: territory, type: link, to: Territory, in_filter: true}
     - {name: closed_on, type: date, read_only: true, no_copy: true}
+    - {name: stage_changed_at, type: datetime, read_only: true, no_copy: true, in_filter: true, label: In Stage Since}
+    - {name: last_activity_at, type: datetime, read_only: true, no_copy: true, in_filter: true, label: Last Activity, description: "When an activity on it was last logged or completed"}
+    - {name: quiet_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its owner was told nothing had been done on it"}
+    - {name: no_step_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its owner was told it had no next step"}
     - {name: notes, type: text}
   form:
     - {label: Opportunity, fields: [title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to]}
-    - {label: Pipeline, fields: [sales_stage, probability, status, lost_reason, lost_detail, expected_close_date, next_step, next_follow_up, closed_on]}
+    - {label: Pipeline, fields: [sales_stage, probability, status, lost_reason, lost_detail, expected_close_date, next_step, next_follow_up, stage_changed_at, last_activity_at, closed_on]}
     - {label: Value, fields: [currency, conversion_rate, items, amount, weighted_amount, base_amount, base_weighted_amount]}
     - {label: Competition, collapsible: true, fields: [competitors]}
     - {label: Source, collapsible: true, fields: [source, campaign, territory, company]}
@@ -196,8 +208,18 @@
     - {name: opportunity, type: link, to: Opportunity, in_filter: true}
     - {name: customer, type: link, to: Customer, in_filter: true}
     - {name: contact, type: link, to: Contact, in_filter: true}
+    - {name: call_outcome, type: select, options: [Reached, No Answer, Left Message, Busy, Wrong Number], label: Outcome, visible_if: "doc.activity_type == 'Call'", in_filter: true}
+    - {name: duration_minutes, type: int, min: 0, label: Duration (Minutes), visible_if: "doc.activity_type == 'Call' || doc.activity_type == 'Meeting'"}
     - {name: details, type: text}
     - {name: completed_at, type: datetime, read_only: true, no_copy: true}
+    - {name: overdue_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its assignee was told it is overdue"}
   actions:
-    - {name: complete, label: Mark as Done, permission: write, condition: "doc.status == 'Open'"}
+    - name: complete
+      label: Mark as Done
+      permission: write
+      condition: "doc.status == 'Open'"
+      params:
+        - {name: call_outcome, type: select, label: Outcome, options: [Reached, No Answer, Left Message, Busy, Wrong Number]}
+        - {name: duration_minutes, type: int, label: Duration (Minutes)}
+        - {name: next_follow_up, type: date, label: Next Follow Up, description: "On its deal, else its lead"}
   list: {columns: [subject, activity_type, status, due_at, assigned_to], sort: due_at asc}
