@@ -1,0 +1,44 @@
+- name: LeadAssignmentMember
+  label: Assignment Rule Member
+  kind: child
+  fields:
+    - {name: user, type: email, required: true, in_list: true, label: Person, description: "A user's email; inactive users are skipped"}
+
+- name: LeadAssignmentRule
+  label: Lead Assignment Rule
+  kind: master
+  module: crm
+  title_field: rule_name
+  description: "Gives a lead that arrives with no owner (from a form, a mail, an integration, an import, or entered with the owner left empty) to one of its people. Rules are tried in order; the first that matches and has an active person wins."
+  fields:
+    - {name: rule_name, type: data, label: Name, required: true, unique: true, in_list: true}
+    - {name: enabled, type: check, default: true, in_list: true, in_filter: true}
+    - {name: rule_order, type: int, required: true, default: 1, min: 0, label: Order, in_list: true, description: "Lower numbers are tried first"}
+    - {name: source, type: select, in_list: true, description: "Empty: any source",
+       options: [Website, Referral, Advertisement, Campaign, Cold Call, Email, Social Media, Trade Show, Partner, Existing Customer, Other]}
+    - {name: territory, type: link, to: Territory, in_list: true, description: "Empty: any territory; a territory takes the ones under it too"}
+    - {name: campaign, type: link, to: Campaign, description: "Empty: any campaign"}
+    - {name: company, type: link, to: Company, description: "Empty: any company"}
+    - {name: method, type: select, options: [In Turn, Fewest Open Leads], required: true, default: In Turn, in_list: true, label: Share Out,
+       description: "In Turn gives each person the next lead in their turn; Fewest Open Leads gives it to whoever holds the fewest new, contacted or qualified leads"}
+    - {name: people, type: table, of: LeadAssignmentMember, label: People}
+    - {name: last_assigned_to, type: email, read_only: true, no_copy: true, label: Last Given To, description: "Whose turn it was last"}
+  form:
+    - {label: Rule, fields: [rule_name, enabled, rule_order, method]}
+    - {label: Which Leads, fields: [source, territory, campaign, company]}
+    - {label: People, fields: [people, last_assigned_to]}
+  list: {columns: [rule_name, rule_order, source, territory, method, enabled], sort: rule_order asc}
+
+- name: CrmSettings
+  label: CRM Settings
+  kind: settings
+  module: crm
+  description: "When CRM reminds people of their work. Zero switches a reminder off; each person can also switch each kind off in their notification settings."
+  fields:
+    - {name: overdue_activity_hours, type: int, default: 1, min: 0, max: 720, label: Overdue Activity After (Hours), description: "Tell an activity's assignee once it is this many hours past due"}
+    - {name: untouched_lead_hours, type: int, default: 24, min: 0, max: 8760, label: Untouched New Lead After (Hours), description: "Tell a new lead's owner when nothing has been logged or planned on it this many hours after it arrived"}
+    - {name: quiet_deal_days, type: int, default: 14, min: 0, max: 3650, label: Quiet Deal After (Days), description: "Tell an open deal's owner when no activity was logged and its stage did not move for this many days"}
+    - {name: no_next_step_days, type: int, default: 1, min: 0, max: 3650, label: Deal Without Next Step After (Days),
+       description: "Tell an open deal's owner when it has no open activity, next step or follow-up date, and nothing moved on it for this many days"}
+  form:
+    - {label: Reminders, fields: [overdue_activity_hours, untouched_lead_hours, quiet_deal_days, no_next_step_days]}

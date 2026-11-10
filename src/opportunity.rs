@@ -24,6 +24,10 @@ impl DocHook for OpportunityHook {
             set(doc, "title", json!(s(doc, "party_name")));
         }
         stage(hc, doc, old.as_ref()).await?;
+        // Since when it stands where it stands.
+        if old.as_ref().is_none_or(|o| o.get("sales_stage") != doc.get("sales_stage")) || s(doc, "stage_changed_at").is_none() {
+            set(doc, "stage_changed_at", chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+        }
         if s(doc, "status") == Some("Open") {
             let at = doc.get("sales_stage").cloned().unwrap_or(Value::Null);
             set(doc, "open_stage", at);
