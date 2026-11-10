@@ -2001,6 +2001,14 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
     anna.submit("Quotation", q3).await;
     let latest: Vec<Value> = anna.list("Quotation", json!({"opportunity": rollout.to_string()})).await.iter().map(|q| q["revision"].clone()).collect();
     assert_eq!(latest, [json!(3), json!(2), json!(1)], "the latest revision first");
+    // Quotations from before 0.10.0 get their revisions and links from the platform's amendments.
+    sql(k, "update e_quotation set revision = null, revision_of = null, replaced_by = null where opportunity = $1", rollout).await;
+    let mut tx = k.db.system_tx().await.unwrap();
+    sqlx::raw_sql(include_str!("../packages/crm/sql/005_quotation_revisions.sql")).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    let (one, two, three) = (anna.get("Quotation", q1).await, anna.get("Quotation", q2).await, anna.get("Quotation", q3).await);
+    assert_eq!([&one["revision"], &two["revision"], &three["revision"]], [&json!(1), &json!(2), &json!(3)]);
+    assert_eq!((three["revision_of"].clone(), one["replaced_by"].clone(), two["replaced_by"].clone()), (json!(q2.to_string()), json!(q2.to_string()), json!(q3.to_string())));
     assert_eq!(anna.action("Quotation", q3, "mark_accepted", json!({})).await["status"], json!("Accepted"));
     let order = vid(&anna.action("Quotation", q3, "make_sales_order", json!({})).await);
     anna.submit("SalesOrder", order).await;
