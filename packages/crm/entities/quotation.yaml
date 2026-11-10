@@ -69,6 +69,7 @@
     - {name: answer_detail, type: text, read_only: true, no_copy: true, label: Rejection Detail}
     - {name: campaign, type: link, to: Campaign, in_filter: true}
     - {name: assigned_to, type: email, default_expr: "user.email", label: Quotation Owner, in_list: true, in_filter: true, description: "A user's email; the owner can see and edit the quotation"}
+    - {name: sales_team, type: link, to: SalesTeam, in_filter: true, description: "Empty: its owner's first team. Its manager sees and works it"}
     - {name: terms, type: text}
     - {name: needs_approval, type: check, read_only: true, no_copy: true, in_filter: true}
     - {name: rule_issues, type: text, read_only: true, no_copy: true, visible_if: "doc.rule_issues != null && doc.rule_issues != ''", label: Product Rules Broken, description: What the lines break of the product rules; it is not submitted until none are}
@@ -79,7 +80,7 @@
     - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
        description: "What was approved: the party, each line as quoted, the additional discount, taxes, currency, terms and validity. Any of them changed, it is approved again"}
   form:
-    - {label: Quotation, fields: [company, party_type, customer, lead, prospect, party_name, contact, opportunity, posting_date, valid_till, assigned_to]}
+    - {label: Quotation, fields: [company, party_type, customer, lead, prospect, party_name, contact, opportunity, posting_date, valid_till, assigned_to, sales_team]}
     - {label: Currency and Price List, collapsible: true, fields: [currency, conversion_rate, price_list]}
     - {label: Items, fields: [items]}
     - {label: Taxes, fields: [tax_template, taxes, discount_percent]}

@@ -45,9 +45,11 @@ impl DocHook for LeadHook {
             duplicates(hc, doc).await?;
         }
         owner(hc, doc, old.as_ref()).await?;
+        crate::accounts::follow_team(hc, doc, old.as_ref()).await?;
+        crate::consent::stamp(doc, old.as_ref(), hc.ctx.today());
         // Keeping a duplicate is decided save by save.
         set(doc, "allow_duplicate", false);
-        Ok(())
+        crate::score::on_save(hc, doc).await
     }
 
     async fn validate(&self, _hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
@@ -318,6 +320,9 @@ async fn convert(hc: &mut HookCtx<'_>, lead: &Doc, params: &Value) -> Result<Val
             if let Some(g) = params.get("customer_group").and_then(Value::as_str).filter(|v| !v.is_empty()) {
                 c.insert("customer_group".into(), json!(g));
             }
+            // The lead's owner looks after the account it becomes, in its territory.
+            c.insert("account_owner".into(), json!(s(lead, "assigned_to")));
+            c.insert("territory".into(), json!(s(lead, "territory")));
             create_for_user(hc, "Customer", c).await?
         }
     };
@@ -346,8 +351,11 @@ async fn convert(hc: &mut HookCtx<'_>, lead: &Doc, params: &Value) -> Result<Val
                 let mut v = Doc::new();
                 v.insert("customer".into(), json!(cid.to_string()));
                 hc.kernel.set_values_tx(&sctx, hc.tx, "Contact", ct_id, v).await?;
+                crate::accounts::join(hc, ct_id, "customer", cid, s(&ct, "designation"), None, true).await?;
                 done.insert("contact_attached".into(), json!(ct_id.to_string()));
             }
+            // What the lead refused stands for the person it is (a withdrawal is never undone).
+            refusals(hc, lead, &ct).await?;
             Some(ct)
         }
         (None, None, None) => None,
@@ -369,7 +377,10 @@ async fn convert(hc: &mut HookCtx<'_>, lead: &Doc, params: &Value) -> Result<Val
             ct.insert("phones".into(), Value::Array(phones));
             ct.insert("customer".into(), json!(cid.to_string()));
             ct.insert("lead".into(), json!(lead_id.to_string()));
-            ct.insert("unsubscribed".into(), json!(b(lead, "unsubscribed")));
+            for f in ["unsubscribed", "do_not_call"] {
+                ct.insert(f.into(), json!(b(lead, f)));
+            }
+            copy(lead, &mut ct, &["call_consent_on", "call_consent_how", "email_consent_on", "email_consent_how"]);
             copy(lead, &mut ct, &["prospect"]);
             let made = create_for_user(hc, "Contact", ct).await?;
             done.insert("contact".into(), json!(s(&made, "id")));
@@ -445,7 +456,8 @@ async fn convert(hc: &mut HookCtx<'_>, lead: &Doc, params: &Value) -> Result<Val
     Ok(out)
 }
 
-/// Sets (or clears) the customer of the records of `entity` that the filters find.
+/// Sets (or clears) the customer of the records of `entity` that the filters find. A contact is
+/// put at the customer (its primary), or taken off the one it is cleared of.
 async fn set_customer(hc: &mut HookCtx<'_>, entity: &str, filters: Vec<Filter>, customer: Option<Uuid>) -> Result<()> {
     let sctx = sys(hc.ctx);
     for d in find(hc.kernel, hc.ctx, hc.tx, entity, filters, None, 10_000).await? {
@@ -453,6 +465,32 @@ async fn set_customer(hc: &mut HookCtx<'_>, entity: &str, filters: Vec<Filter>, 
         let mut v = Doc::new();
         v.insert("customer".into(), json!(customer.map(|c| c.to_string())));
         hc.kernel.set_values_tx(&sctx, hc.tx, entity, rid, v).await?;
+        if entity == "Contact" {
+            match customer {
+                Some(c) => {
+                    crate::accounts::join(hc, rid, "customer", c, s(&d, "designation"), None, true).await?;
+                }
+                None => crate::accounts::unlink(hc, Some(rid), id(&d, "customer")).await?,
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A lead's do-not-call and unsubscribe, with when and how, onto a contact that exists already and
+/// still allows them.
+async fn refusals(hc: &mut HookCtx<'_>, lead: &Doc, contact: &Doc) -> Result<()> {
+    let Some(ct) = id(contact, "id") else { return Ok(()) };
+    let mut v = Doc::new();
+    for (flag, on, how) in [("do_not_call", "call_consent_on", "call_consent_how"), ("unsubscribed", "email_consent_on", "email_consent_how")] {
+        if b(lead, flag) && !b(contact, flag) {
+            v.insert(flag.into(), json!(true));
+            v.insert(on.into(), json!(s(lead, on).map(str::to_string).unwrap_or_else(|| hc.ctx.today().to_string())));
+            v.insert(how.into(), json!(s(lead, how)));
+        }
+    }
+    if !v.is_empty() {
+        hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Contact", ct, v).await?;
     }
     Ok(())
 }
@@ -531,8 +569,14 @@ async fn undo_conversion(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Value> {
         let mut v = Doc::new();
         v.insert("customer".into(), Value::Null);
         hc.kernel.set_values_tx(&sctx, hc.tx, "Contact", c, v).await?;
+        crate::accounts::unlink(hc, Some(c), Some(cid)).await?;
     }
     let customer_made = done.get("customer_created").and_then(Value::as_bool).unwrap_or(false).then_some(cid);
+    // The links of the contact and the customer it made go with them.
+    if made("contact").is_some() || customer_made.is_some() {
+        crate::accounts::unlink(hc, made("contact"), None).await?;
+        crate::accounts::unlink(hc, None, customer_made).await?;
+    }
     let mut removed = Vec::new();
     for (entity, rid) in [("Activity", made("note")), ("Address", made("address")), ("Contact", made("contact")), ("Customer", customer_made)] {
         let Some(rid) = rid else { continue };
