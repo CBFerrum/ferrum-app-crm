@@ -60,14 +60,22 @@ pub struct QuotationHook;
 #[async_trait]
 impl DocHook for QuotationHook {
     async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
-        // A lead's quotation follows the lead to its customer once the lead is converted.
-        if s(doc, "party_type") == Some("Lead") {
-            let lead = lookup(hc, "Lead", id(doc, "lead")).await?;
-            set(doc, "customer", json!(lead.as_ref().and_then(|l| s(l, "customer"))));
-            set(doc, "party_name", json!(lead.as_ref().and_then(|l| s(l, "organization_name").or(s(l, "lead_name")))));
-        } else {
-            let c = lookup(hc, "Customer", id(doc, "customer")).await?;
-            set(doc, "party_name", json!(c.as_ref().and_then(|c| s(c, "customer_name"))));
+        // A lead's (or a prospect's) quotation follows it to its customer once it becomes one.
+        match s(doc, "party_type") {
+            Some("Lead") => {
+                let lead = lookup(hc, "Lead", id(doc, "lead")).await?;
+                set(doc, "customer", json!(lead.as_ref().and_then(|l| s(l, "customer"))));
+                set(doc, "party_name", json!(lead.as_ref().and_then(|l| s(l, "organization_name").or(s(l, "lead_name")))));
+            }
+            Some("Prospect") => {
+                let p = lookup(hc, "Prospect", id(doc, "prospect")).await?;
+                set(doc, "customer", json!(p.as_ref().and_then(|p| s(p, "customer"))));
+                set(doc, "party_name", json!(p.as_ref().and_then(|p| s(p, "prospect_name"))));
+            }
+            _ => {
+                let c = lookup(hc, "Customer", id(doc, "customer")).await?;
+                set(doc, "party_name", json!(c.as_ref().and_then(|c| s(c, "customer_name"))));
+            }
         }
         if s(doc, "valid_till").is_none()
             && let Ok(on) = date(doc, "posting_date")
@@ -142,10 +150,14 @@ impl DocHook for QuotationHook {
 
 /// What an approval is of: the party, each line as quoted (item, unit, quantity, price, discount and
 /// rate), the additional discount, taxes, currency, terms and validity. Any of them changed is another
-/// decision. A lead's quotation stays the lead's when the lead becomes a customer.
+/// decision. A lead's (or a prospect's) quotation stays theirs when they become a customer.
 pub(crate) fn approval_digest(doc: &Doc) -> String {
     let n = |v: Decimal| v.normalize().to_string();
-    let party = if s(doc, "party_type") == Some("Lead") { s(doc, "lead") } else { s(doc, "customer") };
+    let party = match s(doc, "party_type") {
+        Some("Lead") => s(doc, "lead"),
+        Some("Prospect") => s(doc, "prospect"),
+        _ => s(doc, "customer"),
+    };
     let lines: Vec<Value> = rows(doc, "items")
         .iter()
         .map(|l| json!([s(l, "item"), s(l, "uom"), n(d(l, "qty")), n(d(l, "price_list_rate")), n(d(l, "discount_percent")), n(d(l, "rate"))]))
@@ -312,7 +324,7 @@ async fn approve(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
 }
 
 /// A draft sales order for the quantities not ordered yet, at the quoted prices. Only a customer
-/// can order (convert a lead first) and only while the quotation is valid.
+/// can order (convert a lead, or one of a prospect's leads, first) and only while the quotation is valid.
 async fn make_sales_order(hc: &mut HookCtx<'_>, q: &Doc) -> Result<Value> {
     let qid = id(q, "id").ok_or_else(|| Error::internal("quotation without id"))?;
     let number = s(q, "number").unwrap_or_default().to_string();
@@ -321,14 +333,22 @@ async fn make_sales_order(hc: &mut HookCtx<'_>, q: &Doc) -> Result<Value> {
     {
         return Err(Error::invalid(format!("quotation {number} expired on {v}; cancel and amend it with a new validity date to take the order")));
     }
-    let customer = if s(q, "party_type") == Some("Lead") {
-        let lead = lookup(hc, "Lead", id(q, "lead")).await?;
-        lead.as_ref().and_then(|l| id(l, "customer")).ok_or_else(|| {
-            let name = lead.as_ref().and_then(|l| s(l, "lead_name")).unwrap_or_default();
-            Error::invalid(format!("quotation {number} is for lead {name}; convert the lead to a customer before creating a sales order"))
-        })?
-    } else {
-        id(q, "customer").ok_or_else(|| Error::field("customer", "is required"))?
+    let customer = match s(q, "party_type") {
+        Some("Lead") => {
+            let lead = lookup(hc, "Lead", id(q, "lead")).await?;
+            lead.as_ref().and_then(|l| id(l, "customer")).ok_or_else(|| {
+                let name = lead.as_ref().and_then(|l| s(l, "lead_name")).unwrap_or_default();
+                Error::invalid(format!("quotation {number} is for lead {name}; convert the lead to a customer before creating a sales order"))
+            })?
+        }
+        Some("Prospect") => {
+            let p = lookup(hc, "Prospect", id(q, "prospect")).await?;
+            p.as_ref().and_then(|p| id(p, "customer")).ok_or_else(|| {
+                let name = p.as_ref().and_then(|p| s(p, "prospect_name")).unwrap_or_default();
+                Error::invalid(format!("quotation {number} is for prospect {name}, not a customer yet; convert one of its leads before creating a sales order"))
+            })?
+        }
+        _ => id(q, "customer").ok_or_else(|| Error::field("customer", "is required"))?,
     };
     let header = ["company", "currency", "conversion_rate", "price_list", "tax_template", "discount_percent", "terms"];
     let spec = MapSpec {
