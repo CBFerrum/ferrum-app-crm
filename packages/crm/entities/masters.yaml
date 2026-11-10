@@ -65,16 +65,26 @@
     - {name: description, type: text}
   list: {sort: reason asc}
 
+- name: TerritoryMember
+  label: Territory Member
+  kind: child
+  fields:
+    - {name: person, type: email, required: true, in_list: true, description: "A user's email"}
+
 - name: Territory
   label: Territory
   label_plural: Territories
   kind: master
   module: crm
   title_field: territory_name
+  description: "A region or market. Its sales people see and work the leads and deals in it and in the territories under it, besides their own."
   fields:
     - {name: territory_name, type: data, required: true, unique: true, in_list: true}
     - {name: parent_territory, type: link, to: Territory, link_filters: {is_group: true}, in_list: true}
     - {name: is_group, type: check, in_list: true}
+    - {name: people, type: table, of: TerritoryMember, label: Sales People, description: "Who sees and works the leads and deals in this territory and those under it"}
+    - {name: reach, type: table, of: TerritoryMember, read_only: true, hidden: true, no_copy: true, label: Reached By,
+       description: "Its sales people and those of the territories above it: whom its leads and deals are open to"}
   list: {sort: territory_name asc}
 
 - name: Campaign
@@ -110,6 +120,8 @@
   module: crm
   title_field: prospect_name
   description: An organization being pursued through one or more leads and opportunities.
+  mergeable: true
+  duplicate_fields: [email, phone, prospect_name]
   search_fields: [email, phone]
   fields:
     - {name: prospect_name, type: data, required: true, unique: true, label: Organization, in_list: true}
@@ -127,6 +139,7 @@
     - {name: email, type: email}
     - {name: phone, type: phone}
     - {name: assigned_to, type: email, default_expr: "user.email", label: Account Owner, in_list: true, in_filter: true}
+    - {name: parent_prospect, type: link, to: Prospect, label: Parent Account, in_filter: true, description: "The group or head office it belongs to"}
     - {name: customer, type: link, to: Customer, read_only: true, no_copy: true, in_filter: true, description: Set when one of its leads is converted}
     - {name: notes, type: text}
   list: {columns: [prospect_name, industry, territory, assigned_to], sort: prospect_name asc}

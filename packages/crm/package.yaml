@@ -1,5 +1,5 @@
 package: crm
-version: 0.3.0
+version: 0.4.0
 label: CRM
 description: Leads, opportunities and the sales pipeline, prospects, contacts and addresses, campaigns, activities and quotations.
 # Contacts, customers and items are shared with other apps; ERP's sales orders and taxes come with
@@ -8,11 +8,33 @@ depends: [core, contacts, parties, products]
 field_prefix: crm_
 
 overlays:
-  # A contact's and an address's lead (and a contact's prospect).
+  # A contact's and an address's lead (and a contact's prospect); a contact's consent to calls and
+  # e-mail (Unsubscribed is the e-mail side), and their move to another company.
   - entity: Contact
     ops:
       - {op: add_field, column: true, after: supplier, field: {name: lead, type: link, to: Lead, in_filter: true}}
       - {op: add_field, column: true, after: lead, field: {name: prospect, type: link, to: Prospect, in_filter: true}}
+      - {op: add_field, column: true, after: unsubscribed, field: {name: do_not_call, type: check, in_filter: true, label: Do Not Call, description: "No sales calls: a call logged to them needs a reason"}}
+      - {op: add_field, column: true, after: do_not_call, field: {name: call_consent_on, type: date, label: Calls Since, description: "Since when calls are allowed or refused; set when it changes"}}
+      - {op: add_field, column: true, after: call_consent_on, field: {name: call_consent_how, type: data, description: "A web form, in person, a phone call, a request by mail or letter…", label: Calls Given or Withdrawn By}}
+      - {op: add_field, column: true, after: call_consent_how, field: {name: email_consent_on, type: date, label: Email Since, description: "Since when marketing email is allowed or refused; set when it changes"}}
+      - {op: add_field, column: true, after: email_consent_on, field: {name: email_consent_how, type: data, description: "A web form, in person, a phone call, a request by mail or letter…", label: Email Given or Withdrawn By}}
+      - op: add_action
+        action:
+          name: move_to_account
+          label: Moved to Another Company
+          permission: write
+          params:
+            - {name: customer, type: link, to: Customer, label: New Customer, description: "Or a prospect"}
+            - {name: prospect, type: link, to: Prospect, label: New Prospect}
+            - {name: title, type: data, label: Title or Role There}
+            - {name: on, type: date, label: Since, description: "Today when empty: the day they left their company and started at the new one"}
+  # An account's owner, territory and parent (who may read a customer stays as it was).
+  - entity: Customer
+    ops:
+      - {op: add_field, column: true, after: customer_group, field: {name: account_owner, type: email, in_filter: true, label: Account Owner, description: "A user's email: who looks after the account in sales"}}
+      - {op: add_field, column: true, after: account_owner, field: {name: territory, type: link, to: Territory, in_filter: true}}
+      - {op: add_field, column: true, after: territory, field: {name: parent_customer, type: link, to: Customer, in_filter: true, label: Parent Account, description: "The group or head office it belongs to"}}
   - entity: Address
     ops:
       - {op: add_field, column: true, after: supplier, field: {name: lead, type: link, to: Lead, in_filter: true}}
@@ -23,18 +45,33 @@ modules:
     label: CRM
     icon: handshake
     order: 35
-    items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, Address, Customer, Item, Campaign, SalesPipeline, SalesStage, BuyingRole, Territory, LostReason, QuotationApprovalRule,
-            ProductRule, LeadAssignmentRule, CrmSettings, report:sales_pipeline, report:sales_forecast, report:lead_funnel, report:campaign_performance,
+    items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, AccountContact, Address, Customer, Item, Campaign, SalesPipeline, SalesStage, BuyingRole, Territory, SalesTeam,
+            SalesTarget, LostReason, QuotationApprovalRule, ProductRule, LeadAssignmentRule, LeadScoringRule, CrmSettings, report:sales_pipeline, report:sales_forecast, report:sales_targets, report:lead_funnel, report:campaign_performance,
             report:campaign_attribution, report:quotation_register, report:win_rate, report:sales_cycle, report:lost_reasons, report:activity_by_person]
 
 roles:
   - name: Sales User
-    description: Works the leads, opportunities and activities they own, and their quotations.
+    description: "Works the leads, opportunities and activities they own, and their quotations; a team's manager works its team's too, and a territory's sales people the leads and deals in it."
     permissions:
       - {entity: Lead, read: true, write: true, create: true, delete: true, export: true, if_owner: true}
       - {entity: Opportunity, read: true, write: true, create: true, delete: true, export: true, if_owner: true}
       - {entity: Activity, read: true, write: true, create: true, delete: true, if_owner: true}
       - {entity: Quotation, read: true, write: true, create: true, delete: true, submit: true, cancel: true, if_owner: true}
+      # A sales team's manager: its people's records (each record is its owner's team's unless another is chosen).
+      - {entity: Lead, read: true, write: true, export: true, via: sales_team.manager}
+      - {entity: Opportunity, read: true, write: true, export: true, via: sales_team.manager}
+      - {entity: Activity, read: true, write: true, via: sales_team.manager}
+      - {entity: Quotation, read: true, write: true, submit: true, cancel: true, via: sales_team.manager}
+      # A territory's sales people: the leads and deals in it and in the territories under it.
+      - {entity: Lead, read: true, write: true, via: territory.reach.person}
+      - {entity: Opportunity, read: true, write: true, via: territory.reach.person}
+      # Their own targets, and their teams'.
+      - {entity: SalesTarget, read: true, if_owner: true}
+      - {entity: SalesTarget, read: true, via: sales_team.manager}
+      - {entity: SalesTarget, read: true, via: sales_team.members.person}
+      - {entity: SalesTeam, read: true}
+      - {entity: AccountContact, read: true, write: true, create: true}
+      - {entity: LeadScoringRule, read: true}
       - {entity: Prospect, read: true, write: true, create: true}
       - {entity: Contact, read: true, write: true, create: true}
       - {entity: Address, read: true, write: true, create: true}
@@ -69,6 +106,10 @@ roles:
       - {entity: Territory, read: true, write: true, create: true, delete: true}
       - {entity: LostReason, read: true, write: true, create: true, delete: true}
       - {entity: LeadAssignmentRule, read: true, write: true, create: true, delete: true}
+      - {entity: SalesTeam, read: true, write: true, create: true, delete: true}
+      - {entity: SalesTarget, read: true, write: true, create: true, delete: true, export: true, import: true}
+      - {entity: LeadScoringRule, read: true, write: true, create: true, delete: true}
+      - {entity: AccountContact, read: true, write: true, create: true, delete: true, export: true, import: true}
       - {entity: CrmSettings, read: true, write: true, create: true}
       - {entity: Customer, read: true, write: true, create: true, export: true}
       - {entity: CustomerGroup, read: true}
@@ -96,6 +137,8 @@ roles:
       - {entity: Territory, read: true, write: true, create: true}
       - {entity: LostReason, read: true}
       - {entity: LeadAssignmentRule, read: true}
+      - {entity: LeadScoringRule, read: true, write: true, create: true, delete: true}
+      - {entity: AccountContact, read: true}
       - {entity: Company, read: true}
       - {entity: Currency, read: true}
   - name: CRM Viewer
@@ -114,16 +157,25 @@ roles:
       - {entity: BuyingRole, read: true}
       - {entity: Territory, read: true}
       - {entity: LostReason, read: true}
+      - {entity: AccountContact, read: true}
+      - {entity: SalesTeam, read: true}
+      - {entity: SalesTarget, read: true}
 
 # What a personal-data request exports and erases for a person (their email).
 personal_data:
+  # A person's do-not-call and unsubscribe stay, so that they are not called or mailed again; when
+  # and how they were given or withdrawn go.
   - {entity: Lead, match: email, phone: phone, name: lead_name,
-     erase: [first_name, last_name, lead_name, organization_name, job_title, email, phone, mobile, phone_key, mobile_key, address_line1, address_line2, postal_code, need, notes]}
+     erase: [first_name, last_name, lead_name, organization_name, job_title, email, phone, mobile, phone_key, mobile_key, address_line1, address_line2, postal_code, need, notes,
+             score_why, call_consent_on, call_consent_how, email_consent_on, email_consent_how]}
+  # A contact's (fields CRM adds to the platform's Contact): src/consent.rs `ConsentHeld`.
+  # Where the person worked and as what.
+  - {entity: AccountContact, match: contact, erase: [title]}
   # An organization's own email and phone can be a person's (a sole trader's); its name stays, as a company customer's does.
   - {entity: Prospect, match: email, phone: phone, erase: [email, phone, notes]}
   # What was written down about the person on their lead or contact: calls, meetings and notes.
-  - {entity: Activity, match: lead, erase: [subject, details]}
-  - {entity: Activity, match: contact, erase: [subject, details]}
+  - {entity: Activity, match: lead, erase: [subject, details, call_reason]}
+  - {entity: Activity, match: contact, erase: [subject, details, call_reason]}
 seed:
   # One pipeline (sql/004_pipelines.sql gives a workspace already there the same one, holding its stages).
   - entity: SalesPipeline
@@ -170,3 +222,5 @@ handover:
   - {entity: Activity, field: assigned_to, where: {status: Open}}
   - {entity: Quotation, field: assigned_to, where: {status: [Draft, Open]}}
   - {entity: Prospect, field: assigned_to}
+  # A customer's account owner moves too: src/accounts.rs `Departures` (a package cannot declare a
+  # field it adds to another's entity here).

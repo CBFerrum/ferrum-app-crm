@@ -27,6 +27,7 @@ impl DocHook for OpportunityHook {
             set(doc, "title", json!(s(doc, "party_name")));
         }
         contacts(doc, old.as_ref())?;
+        crate::accounts::follow_team(hc, doc, old.as_ref()).await?;
         stage(hc, doc, old.as_ref()).await?;
         // Since when it stands where it stands.
         if old.as_ref().is_none_or(|o| o.get("sales_stage") != doc.get("sales_stage")) || s(doc, "stage_changed_at").is_none() {
