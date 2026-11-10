@@ -76,4 +76,10 @@ describe("a day's work", () => {
     expect(horizon(null, now)).toBe("No date");
     expect(horizon("not a date", now)).toBe("No date");
   });
+
+  it("tells a move to another pipeline with the stage it came to", () => {
+    const names = (_field: string, value: unknown) => (({ p: "Sales", q: "Renewals", a: "Proposal", b: "Up for Renewal" }) as Record<string, string>)[value as string] ?? "";
+    const e = { at: "2026-11-11T10:00:00Z", action: "update", diff: { pipeline: ["p", "q"], sales_stage: ["a", "b"] } };
+    expect(changes(e, names)).toEqual(["Pipeline: Sales → Renewals", "Stage: Proposal → Up for Renewal"]);
+  });
 });

@@ -649,3 +649,26 @@
 .crm-composer-foot .crm-minutes {
   width: 6rem;
 }
+
+/* ── a deal's people and quotations ── */
+
+.crm-people {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0 0 0.75rem;
+  padding: 0 0.25rem;
+  list-style: none;
+  font-size: 13px;
+}
+
+.crm-people li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.crm-pipeline {
+  width: auto;
+  height: 34px;
+}

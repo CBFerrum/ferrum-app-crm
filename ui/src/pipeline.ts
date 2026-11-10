@@ -1,9 +1,16 @@
 // The pipeline: open deals by sales stage, in the stages' order, with what they are worth and weigh
 // (amounts in the company's currency). Pure, so a board's rules are tested without a browser.
 
+export interface Pipeline {
+  id: string;
+  pipeline_name: string;
+  is_default?: boolean | null;
+}
+
 export interface Stage {
   id: string;
   stage_name: string;
+  pipeline?: string | null;
   stage_order?: number | null;
   probability?: string | number | null;
   outcome?: string | null;
@@ -15,6 +22,7 @@ export interface Deal {
   title?: string | null;
   party_name?: string | null;
   sales_stage?: string | null;
+  pipeline?: string | null;
   base_amount?: string | number | null;
   base_weighted_amount?: string | number | null;
   expected_close_date?: string | null;
@@ -52,6 +60,21 @@ export function pipeline(stages: Stage[], deals: Deal[]): Column[] {
   const columns = ordered.map((s) => column(s, deals.filter((d) => d.sales_stage === s.id)));
   const rest = deals.filter((d) => !d.sales_stage || !known.has(d.sales_stage));
   return rest.length ? [...columns, column(null, rest)] : columns;
+}
+
+/** The pipeline a board shows: the one wanted (asked for, or remembered) while it is there, else
+ *  the default, else the first by name. */
+export function choosePipeline(pipelines: Pipeline[], wanted: string | null | undefined): Pipeline | null {
+  const byName = [...pipelines].sort((a, b) => a.pipeline_name.localeCompare(b.pipeline_name));
+  return byName.find((p) => p.id === wanted) ?? byName.find((p) => p.is_default) ?? byName[0] ?? null;
+}
+
+/** One pipeline's stages and deals. Stages and deals that name no pipeline (a workspace not yet
+ *  upgraded) are the default's. */
+export function ofPipeline(stages: Stage[], deals: Deal[], pipeline: Pipeline | null, fallback: Pipeline | null): { stages: Stage[]; deals: Deal[] } {
+  if (!pipeline) return { stages, deals };
+  const mine = (p: string | null | undefined) => (p ?? fallback?.id ?? pipeline.id) === pipeline.id;
+  return { stages: stages.filter((s) => mine(s.pipeline)), deals: deals.filter((d) => mine(d.pipeline)) };
 }
 
 /** The whole pipeline in one line. */
@@ -99,4 +122,21 @@ export function completion(outcome: string, minutes: string, next: string): Reco
   if (minutes.trim() && Number.isInteger(m) && m >= 0) out.duration_minutes = m;
   if (next) out.next_follow_up = next;
   return out;
+}
+
+export interface DealContact {
+  contact?: string | null;
+  role?: string | null;
+  is_primary?: boolean | null;
+}
+
+/** A deal's people as its page lists them: the primary first, then in the deal's order, each named
+ *  (`names`: contact id → name) with their buying role (`roles`: role id → name). A deal from before
+ *  contacts had roles shows its one contact as the primary. */
+export function people(rows: DealContact[] | null | undefined, contact: string | null | undefined, names: Record<string, string>, roles: Record<string, string>): { id: string; name: string; role: string | null; primary: boolean }[] {
+  const list = rows?.length ? rows : contact ? [{ contact, is_primary: true }] : [];
+  return list
+    .filter((r): r is DealContact & { contact: string } => !!r.contact)
+    .map((r) => ({ id: r.contact, name: names[r.contact] ?? "", role: r.role ? (roles[r.role] ?? null) : null, primary: !!r.is_primary }))
+    .sort((a, b) => Number(b.primary) - Number(a.primary));
 }

@@ -50,9 +50,9 @@ export interface Item {
 const KINDS: Record<string, Item["kind"]> = { Call: "call", Meeting: "meeting", Email: "email", Task: "task", Note: "note" };
 
 /** Field changes people care about in a deal's story; the rest stays in the record's history. */
-const TOLD = new Set(["sales_stage", "status", "assigned_to", "expected_close_date", "amount"]);
+const TOLD = new Set(["pipeline", "sales_stage", "status", "assigned_to", "expected_close_date", "amount"]);
 
-const LABELS: Record<string, string> = { get sales_stage() { return t("Stage"); }, status: "Status", get assigned_to() { return t("Owner"); }, get expected_close_date() { return t("Expected close"); }, get amount() { return t("Amount"); } };
+const LABELS: Record<string, string> = { get pipeline() { return t("Pipeline"); }, get sales_stage() { return t("Stage"); }, status: "Status", get assigned_to() { return t("Owner"); }, get expected_close_date() { return t("Expected close"); }, get amount() { return t("Amount"); } };
 
 function changed(diff: unknown): [unknown, unknown] | null {
   if (Array.isArray(diff) && diff.length === 2) return [diff[0], diff[1]];

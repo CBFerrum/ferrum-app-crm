@@ -106,9 +106,19 @@
     - {name: item, type: link, to: Item, required: true, in_list: true}
     - {name: item_name, type: data, fetch_from: item.item_name, read_only: true, in_list: true}
     - {name: description, type: text}
+    - {name: uom, type: link, to: Uom, in_list: true, label: Unit, description: The item's stock unit unless another of its units is chosen}
     - {name: qty, type: decimal, required: true, default: 1, min: "0.000000001", in_list: true}
-    - {name: rate, type: currency, min: "0", currency: parent.currency, in_list: true}
-    - {name: amount, type: currency, read_only: true, currency: parent.currency, in_list: true}
+    - {name: rate, type: currency, min: "0", currency: parent.currency, in_list: true, description: "The item's price in the deal's price list and currency when the item is chosen; yours to change"}
+    - {name: discount_percent, type: percent, min: "0", max: "100", label: Discount %, in_list: true}
+    - {name: amount, type: currency, read_only: true, currency: parent.currency, in_list: true, description: After the discount}
+
+- name: OpportunityContact
+  label: Opportunity Contact
+  kind: child
+  fields:
+    - {name: contact, type: link, to: Contact, required: true, in_list: true}
+    - {name: role, type: link, to: BuyingRole, label: Buying Role, in_list: true}
+    - {name: is_primary, type: check, label: Primary, in_list: true, description: "The deal's Contact; one contact is the primary"}
 
 - name: OpportunityCompetitor
   label: Opportunity Competitor
@@ -135,17 +145,25 @@
     - {name: customer, type: link, to: Customer, required_if: "doc.opportunity_from == 'Customer'", in_filter: true, description: "For a lead or a prospect: set once it becomes a customer"}
     - {name: party_name, type: data, read_only: true, in_list: true}
     - {name: prospect, type: link, to: Prospect, required_if: "doc.opportunity_from == 'Prospect'", in_filter: true}
-    - {name: contact, type: link, to: Contact}
+    - {name: contact, type: link, to: Contact, label: Primary Contact, description: "The primary of its contacts"}
+    - {name: contacts, type: table, of: OpportunityContact, description: "The people in the decision, with their buying roles; one is the primary"}
     - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", in_filter: true}
-    - {name: sales_stage, type: link, to: SalesStage, required: true, in_list: true, in_filter: true, description: Defaults to the first open stage}
+    - {name: pipeline, type: link, to: SalesPipeline, in_list: true, in_filter: true, description: "Empty: the sales stage's, else the default pipeline. Another pipeline puts the deal at its first open stage unless a stage of it is chosen"}
+    - {name: sales_stage, type: link, to: SalesStage, required: true, in_list: true, in_filter: true, description: Defaults to the first open stage of its pipeline}
     - {name: open_stage, type: link, to: SalesStage, read_only: true, hidden: true, no_copy: true, label: Last Open Stage, description: Where it stood while open; reopening takes it back there}
     - {name: probability, type: percent, min: "0", max: "100", in_list: true, description: Defaults from the sales stage}
+    - name: forecast_category
+      type: select
+      options: [Pipeline, Best Case, Commit, Omitted]
+      in_filter: true
+      description: "Empty: its stage's. Won deals count as Closed"
     - {name: status, type: select, options: [Open, Won, Lost, Closed], required: true, default: Open, in_list: true, in_filter: true}
     - {name: lost_reason, type: link, to: LostReason, visible_if: "doc.status == 'Lost'", required_if: "doc.status == 'Lost'"}
     - {name: lost_detail, type: text, visible_if: "doc.status == 'Lost'"}
     - {name: expected_close_date, type: date, in_list: true, in_filter: true}
     - {name: currency, type: link, to: Currency, description: Defaults to the company currency}
     - {name: conversion_rate, type: decimal, default: 1, min: "0.000000001", description: Opportunity currency → company currency}
+    - {name: price_list, type: link, to: PriceList, description: "Its customer's, else the first selling price list, as a quotation's; the lines' rates come from it"}
     - {name: items, type: table, of: OpportunityItem}
     - {name: amount, type: currency, currency: currency, min: "0", in_list: true, description: "Entered directly, or the total of the items"}
     - {name: weighted_amount, type: currency, currency: currency, read_only: true}
@@ -169,8 +187,9 @@
     - {name: notes, type: text}
   form:
     - {label: Opportunity, fields: [title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to]}
-    - {label: Pipeline, fields: [sales_stage, probability, status, lost_reason, lost_detail, expected_close_date, next_step, next_follow_up, stage_changed_at, last_activity_at, closed_on]}
-    - {label: Value, fields: [currency, conversion_rate, items, amount, weighted_amount, base_amount, base_weighted_amount]}
+    - {label: Contacts, fields: [contacts]}
+    - {label: Pipeline, fields: [pipeline, sales_stage, probability, forecast_category, status, lost_reason, lost_detail, expected_close_date, next_step, next_follow_up, stage_changed_at, last_activity_at, closed_on]}
+    - {label: Value, fields: [currency, conversion_rate, price_list, items, amount, weighted_amount, base_amount, base_weighted_amount]}
     - {label: Competition, collapsible: true, fields: [competitors]}
     - {label: Source, collapsible: true, fields: [source, campaign, territory, company]}
     - {label: Notes, collapsible: true, fields: [notes]}

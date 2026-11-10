@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { attention, completion, daysSince, initials, matches, overview, pipeline } from "./pipeline";
+import { attention, choosePipeline, completion, daysSince, initials, matches, ofPipeline, overview, people, pipeline } from "./pipeline";
 
 describe("CRM's pipeline", () => {
   it("puts open deals under their stages, in the stages' order, with their totals", () => {
@@ -71,5 +71,43 @@ describe("CRM's pipeline", () => {
     expect(completion("", " ", "")).toEqual({});
     expect(completion("", "-3", "")).toEqual({});
     expect(completion("", "0", "")).toEqual({ duration_minutes: 0 });
+  });
+
+  it("shows the pipeline wanted while it is there, else the default, else the first by name", () => {
+    const sales = { id: "s", pipeline_name: "Sales", is_default: true };
+    const renewals = { id: "r", pipeline_name: "Renewals" };
+    expect(choosePipeline([sales, renewals], "r")).toBe(renewals);
+    expect(choosePipeline([sales, renewals], "gone")).toBe(sales);
+    expect(choosePipeline([sales, renewals], null)).toBe(sales);
+    expect(choosePipeline([{ ...sales, is_default: false }, renewals], null)).toBe(renewals);
+    expect(choosePipeline([], "r")).toBeNull();
+  });
+
+  it("puts one pipeline on the board, two stages of the same name apart", () => {
+    const sales = { id: "s", pipeline_name: "Sales", is_default: true };
+    const renewals = { id: "r", pipeline_name: "Renewals" };
+    const stages = [
+      { id: "a", stage_name: "Proposal", pipeline: "s" },
+      { id: "b", stage_name: "Proposal", pipeline: "r" },
+      { id: "c", stage_name: "Old", pipeline: null },
+    ];
+    const deals = [{ id: "1", pipeline: "s", sales_stage: "a" }, { id: "2", pipeline: "r", sales_stage: "b" }, { id: "3", sales_stage: "c" }];
+    const r = ofPipeline(stages, deals, renewals, sales);
+    expect([r.stages.map((s) => s.id), r.deals.map((d) => d.id)]).toEqual([["b"], ["2"]]);
+    const s = ofPipeline(stages, deals, sales, sales);
+    expect([s.stages.map((x) => x.id), s.deals.map((d) => d.id)]).toEqual([["a", "c"], ["1", "3"]]);
+    expect(ofPipeline(stages, deals, null, null).deals).toHaveLength(3);
+  });
+
+  it("lists a deal's people with their buying roles, the primary first", () => {
+    const names = { a: "Ann", r: "Raj" };
+    const roles = { dm: "Decision Maker", fi: "Finance" };
+    const rows = [{ contact: "a", role: "dm" }, { contact: "r", role: "fi", is_primary: true }, { contact: null }];
+    expect(people(rows, "r", names, roles)).toEqual([
+      { id: "r", name: "Raj", role: "Finance", primary: true },
+      { id: "a", name: "Ann", role: "Decision Maker", primary: false },
+    ]);
+    expect(people([], "a", names, roles)).toEqual([{ id: "a", name: "Ann", role: null, primary: true }]);
+    expect(people(null, null, names, roles)).toEqual([]);
   });
 });
