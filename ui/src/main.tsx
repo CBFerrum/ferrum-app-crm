@@ -10,9 +10,10 @@ import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, Link, RouterProvider, useRouteError } from "react-router";
 import { addCatalogs, routeBase, shell, t, wordsReady } from "@ferrum/client";
-import { ConfirmHost, EmptyState, ErrorState, Toaster } from "@ferrum/kit";
+import { ConfirmHost, ListSkeleton, StatePanel, Toaster } from "@ferrum/kit";
 import { RequireAuth, setFrameMode } from "@ferrum/records/frame";
 import { Board } from "./Board";
+import { Problem } from "./states";
 import "./styles.css";
 
 // Its own words in the page's language (src/locales), fetched as the page starts; it is drawn once they are in.
@@ -31,14 +32,12 @@ const queryClient = new QueryClient({
 });
 
 function RouteError() {
-  return <ErrorState error={useRouteError()} onRetry={() => window.location.reload()} />;
+  return <Problem error={useRouteError()} onRetry={() => window.location.reload()} />;
 }
 
 function NotFound() {
   return (
-    <EmptyState title={t("Page not found")}>
-      <Link to="/">{t("Go to CRM's home")}</Link>
-    </EmptyState>
+    <StatePanel kind="empty" title={t("Page not found")} action={<Link className="btn btn-default btn-md" to="/">{t("Go to CRM's home")}</Link>} />
   );
 }
 
@@ -61,6 +60,7 @@ const router = createBrowserRouter(
         </>
       ),
       errorElement: <RouteError />,
+      hydrateFallbackElement: <ListSkeleton rows={5} />,
       children: [
         { index: true, element: <Board /> },
         { path: "today", lazy: () => import("./Today").then((m) => ({ Component: m.Today })) },

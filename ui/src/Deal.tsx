@@ -7,10 +7,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, ApiError, docPath, errorMessage, formatMoment, shell, t, isolate } from "@ferrum/client";
-import { Badge, Button, ErrorState, Icon, PageLoading, statusTone, toast, useCanIntent, useLiveEntity, useShellTitle } from "@ferrum/kit";
+import { Badge, Button, Icon, ReaderSkeleton, StatusBadge, toast, useCanIntent, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { can, CollabPanel, type Doc, type EntityMeta, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
 import { LostDialog } from "./Lost";
 import { completion, type Deal, type DealContact, daysSince, isOpenStage, money, people, type Pipeline, type Stage } from "./pipeline";
+import { Problem, DEAL_STATUS, QUOTATION_STATUS } from "./states";
 import { type Activity, type AuditEvent, type Item, type Mail, timeline } from "./timeline";
 
 const ICONS: Record<Item["kind"], string> = { call: "phone", meeting: "calendar", email: "mail", mail: "mail", task: "check", note: "file", change: "refresh" };
@@ -273,8 +274,8 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
   );
   const told = useMemo(() => (story.data ? timeline(story.data.activities, story.data.events, story.data.mail, name) : null), [story.data, name]);
 
-  if (record.error) return <ErrorState error={record.error} onRetry={() => void record.refetch()} />;
-  if (!doc) return <PageLoading />;
+  if (record.error) return <Problem error={record.error} onRetry={() => void record.refetch()} />;
+  if (!doc) return <ReaderSkeleton />;
   const isOpen = doc.status === "Open";
   const inStage = isOpen ? daysSince(doc.stage_changed_at as string | null) : null;
   const lastDone = daysSince(doc.last_activity_at as string | null);
@@ -348,7 +349,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
           </p>
         </div>
         <div className="page-actions">
-          {!isOpen && <Badge tone={statusTone(doc.status)}>{isolate(String(doc.status))}</Badge>}
+          {!isOpen && <StatusBadge value={doc.status} tones={DEAL_STATUS} />}
           {!isOpen && writable && <Button onClick={() => void reopen()}>{t("Reopen")}</Button>}
           {isOpen && writable && <Button onClick={() => void won()}>{t("Won")}</Button>}
           {isOpen && writable && <Button onClick={() => setLosing(true)}>{t("Lost")}</Button>}
@@ -379,9 +380,9 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
             <>
               {writable && <Composer deal={doc} onSaved={refresh} doNotCall={!!doc.contact && refused.has(doc.contact as string)} />}
               {story.error ? (
-                <ErrorState error={story.error} onRetry={() => void story.refetch()} />
+                <Problem error={story.error} onRetry={() => void story.refetch()} />
               ) : !told ? (
-                <PageLoading />
+                <ReaderSkeleton paragraphs={1} />
               ) : (
                 <>
                   {told.upcoming.length > 0 && (
@@ -434,7 +435,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
                     <Link to={`/e/Quotation/${q.id}`}>{isolate(q.number ?? t("Draft"))}</Link>
                     {(q.revision ?? 1) > 1 && <span className="faint"> · {t("revision {revision}", { revision: q.revision ?? 1 })}</span>}
                     {q.grand_total != null && <span className="faint"> · {isolate(money(Number(q.grand_total)))}</span>}
-                    {q.status && <Badge tone={statusTone(q.status)}>{isolate(q.status)}</Badge>}
+                    {q.status && <StatusBadge value={q.status} tones={QUOTATION_STATUS} />}
                   </li>
                 ))}
               </ul>
@@ -451,7 +452,7 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
 export function DealRoute() {
   const { id = "" } = useParams();
   const meta = useEntityMeta("Opportunity");
-  if (meta.error) return <ErrorState error={meta.error} onRetry={() => void meta.refetch()} />;
-  if (!meta.data) return <PageLoading />;
+  if (meta.error) return <Problem error={meta.error} onRetry={() => void meta.refetch()} />;
+  if (!meta.data) return <ReaderSkeleton />;
   return <DealPage key={id} meta={meta.data} id={id} />;
 }

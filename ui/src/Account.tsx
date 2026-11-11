@@ -9,10 +9,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useCallback, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, ApiError, errorMessage, formatMoment, isolate, t } from "@ferrum/client";
-import { Badge, Button, ErrorState, Icon, PageLoading, statusTone, toast, useShellTitle } from "@ferrum/kit";
+import { Badge, Button, Icon, ReaderSkeleton, StatusBadge, toast, useShellTitle } from "@ferrum/kit";
 import { can, type Doc, type EntityMeta, FormView, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
 import { ACCOUNTS, type AccountEntity, openWorth, owed, peopleAt, shown } from "./accounts";
 import { money } from "./pipeline";
+import { ACTIVITY_STATUS, INVOICE_STATUS, ORDER_STATUS, Problem, QUOTATION_STATUS, TICKET_STATUS } from "./states";
 
 type Row = Doc & { id: string };
 
@@ -151,8 +152,8 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
     }
   };
 
-  if (record.error) return <ErrorState error={record.error} onRetry={() => void record.refetch()} />;
-  if (!doc) return <PageLoading />;
+  if (record.error) return <Problem error={record.error} onRetry={() => void record.refetch()} />;
+  if (!doc) return <ReaderSkeleton />;
   const named = Object.fromEntries((contacts.data ?? []).map((c) => [c.id, { name: String(c.full_name ?? c.email ?? ""), doNotCall: !!c.do_not_call }]));
   const people = shown(has("AccountContact"), links.data) ? peopleAt(links.data, named) : [];
   const here = people.filter((p) => p.current);
@@ -235,7 +236,7 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
                     <Link to={`/e/Quotation/${q.id}`}>{isolate(String(q.number ?? t("Draft")))}</Link>
                     {Number(q.revision ?? 1) > 1 && <span className="faint"> · {t("revision {revision}", { revision: Number(q.revision) })}</span>}
                     {q.grand_total != null && <span className="faint"> · {isolate(money(Number(q.grand_total)))}</span>}
-                    {q.status ? <Badge tone={statusTone(q.status)}>{isolate(String(q.status))}</Badge> : null}
+                    {q.status ? <StatusBadge value={q.status} tones={QUOTATION_STATUS} /> : null}
                   </li>
                 ))}
               </ul>
@@ -248,7 +249,7 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
                   <li key={o.id}>
                     <a href={`/open/SalesOrder/${o.id}`}>{isolate(String(o.number ?? ""))}</a>
                     {o.grand_total != null && <span className="faint"> · {isolate(`${money(Number(o.grand_total))} ${currencyOf(o)}`.trim())}</span>}
-                    {o.status ? <Badge tone={statusTone(o.status)}>{isolate(String(o.status))}</Badge> : null}
+                    {o.status ? <StatusBadge value={o.status} tones={ORDER_STATUS} /> : null}
                   </li>
                 ))}
               </ul>
@@ -271,7 +272,7 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
                     <li key={i.id}>
                       <a href={`/open/SalesInvoice/${i.id}`}>{isolate(String(i.number ?? ""))}</a>
                       <span className="faint"> · {isolate(`${money(Number(i.outstanding_amount ?? 0))} ${currencyOf(i)}`.trim())}</span>
-                      {i.status ? <Badge tone={statusTone(i.status)}>{isolate(String(i.status))}</Badge> : null}
+                      {i.status ? <StatusBadge value={i.status} tones={INVOICE_STATUS} /> : null}
                     </li>
                   ))}
               </ul>
@@ -284,7 +285,7 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
                   <li key={k.id}>
                     <a href={`/open/Ticket/${k.id}`}>{isolate(String(k.subject ?? k.number ?? ""))}</a>
                     {k.priority ? <span className="faint"> · {isolate(String(k.priority))}</span> : null}
-                    {k.status ? <Badge tone={statusTone(k.status)}>{isolate(String(k.status))}</Badge> : null}
+                    {k.status ? <StatusBadge value={k.status} tones={TICKET_STATUS} /> : null}
                   </li>
                 ))}
               </ul>
@@ -301,7 +302,7 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
                         {" · "}
                         {isolate([a.activity_type, day(a.completed_at ?? a.due_at ?? a.created_at)].filter(Boolean).join(" · "))}
                       </span>
-                      {a.status && a.status !== "Done" ? <Badge tone={statusTone(a.status)}>{isolate(String(a.status))}</Badge> : null}
+                      {a.status && a.status !== "Done" ? <StatusBadge value={a.status} tones={ACTIVITY_STATUS} /> : null}
                     </li>
                   ))}
                 </ul>
@@ -353,8 +354,8 @@ function AccountRoute({ entity }: { entity: AccountEntity }) {
   const { id = "" } = useParams();
   const meta = useEntityMeta(entity);
   if (id === "new") return <FormView />;
-  if (meta.error) return <ErrorState error={meta.error} onRetry={() => void meta.refetch()} />;
-  if (!meta.data) return <PageLoading />;
+  if (meta.error) return <Problem error={meta.error} onRetry={() => void meta.refetch()} />;
+  if (!meta.data) return <ReaderSkeleton />;
   return <AccountPage key={id} entity={entity} meta={meta.data} id={id} />;
 }
 

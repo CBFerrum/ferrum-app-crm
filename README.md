@@ -360,6 +360,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.11.1** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |
 | **0.11.0** | Accounts with an owner, a territory and a parent, on one page; contacts at several companies and moving between them; sales teams and territories seeing their people's records; targets; consent to calls and e-mail; prospects merged; lead scoring. |
 | **0.10.0** | Several pipelines; what a stage asks of a deal entering it; a deal's people with buying roles; deal lines priced from a price list, with units and discounts; quotations sent, accepted or rejected, and revised; a forecast by owner and category. |
 | **0.9.0** | Leads shared out by assignment rules; reminders and My work; days in stage and last activity; call outcomes; win rate, sales cycle, lost reasons and activity reports. |
