@@ -9,10 +9,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type DragEvent, useCallback, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 import { api, docPath, errorMessage, t as tr, isolate } from "@ferrum/client";
-import { confirmDialog, EmptyState, ErrorState, Icon, Spinner, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
+import { confirmDialog, Icon, StatePanel, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@ferrum/kit/primitives";
 import { useMe } from "@ferrum/records";
 import { LostDialog } from "./Lost";
+import { BoardSkeleton, Problem } from "./states";
 import { Tabs } from "./Tabs";
 import { attention, choosePipeline, type Column, type Deal, initials, isOpenStage, matches, money, ofPipeline, overview, type Pipeline, pipeline, type Stage, today } from "./pipeline";
 
@@ -194,6 +195,7 @@ export function Board() {
     remember(id);
   };
   const total = overview(columns);
+  const filtered = search.trim() !== "" || mine;
   const day = today();
   const patchDeal = (id: string, change: Partial<Deal>) => qc.setQueryData<Data>(KEY, (d) => d && { ...d, deals: d.deals.map((x) => (x.id === id ? { ...x, ...change } : x)) });
   const dropDeal = (id: string) => qc.setQueryData<Data>(KEY, (d) => d && { ...d, deals: d.deals.filter((x) => x.id !== id) });
@@ -236,13 +238,16 @@ export function Board() {
   };
 
   const body = q.error ? (
-    <ErrorState error={q.error} onRetry={() => void q.refetch()} />
+    <Problem error={q.error} onRetry={() => void q.refetch()} />
   ) : !q.data ? (
-    <Spinner label={tr("Loading the pipeline")} />
+    <BoardSkeleton />
   ) : !stages.length ? (
-    <EmptyState title={tr("No sales stages yet")} icon="file">
-      <Link to="e/SalesStage">{tr("Set up your stages")}</Link>
-    </EmptyState>
+    <StatePanel kind="empty" title={tr("No sales stages yet")} action={<Link className="btn btn-primary btn-md" to="e/SalesStage">{tr("Set up your stages")}</Link>} />
+  ) : filtered && total.count === 0 ? (
+    // A search or "Mine" hid every deal: say so, and offer to show them again.
+    <StatePanel kind="no-matches" onClear={() => { setSearch(""); setSp({}, { replace: true }); }}>
+      {tr("No open deal matches your search or filter.")}
+    </StatePanel>
   ) : (
     <div className="crm-board" role="group" aria-label={chosen ? tr("{pipeline_name} by sales stage", { pipeline_name: chosen.pipeline_name }) : tr("Pipeline by sales stage")}>
       {columns.map((c) => (

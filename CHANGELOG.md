@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.11.1
+
+The interface follows the upgraded design system, rebuilt with Ferrum-Frontend 0a47157. Text uses the kit's type roles (nothing under 12px) and controls its height tokens; loading shows skeletons shaped like what is coming; empty, no matches, denied, offline and failed are told apart; status colours come from stored state ids. The interface check now runs the UI lint against an empty baseline. The board loads behind a board-shaped placeholder and offers to clear a search or owner filter that hides every deal.
+
 ## 0.11.0
 
 For a sales team switching CRMs: their accounts, teams, targets and consent as they kept them.
