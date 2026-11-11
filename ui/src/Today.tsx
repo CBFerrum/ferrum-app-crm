@@ -6,8 +6,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useMemo, useState } from "react";
 import { Link } from "react-router";
 import { api, docPath, errorMessage, formatMoment, t as tr, isolate } from "@ferrum/client";
-import { Badge, EmptyState, ErrorState, Icon, Spinner, toast, useShellTitle } from "@ferrum/kit";
+import { Badge, Icon, ListSkeleton, StatePanel, toast, useShellTitle } from "@ferrum/kit";
 import { useMe } from "@ferrum/records";
+import { Problem } from "./states";
 import { Tabs } from "./Tabs";
 import { today } from "./pipeline";
 import { HORIZONS, horizon, type Horizon } from "./timeline";
@@ -139,13 +140,13 @@ export function Today() {
         <input aria-label={tr("Add a task for today")} placeholder={tr("Add a task for today…")} value={text} onChange={(e) => setText(e.target.value)} />
       </form>
       {q.error ? (
-        <ErrorState error={q.error} onRetry={() => void q.refetch()} />
+        <Problem error={q.error} onRetry={() => void q.refetch()} />
       ) : !q.data ? (
-        <Spinner label={tr("Loading your day")} />
+        <ListSkeleton rows={5} />
       ) : nothing ? (
-        <EmptyState title={tr("Nothing to chase")} icon="check">
+        <StatePanel kind="empty" title={tr("Nothing to chase")}>
           {tr("Everything open is taken care of.")}
-        </EmptyState>
+        </StatePanel>
       ) : (
         <>
           {groups.map(([h, tasks]) => (
