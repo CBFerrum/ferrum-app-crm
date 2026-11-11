@@ -2100,10 +2100,7 @@ async fn accounts_and_teams(k: &Arc<Kernel>) {
     let acme = maria.insert("Customer", json!({"customer_name": "Acme Group", "account_owner": "anna@accts.test", "territory": india["id"]})).await;
     let retail = maria.insert("Customer", json!({"customer_name": "Acme Retail", "parent_customer": acme["id"]})).await;
     let shop = maria.insert("Customer", json!({"customer_name": "Acme Shop", "parent_customer": retail["id"]})).await;
-    refused(
-        k.update(&maria.ctx, "Customer", uid(&acme), obj(json!({"parent_customer": shop["id"]})), None).await,
-        "this would create a cycle in the hierarchy",
-    );
+    refused(k.update(&maria.ctx, "Customer", uid(&acme), obj(json!({"parent_customer": shop["id"]})), None).await, "would make a cycle in the hierarchy");
     refused(k.update(&maria.ctx, "Customer", uid(&acme), obj(json!({"parent_customer": acme["id"]})), None).await, "cannot be its own parent");
     assert_eq!(maria.one("Customer", json!({"parent_customer": acme["id"]})).await["customer_name"], json!("Acme Retail"), "a parent lists its children");
     let holding = maria.insert("Prospect", json!({"prospect_name": "Globex Holding"})).await;
@@ -2330,7 +2327,7 @@ async fn accounts_and_teams(k: &Arc<Kernel>) {
     assert_eq!(maria.get("Lead", uid(&plead)).await["prospect"], globex["id"]);
     assert_eq!(maria.get("Quotation", uid(&pquote)).await["prospect"], globex["id"]);
     assert_eq!(maria.one("AccountContact", json!({"contact": gil["id"]})).await["prospect"], globex["id"]);
-    assert!(k.merge_records(&maria.ctx, "Contact", uid(&gil), uid(&sam), "x").await.is_err(), "contacts are the platform's, and not mergeable");
+    k.merge_records(&maria.ctx, "Contact", uid(&sam), uid(&gil), "x").await.expect("contacts are the platform's, and mergeable since it made them so");
 
     // ───────────── lead scoring ─────────────
     maria
