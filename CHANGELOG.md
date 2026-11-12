@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.12.0
+
+For a team that lives in mail, calls and quotations.
+
+A quotation the customer can read and accept:
+- Send to Customer, on a submitted quotation, makes the quotation as a document, a signed link and a message from the template Quotation sent to the customer (Settings, Messages: a workspace edits the wording; the package's `crm.quotation_document` is the document), mails it with the document attached, and marks the quotation Sent. Sending again ends the links sent before.
+- On the link the customer reads what CRM Settings allow (the lines and totals, the totals only, or neither: Customer's Page Shows), accepts by typing their name, declines with a reason, or asks a question, which becomes a task for the quotation's owner and a notice to them. A one-time code before an answer is a setting. Their answer is on the quotation (the name they typed, the day and moment), in its history as `link:` entries, and ends its links. The link ends with the quotation: when it expires, is cancelled to be revised, or is answered. Past its validity nothing is accepted.
+- A quotation is Viewed between Sent and an answer. Nothing in the platform tells CRM yet that the page was opened, so today Viewed is set when the customer asks a question or answers, or by the action Mark as Viewed (hidden: a platform event that a page was opened would call it).
+- Order an Accepted Quotation (CRM Settings, off by default) makes the draft sales order when a quotation is accepted, as Create Sales Order does; what the order refuses leaves the quotation accepted.
+- New fields on a quotation: Viewed At, Sent At, Answered At and Name the Customer Typed (in the erasure of a person's data with their reason).
+
+One timeline (`GET /api/app/crm/timeline/{entity}/{id}`, for a lead, contact, prospect, customer or deal): activities, notes, Mail's communications, calls and meetings, a deal's stage changes, quotations created, sent, viewed and answered, orders, and Support's tickets and Bookings' bookings where those apps are installed, newest first, in pages, filtered by kind, each source read with the caller's own rights. The shape is in `src/timeline.rs`.
+
+Mail, meetings and calls on the right record:
+- A mail or a call in Mail's communications whose other party's address (or the last ten digits of its number) is a contact's, a lead's, a customer's or a prospect's is filed on that record, and on the newest open deal that names them, else their customer's (CRM Settings, File Mail and Calls to Their People, on). Matching is by the whole address or number, never by name. Mail from someone nobody knows can make a lead (Make a Lead of an Unknown Sender, off); automatic senders never do.
+- A calendar event with a guest who is a known person makes a meeting activity on their record (and their deal), which moves with the event, is cancelled when it is cancelled, deleted or the guest taken off, and is done once it has ended.
+- Not here: connecting a person's hosted mailbox or calendar at a provider.
+
+Sequences: timed steps for a lead or a contact (send a message from a template, a task or a call for the owner, waits in working days on a business calendar), enrolled by Enrol in Sequence on a lead or contact (a list's selection runs it for each) or by anything creating a Sequence Enrolment; a person is in a sequence once. It stops when they reply, book a meeting, are converted or closed, ask not to be mailed, or the owner stops it.
+
+Forecasts: a person's call for a period by forecast category, from their deals, submitted; the manager of their team sets another figure beside it (both kept); reopening clears the manager's. CRM takes a snapshot of each owner's forecast every few days (CRM Settings), and two reports, Forecast History (week over week) and Forecast against Closed.
+
+Record types, for deals and leads: a type picks the deal's pipeline, fills in fields left empty when one is made, and asks for fields before a stage or status.
+
+Upgrading: nothing to do. Quotations sent before keep their status; new fields are empty on them.
+
 ## 0.11.2
 
 Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.

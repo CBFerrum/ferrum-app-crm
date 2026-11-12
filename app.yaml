@@ -1,6 +1,6 @@
 id: crm
 name: CRM
-version: 0.11.2
+version: 0.12.0
 publisher: cbferrum
 summary: Leads, opportunities and pipeline, contacts, campaigns, activities and quotations
 description: README.md
@@ -59,7 +59,7 @@ contributes:
         is ticked (it is then linked as Duplicate Of). A lead arriving by itself (a form, a mail, an integration) is given an owner by the first
         Lead Assignment Rule that takes it (Assigned By Rule says which); one a person enters or imports without an owner is
         theirs unless a rule also takes those; Last Touched is when an activity on it was last logged or completed. A deal or quotation is for a Lead, a Prospect or a Customer. An Opportunity is Open until Won, Lost or Closed (Reopen opens it again); it is in one SalesPipeline (one is the default), and its stage (a SalesStage of that pipeline) and amount make the
-        pipeline, in the opportunity's currency; a stage may require things before a deal enters it. A deal's Forecast Category (Pipeline, Best Case, Commit, Omitted) is its stage's unless set; won deals count as Closed. A deal has contacts with buying roles, one the primary (its Contact). A Quotation counts once submitted, is Sent, Accepted or Rejected by the customer, is revised by cancelling and amending (Revision, Revises, Replaced By), and becomes an ERP Sales Order when
+        pipeline, in the opportunity's currency; a stage may require things before a deal enters it. A deal's Forecast Category (Pipeline, Best Case, Commit, Omitted) is its stage's unless set; won deals count as Closed. A deal has contacts with buying roles, one the primary (its Contact). A Quotation counts once submitted, is Sent (Send to Customer: a link to read, accept, decline or ask), Viewed, Accepted or Rejected by the customer, is revised by cancelling and amending (Revision, Revises, Replaced By), and becomes an ERP Sales Order when
         ordered. A deal's In Stage Since and Last Activity say how long it stood and when something was last done. An Activity (Open, Done, Cancelled) is a call, meeting or task with its due time; a call keeps its Outcome and Duration.
         A Customer has an Account Owner, Territory and Parent Account; a contact can be at several (Contacts at Accounts, one primary). A Sales Team's manager and a Territory's Sales People see their people's records. Sales Targets (report: achieved, gap). A call to someone on Do Not Call needs a Reason for Calling. A lead's Score comes from Lead Scoring Rules.
       suggestions:
