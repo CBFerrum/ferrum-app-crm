@@ -28,9 +28,12 @@ impl U {
     async fn insert(&self, entity: &str, v: Value) -> Doc {
         self.k.insert(&self.ctx, entity, obj(v)).await.unwrap_or_else(|e| panic!("insert {entity}: {e:?}"))
     }
-    #[allow(dead_code)]
     async fn get(&self, entity: &str, id: Uuid) -> Doc {
         self.k.get(&self.ctx, entity, id, false).await.unwrap_or_else(|e| panic!("get {entity}: {e:?}"))
+    }
+    #[allow(dead_code)]
+    async fn action(&self, entity: &str, id: Uuid, action: &str, params: Value) -> Value {
+        self.k.run_action(&self.ctx, entity, id, action, params).await.unwrap_or_else(|e| panic!("{entity}.{action}: {e:?}"))
     }
     async fn list(&self, entity: &str, filters: Value) -> Vec<Doc> {
         let q = ListQuery { filters: ferrum_kernel::query::parse_filters(&filters).unwrap(), limit: Some(500), ..Default::default() };
@@ -110,6 +113,7 @@ async fn scenario() {
         k.create_user(&admin.ctx, "anna@mailbox.test", "Anna Rep", Some(PASSWORD), &["Sales User".to_string(), "Comms User".to_string()], false).await.unwrap();
     let _ = anna;
     connections(&admin, tenant, &company).await;
+    sequence_mail(&admin, tenant, &company).await;
 }
 
 /// The two connections CRM offers: valid as shipped and off; pulled through a test connection, the headers and the
@@ -227,5 +231,127 @@ async fn connections(admin: &U, tenant: Uuid, company: &Value) {
     let pulls = k.connection_pulls(&admin.ctx, existing).await.unwrap();
     let err = pulls.iter().find(|p| p["name"] == "messages").unwrap()["last_error"].as_str().unwrap_or_default().to_string();
     assert!(err.contains("each person's own"), "a pull is no person: {err}");
+    let _ = tenant;
+}
+
+/// What a received mail looks like to CRM once Mail has kept it: its headers, as Mail keeps them.
+async fn received(admin: &U, tenant: Uuid, sender: &str, subject: &str, headers: Value) {
+    let sys = Ctx::system(tenant, admin.k.registry.schema(tenant).await.unwrap());
+    admin
+        .k
+        .insert(
+            &sys,
+            "Communication",
+            obj(json!({"channel": "Email", "direction": "Received", "status": "Received", "sender": sender, "recipients": "admin@mailbox.test", "subject": subject,
+                       "communication_date": chrono::Utc::now().to_rfc3339(), "headers": headers})),
+        )
+        .await
+        .unwrap_or_else(|e| panic!("received mail: {e:?}"));
+    drain(&admin.k).await;
+}
+
+/// Sequences send through Mail (`outbound::send`): Reply-To the owner, threaded under the earlier ones, their Message-IDs
+/// kept; a reply stops the sequence, an automatic answer does not, a bounce stops it and marks the address, an opt-out
+/// is honoured before anything is sent, and an erasure takes the addresses kept.
+async fn sequence_mail(admin: &U, tenant: Uuid, company: &Value) {
+    let k = &admin.k;
+    let template: ferrum_meta::MessageDef = serde_json::from_value(json!({
+        "key": "x_seq_mail", "entity": "Lead", "category": "promotional",
+        "languages": {"en": {"email": {"subject": "Hello {{ doc.lead_name }}", "body": "<p>Hello {{ doc.lead_name }}</p>"}}}
+    }))
+    .unwrap();
+    k.save_message_template(&admin.ctx, &template).await.unwrap();
+    let seq = uid(&admin
+        .insert(
+            "Sequence",
+            json!({"sequence_name": "Through Mail", "applies_to": "Lead", "steps": [{"step_type": "Message", "after_days": 0, "message": "x_seq_mail"},
+            {"step_type": "Message", "after_days": 0, "message": "x_seq_mail"}, {"step_type": "Task", "after_days": 5, "subject": "Later"}]}),
+        )
+        .await)
+    .to_string();
+    let lead = |name: &'static str| async move {
+        uid(&admin
+            .insert("Lead", json!({"first_name": name, "last_name": "Seq", "email": format!("{}@seq.test", name.to_lowercase()), "company": company}))
+            .await)
+    };
+    let enrol = |l: Uuid| {
+        let seq = seq.clone();
+        async move { uid(&admin.insert("SequenceEnrolment", json!({"sequence": seq, "lead": l.to_string()})).await) }
+    };
+    let step = || async { ferrum_app_crm::maintenance(k).await.unwrap() };
+    let sent_to = |address: &'static str| async move { admin.list("Communication", json!({"direction": "Sent", "recipients": address})).await };
+
+    // ── sent through Mail: Reply-To the owner, the second threaded under the first, the Message-IDs kept
+    let amy = lead("Amy").await;
+    let amy_en = enrol(amy).await;
+    step().await;
+    let first = sent_to("amy@seq.test").await;
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0]["reply_to_address"], json!("admin@mailbox.test"));
+    assert_eq!((first[0]["reference_entity"].clone(), first[0]["reference_id"].clone()), (json!("Lead"), json!(amy.to_string())));
+    assert!(first[0]["message_id"].is_string() && first[0]["in_reply_to"].is_null());
+    step().await;
+    let both = sent_to("amy@seq.test").await;
+    let second = both.iter().find(|c| c["id"] != first[0]["id"]).expect("the second mail");
+    assert_eq!(second["in_reply_to"], first[0]["message_id"], "threaded under the first");
+    assert!(second["mail_references"].as_str().unwrap().contains(first[0]["message_id"].as_str().unwrap()));
+    let kept: i64 = sqlx::query_scalar("select count(*) from crm_sequence_mail where enrolment = $1")
+        .bind(amy_en)
+        .fetch_one(&mut *k.db.system_tx().await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(kept, 2);
+
+    // ── an automatic answer is not a reply; their own answer, threaded or not, is
+    received(admin, tenant, "amy@seq.test", "Out of office", json!({"auto-submitted": "auto-replied", "in-reply-to": first[0]["message_id"]})).await;
+    received(admin, tenant, "amy@seq.test", "Newsletter", json!({"precedence": "bulk", "list-id": "<news.seq.test>"})).await;
+    assert_eq!(admin.get("SequenceEnrolment", amy_en).await["status"], json!("Active"));
+    received(admin, tenant, "amy@seq.test", "Re: Hello Amy", json!({"in-reply-to": second["message_id"], "references": first[0]["message_id"]})).await;
+    let e = admin.get("SequenceEnrolment", amy_en).await;
+    assert_eq!((e["status"].clone(), e["stopped_reason"].clone()), (json!("Stopped"), json!("Replied")));
+
+    // ── a bounce stops it and marks the address: by the failed recipient, or by the message it answers
+    let (bo, cy) = (lead("Bo").await, lead("Cy").await);
+    let (bo_en, cy_en) = (enrol(bo).await, enrol(cy).await);
+    step().await;
+    let cy_mail = sent_to("cy@seq.test").await;
+    received(admin, tenant, "mailer-daemon@mail.test", "Undelivered Mail", json!({"x-failed-recipients": "bo@seq.test", "content-type": "multipart/report"}))
+        .await;
+    received(admin, tenant, "mailer-daemon@mail.test", "Undelivered Mail", json!({"in-reply-to": cy_mail[0]["message_id"]})).await;
+    for (l, en) in [(bo, bo_en), (cy, cy_en)] {
+        let e = admin.get("SequenceEnrolment", en).await;
+        assert_eq!((e["status"].clone(), e["stopped_reason"].clone()), (json!("Stopped"), json!("Bounced")));
+        assert!(admin.get("Lead", l).await["email_bounced_on"].is_string(), "the address is marked");
+    }
+    let amy_replies = admin.get("Lead", amy).await;
+    assert!(amy_replies["email_bounced_on"].is_null(), "a reply is no bounce");
+    let other = admin
+        .insert(
+            "Sequence",
+            json!({"sequence_name": "Another", "applies_to": "Lead", "steps": [{"step_type": "Message", "after_days": 0, "message": "x_seq_mail"}]}),
+        )
+        .await;
+    let again = uid(&admin.insert("SequenceEnrolment", json!({"sequence": uid(&other).to_string(), "lead": bo.to_string()})).await);
+    step().await;
+    assert_eq!(admin.get("SequenceEnrolment", again).await["stopped_reason"], json!("Bounced"), "nothing more is sent to a bounced address");
+    assert_eq!(sent_to("bo@seq.test").await.len(), 1);
+
+    // ── an opt-out in the platform's list is honoured before anything is sent
+    let dee = lead("Dee").await;
+    k.set_message_opt_out(&admin.ctx, "dee@seq.test", "email", true).await.unwrap();
+    let dee_en = enrol(dee).await;
+    step().await;
+    assert_eq!(admin.get("SequenceEnrolment", dee_en).await["stopped_reason"], json!("Opted Out"));
+    assert!(sent_to("dee@seq.test").await.is_empty());
+
+    // ── an erasure takes the addresses a sequence kept (the report names them)
+    let found = k.personal_data(&admin.ctx, "amy@seq.test").await.unwrap();
+    assert!(found.to_string().contains("a sequence sent them"), "{found}");
+    k.erase_personal_data(&admin.ctx, "amy@seq.test", "Request 13").await.unwrap();
+    let left: i64 = sqlx::query_scalar("select count(*) from crm_sequence_mail where lower(address) = 'amy@seq.test'")
+        .fetch_one(&mut *k.db.system_tx().await.unwrap())
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
     let _ = tenant;
 }

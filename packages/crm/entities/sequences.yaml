@@ -20,7 +20,7 @@
     - {name: enabled, type: check, default: true, in_list: true, in_filter: true, description: "A sequence switched off runs no step: people already in it wait"}
     - {name: applies_to, type: select, options: [Lead, Contact], required: true, default: Lead, in_list: true, in_filter: true, label: For}
     - {name: calendar, type: data, label: Working Days Of, description: "The name of a business calendar (Administration, Calendars): a wait counts its business days. Empty: calendar days"}
-    - {name: stop_on_reply, type: check, default: true, label: Stop When They Reply, description: "A mail from them, filed by CRM (Mail's communications), ends it"}
+    - {name: stop_on_reply, type: check, default: true, label: Stop When They Reply, description: "A mail from them, filed by CRM (Mail's communications), ends it; an automatic answer (out of office, a list, a bounce) is not them replying"}
     - {name: stop_on_meeting, type: check, default: true, label: Stop When They Book a Meeting, description: "A calendar event with them as a guest, filed by CRM, ends it"}
     - {name: steps, type: table, of: SequenceStep}
   rules:
@@ -42,7 +42,7 @@
     - {name: assigned_to, type: email, default_expr: "user.email", in_list: true, in_filter: true, label: Owner, description: "A user's email: who gets its tasks and calls, unless the lead has an owner of its own"}
     - {name: sales_team, type: link, to: SalesTeam, in_filter: true, description: "Empty: its owner's first team. Its manager sees and works it"}
     - {name: status, type: select, options: [Active, Stopped, Completed], default: Active, read_only: true, in_list: true, in_filter: true}
-    - {name: stopped_reason, type: select, options: [Replied, Booked a Meeting, Converted, Lead Closed, Opted Out, Stopped by Owner, Sequence Off], read_only: true, no_copy: true, in_filter: true}
+    - {name: stopped_reason, type: select, options: [Replied, Booked a Meeting, Converted, Lead Closed, Opted Out, Bounced, Stopped by Owner, Sequence Off], read_only: true, no_copy: true, in_filter: true}
     - {name: next_step, type: int, read_only: true, no_copy: true, label: Next Step, description: "The number (from 1) of the step due next"}
     - {name: next_run_at, type: datetime, read_only: true, no_copy: true, in_list: true, in_filter: true, label: Next Step Due}
     - {name: last_run_at, type: datetime, read_only: true, no_copy: true}
