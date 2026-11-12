@@ -68,6 +68,7 @@
     - {name: unsubscribed, type: check, in_filter: true, description: Do not send marketing communication}
     - {name: email_consent_on, type: date, label: Email Since, description: "Since when marketing email is allowed or refused; set when it changes"}
     - {name: email_consent_how, type: data, description: "A web form, in person, a phone call, a request by mail or letter…", label: Email Given or Withdrawn By}
+    - {name: email_bounced_on, type: date, read_only: true, no_copy: true, in_filter: true, label: Email Bounced On, description: "The day a mail to this address came back undelivered: sequences send nothing more to it"}
     - {name: allow_duplicate, type: check, no_copy: true, description: "Save it although an open lead has the same email or phone; it is linked to that lead, to merge later"}
     - {name: phone_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The phone's national part, by which the same person is found"}
     - {name: mobile_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The mobile's national part, by which the same person is found"}
@@ -77,7 +78,7 @@
     - {name: notes, type: text}
   form:
     - {label: Lead, fields: [record_type, first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, sales_team, assignment_rule, score, score_why, next_follow_up, last_contacted_on, last_touched_at]}
-    - {label: Contact Details, fields: [email, phone, mobile, website, do_not_call, call_consent_on, call_consent_how, unsubscribed, email_consent_on, email_consent_how, allow_duplicate, duplicate_of]}
+    - {label: Contact Details, fields: [email, phone, mobile, website, do_not_call, call_consent_on, call_consent_how, unsubscribed, email_consent_on, email_consent_how, email_bounced_on, allow_duplicate, duplicate_of]}
     - {label: Source and Segment, fields: [source, campaign, prospect, territory, industry, company_size, annual_revenue, company]}
     - {label: Qualification, collapsible: true, fields: [budget, is_decision_maker, need, timeline, qualified_on, qualified_by]}
     - {label: Address, collapsible: true, fields: [address_line1, address_line2, city, state, postal_code, country]}

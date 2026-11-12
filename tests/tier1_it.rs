@@ -286,7 +286,9 @@ async fn scenario() {
         .await;
 
     let (acme, jane) = quotation_link(&k, &admin, &anna, &ben, &cid, &widget, tenant).await;
+    sent_by_0_12_0(&k, &admin, &anna, acme, jane, &widget, tenant).await;
     timeline_and_filing(&k, &admin, &anna, &ben, &maria, (acme, jane), &cid, tenant).await;
+    hosted_mail(&k, &admin, &anna, tenant).await;
     sequences(&k, &admin, &anna, tenant).await;
     forecast(&k, &admin, &anna, &ben, &maria, tenant).await;
     record_types(&admin, &anna).await;
@@ -316,11 +318,10 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
         .await);
     let nobody = customer(admin, "No Address Ltd", None).await;
 
-    // ── the lines are text the customer's page can show
     let q1 = quote(anna, acme, Some(jane), widget, "10").await;
     let doc = anna.get("Quotation", q1).await;
     assert_eq!(doc["status"], json!("Open"));
-    assert!(doc["lines_text"].as_str().unwrap_or_default().contains("Widget | 10"), "{}", doc["lines_text"]);
+    assert!(doc.get("lines_text").is_none_or(Value::is_null), "the hidden lines text is gone: the page shows the lines by columns");
 
     // ── nowhere to send it: refused, and nothing is sent
     let bare = quote(anna, nobody, None, widget, "1").await;
@@ -338,7 +339,12 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     assert_eq!(links.len(), 1, "{links:?}");
     let l = &links[0];
     assert_eq!(l["actions"], json!(["customer_accept", "customer_decline", "customer_ask"]));
-    assert!(l["show"].as_array().unwrap().iter().any(|f| f == "lines_text"), "lines and totals by default");
+    assert!(l["show"].as_array().unwrap().iter().any(|f| f == "items"), "lines and totals by default");
+    assert_eq!(l["columns"], json!({"items": ["item_name", "qty", "rate", "amount"]}));
+    // it works through the quotation's valid-until (the platform's `until`), not a fixed 90 days
+    let valid: chrono::NaiveDate = doc["valid_till"].as_str().unwrap().parse().unwrap();
+    let ends = chrono::DateTime::parse_from_rfc3339(l["expires_at"].as_str().unwrap()).unwrap();
+    assert_eq!(ends.date_naive(), valid + chrono::Duration::days(1), "through the whole of its last day: {l}");
     assert_eq!(l["max_uses"], json!(20));
     assert_eq!(l["code"], json!(false));
     assert_eq!(l["recipient"], json!("Acme Corp"));
@@ -356,7 +362,8 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     // ── what the customer does, on a link of their own (the mailed one's address is kept nowhere)
     let spec = |uses| LinkSpec {
         actions: vec!["customer_accept".into(), "customer_decline".into(), "customer_ask".into()],
-        show: vec!["party_name".into(), "valid_till".into(), "lines_text".into(), "grand_total".into()],
+        show: vec!["party_name".into(), "valid_till".into(), "items".into(), "grand_total".into()],
+        columns: [("items".to_string(), vec!["item_name".to_string(), "qty".to_string(), "rate".to_string(), "amount".to_string()])].into(),
         uses: Some(uses),
         recipient: Some("Acme Corp".into()),
         ..Default::default()
@@ -364,10 +371,12 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     let link = admin.k.issue_link_now(&admin.ctx, "Quotation", q1, &spec(20)).await.unwrap();
     let t = token(&link.url);
     let page = admin.k.link_page("tier1", &t).await.unwrap().expect("the page");
-    assert!(page.fields.iter().any(|(_, v)| v.contains("Widget | 10")), "the customer reads the lines: {:?}", page.fields);
+    assert_eq!(page.tables[0].2[0][..2], ["Widget".to_string(), "10".to_string()], "the customer reads the lines: {:?}", page.tables);
     assert_eq!(page.actions.iter().map(|a| a.0.as_str()).collect::<Vec<_>>(), ["customer_accept", "customer_decline", "customer_ask"]);
 
-    // a question lands as a task for the owner, and the quotation was Viewed
+    // a question lands as a task for the owner; the quotation is Viewed once the platform says the page was acted on
+    assert_eq!(anna.get("Quotation", q1).await["status"], json!("Sent"), "reading the page alone views nothing");
+    k.link_opened("tier1", &t).await.unwrap();
     k.use_link("tier1", &t, "customer_ask", &given(json!({"question": "Can you ship by Friday?", "signed_name": "Jane Lee"})), None)
         .await
         .unwrap()
@@ -377,6 +386,7 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     assert_eq!(task["activity_type"], json!("Task"));
     assert_eq!(task["customer"], json!(acme.to_string()));
     assert!(task["details"].as_str().unwrap().contains("Jane Lee"));
+    drain(k).await;
     let doc = anna.get("Quotation", q1).await;
     assert_eq!(doc["status"], json!("Viewed"));
     assert!(doc["viewed_at"].is_string());
@@ -420,7 +430,7 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     let q3 = quote(anna, acme, Some(jane), widget, "3").await;
     anna.action("Quotation", q3, "send_quotation", json!({})).await;
     let shown = anna.k.record_links(&anna.ctx, "Quotation", q3).await.unwrap()[0]["show"].clone();
-    assert!(shown.as_array().unwrap().iter().any(|f| f == "grand_total") && !shown.as_array().unwrap().iter().any(|f| f == "lines_text"), "{shown}");
+    assert!(shown.as_array().unwrap().iter().any(|f| f == "grand_total") && !shown.as_array().unwrap().iter().any(|f| f == "items"), "{shown}");
     admin.update("CrmSettings", uid(&settings), json!({"quote_link_shows": "Neither"})).await;
     anna.action("Quotation", q3, "send_quotation", json!({})).await;
     let shown = anna.k.record_links(&anna.ctx, "Quotation", q3).await.unwrap()[0]["show"].clone();
@@ -480,6 +490,66 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     admin.update("CrmSettings", uid(&settings), json!({"order_on_accept": false})).await;
     let _ = ben;
     (acme, jane)
+}
+
+/// A quotation sent by 0.12.0, whose link (90 days, showing the hidden Lines Text) is in the customer's mail, after
+/// this release's startup has run its migration: the link still shows the lines, still works, is seen as opened,
+/// still ends with the quotation's validity (the maintenance, since it has no `until`) and when it is cancelled.
+async fn sent_by_0_12_0(k: &Arc<Kernel>, admin: &U, anna: &U, acme: Uuid, jane: Uuid, widget: &str, tenant: Uuid) {
+    let old_link = |q: Uuid| {
+        let spec = LinkSpec {
+            actions: vec!["customer_accept".into(), "customer_decline".into(), "customer_ask".into()],
+            show: vec!["party_name".into(), "valid_till".into(), "grand_total".into()],
+            uses: Some(20),
+            recipient: Some("Acme Corp".into()),
+            ..Default::default()
+        };
+        async move { token(&admin.k.issue_link_now(&admin.ctx, "Quotation", q, &spec).await.unwrap().url) }
+    };
+    let as_it_was = "update action_link set show = array['party_name', 'valid_till', 'lines_text', 'grand_total'], columns = '{}'::jsonb, \
+                     expires_at = now() + interval '90 days' where tenant_id = $1 and record_id = $2";
+    let migrate = |what: &'static str| async move {
+        let mut tx = k.db.system_tenant_tx(tenant).await.unwrap();
+        sqlx::raw_sql(what).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+    };
+    let migration = include_str!("../packages/crm/sql/008_link_lines.sql");
+
+    let q = quote(anna, acme, Some(jane), widget, "8").await;
+    anna.action("Quotation", q, "send_quotation", json!({})).await;
+    let t = old_link(q).await;
+    sql(k, as_it_was, tenant, q).await;
+    migrate(migration).await;
+    migrate(migration).await; // and again: nothing moves twice
+    let links = anna.k.record_links(&anna.ctx, "Quotation", q).await.unwrap();
+    assert!(links.iter().any(|l| l["show"] == json!(["party_name", "valid_till", "items", "grand_total"]) && l["columns"]["items"].is_array()), "{links:?}");
+    let page = k.link_page("tier1", &t).await.unwrap().expect("the old link still works");
+    assert_eq!(page.tables[0].2[0][..2], ["Widget".to_string(), "8".to_string()], "and still shows the lines: {:?}", page.tables);
+    k.link_opened("tier1", &t).await.unwrap();
+    k.use_link("tier1", &t, "customer_ask", &given(json!({"question": "Is stock there?", "signed_name": "Jane Lee"})), None).await.unwrap().expect("asked");
+    drain(k).await;
+    assert_eq!(anna.get("Quotation", q).await["status"], json!("Viewed"));
+    // sent again: the old link's later opening says nothing (it is ended), and a fresh quotation's link is not affected
+    anna.action("Quotation", q, "send_quotation", json!({})).await;
+    assert_eq!(anna.get("Quotation", q).await["status"], json!("Sent"));
+    assert!(k.link_page("tier1", &t).await.unwrap().is_none(), "ended by the new send");
+    // its validity passes: the maintenance ends the 90-day link the new platform call would not know of
+    let t2 = old_link(q).await;
+    sql(k, as_it_was, tenant, q).await;
+    sql(k, "update e_quotation set valid_till = current_date - 2 where tenant_id = $1 and id = $2", tenant, q).await;
+    ferrum_app_crm::maintenance(k).await.unwrap();
+    assert_eq!(anna.get("Quotation", q).await["status"], json!("Expired"));
+    assert!(k.use_link("tier1", &t2, "customer_accept", &given(json!({"signed_name": "Late"})), None).await.unwrap().is_none(), "expired with its quotation");
+    // cancelled for a revision: revoked by the platform's call, recorded in the history
+    let q = quote(anna, acme, Some(jane), widget, "9").await;
+    anna.action("Quotation", q, "send_quotation", json!({})).await;
+    let t3 = old_link(q).await;
+    sql(k, as_it_was, tenant, q).await;
+    migrate(migration).await;
+    anna.k.cancel(&anna.ctx, "Quotation", q, None).await.unwrap();
+    assert!(k.use_link("tier1", &t3, "customer_accept", &given(json!({"signed_name": "Old"})), None).await.unwrap().is_none());
+    let trail = anna.k.audit_trail(&anna.ctx, "Quotation", q).await.unwrap();
+    assert!(trail["events"].as_array().unwrap().iter().any(|e| e["action"] == "revoke_link"), "the platform says so in the history");
 }
 
 async fn sql(k: &Kernel, q: &str, tenant: Uuid, record: Uuid) {
@@ -717,6 +787,87 @@ async fn timeline_and_filing(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, mari
     drain(k).await;
     assert!(!titles(&anna.timeline("Contact", jane, json!({})).await, "email").contains(&"While filing is off".to_string()));
     set(json!({"file_communications": true})).await;
+}
+
+/// What Mail raises for a message of a hosted mailbox whose owner allowed filing (`MailMessage.received`, `.sent`).
+async fn raise(k: &Kernel, tenant: Uuid, kind: &str, record: Uuid, from: &str, to: &[&str], subject: &str) {
+    let mut tx = k.db.system_tenant_tx(tenant).await.unwrap();
+    let payload = json!({"kind": kind, "mailbox": Uuid::nil(), "mailbox_address": "anna@tier1.test", "owner": null, "account": "a1", "email": "e1", "thread": "T1",
+                         "message_id": "m1@x.test", "in_reply_to": [], "from": from, "to": to, "cc": [], "subject": subject, "at": chrono::Utc::now().to_rfc3339()});
+    ferrum_kernel::outbox::enqueue(&mut tx, tenant, &format!("MailMessage.{kind}"), Some("MailMessage"), Some(record), payload).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn filed_mail(k: &Kernel, tenant: Uuid, message: Uuid) -> i64 {
+    scalar(k, "select count(*) from crm_filed_mail where tenant_id = $1 and message = $2", tenant, Some(message)).await
+}
+
+/// Hosted mailboxes file by themselves: by address, on the same people and the newest open deal as a Communication,
+/// under the same settings, once for each message however often and however concurrently it is told, and an
+/// erasure reaches what is filed.
+async fn hosted_mail(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
+    let settings = admin.one("CrmSettings", json!({})).await;
+    let lee = uid(&anna.insert("Lead", json!({"first_name": "Lee", "last_name": "Hosted", "email": "Lee@Hosted.test", "source": "Website"})).await);
+    let deal = uid(&anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": lee.to_string(), "title": "Lee's deal", "amount": "10"})).await);
+    let m1 = Uuid::now_v7();
+    raise(k, tenant, "received", m1, "lee@hosted.test", &["anna@tier1.test"], "Hosted hello").await;
+    // The same message told again, and at once from two workers: still one filing (a lead and a deal)
+    raise(k, tenant, "received", m1, "lee@hosted.test", &["anna@tier1.test"], "Hosted hello").await;
+    tokio::join!(drain(k), drain(k));
+    assert_eq!(filed_mail(k, tenant, m1).await, 2, "on the lead and on its deal, once");
+    let t = anna.timeline("Lead", lee, json!({})).await;
+    assert_eq!(titles(&t, "email"), ["Hosted hello"]);
+    assert_eq!(t["events"][0]["details"]["sender"], json!("lee@hosted.test"));
+    assert_eq!(titles(&anna.timeline("Opportunity", deal, json!({})).await, "email"), ["Hosted hello"]);
+    assert!(anna.get("Lead", lee).await["last_touched_at"].is_string(), "heard from: touched");
+    // one that anna sent him is filed too; one between colleagues, to nobody known, or to outsiders only, is not
+    let m2 = Uuid::now_v7();
+    raise(k, tenant, "sent", m2, "anna@tier1.test", &["lee@hosted.test", "ben@tier1.test"], "Re: Hosted hello").await;
+    let (m3, m4) = (Uuid::now_v7(), Uuid::now_v7());
+    raise(k, tenant, "sent", m3, "anna@tier1.test", &["ben@tier1.test"], "Internal").await;
+    raise(k, tenant, "received", m4, "stranger@hosted-new.test", &["anna@tier1.test"], "Who is this").await;
+    drain(k).await;
+    assert_eq!(titles(&anna.timeline("Lead", lee, json!({})).await, "email"), ["Re: Hosted hello", "Hosted hello"]);
+    assert_eq!((filed_mail(k, tenant, m3).await, filed_mail(k, tenant, m4).await), (0, 0));
+    assert!(admin.list("Lead", json!({"email": "stranger@hosted-new.test"})).await.is_empty(), "no lead unless the setting says so");
+    // the unknown-sender setting makes a lead of a stranger, never of an automatic sender
+    admin.update("CrmSettings", uid(&settings), json!({"unknown_sender_lead": true})).await;
+    let (m5, m6) = (Uuid::now_v7(), Uuid::now_v7());
+    raise(k, tenant, "received", m5, "stranger@hosted-new.test", &["anna@tier1.test"], "Who is this").await;
+    raise(k, tenant, "received", m6, "no-reply@hosted-news.test", &["anna@tier1.test"], "Newsletter").await;
+    drain(k).await;
+    let stranger = admin.one("Lead", json!({"email": "stranger@hosted-new.test"})).await;
+    assert_eq!(titles(&admin.timeline("Lead", uid(&stranger), json!({})).await, "email"), ["Who is this"]);
+    assert!(admin.list("Lead", json!({"email": "no-reply@hosted-news.test"})).await.is_empty());
+    admin.update("CrmSettings", uid(&settings), json!({"unknown_sender_lead": false})).await;
+    // the setting that files is CRM's too: off, nothing is filed
+    admin.update("CrmSettings", uid(&settings), json!({"file_communications": false})).await;
+    let m7 = Uuid::now_v7();
+    raise(k, tenant, "received", m7, "lee@hosted.test", &["anna@tier1.test"], "While it was off").await;
+    drain(k).await;
+    assert_eq!(filed_mail(k, tenant, m7).await, 0);
+    admin.update("CrmSettings", uid(&settings), json!({"file_communications": true})).await;
+    // a reply stops the sequence the person was in (as for a Communication)
+    let seq = uid(&admin
+        .insert(
+            "Sequence",
+            json!({"sequence_name": "Hosted follow-up", "applies_to": "Lead", "steps": [{"step_type": "Task", "after_days": 5, "subject": "Call"}]}),
+        )
+        .await);
+    anna.action("Lead", lee, "enrol_in_sequence", json!({"sequence": seq.to_string()})).await;
+    let m8 = Uuid::now_v7();
+    raise(k, tenant, "received", m8, "lee@hosted.test", &["anna@tier1.test"], "Interested").await;
+    drain(k).await;
+    assert_eq!(admin.one("SequenceEnrolment", json!({"lead": lee.to_string()})).await["stopped_reason"], json!("Replied"));
+
+    // ── erasure reaches what is filed: reported, then gone, the record's other mail untouched
+    let found = k.personal_data(&admin.ctx, "lee@hosted.test").await.unwrap();
+    assert!(found.to_string().contains("MailMessage"), "{found}");
+    k.erase_personal_data(&admin.ctx, "lee@hosted.test", "Request 12").await.unwrap();
+    assert_eq!(filed_mail(k, tenant, m1).await + filed_mail(k, tenant, m2).await + filed_mail(k, tenant, m8).await, 0);
+    let left: i64 =
+        scalar(k, "select count(*) from crm_filed_mail where tenant_id = $1 and subject is not null and record_id <> $2", tenant, Some(Uuid::nil())).await;
+    assert_eq!(left, 1, "only the stranger's, on the lead made of it: {left}");
 }
 
 async fn run_steps(k: &Kernel) {

@@ -195,7 +195,7 @@ impl DocHook for QuotationHook {
     async fn on_cancel(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
         let qid = id(doc, "id").ok_or_else(|| Error::internal("quotation without id"))?;
         // A revision (cancel, then amend) replaces what the customer was sent: the old link stops working.
-        revoke_links(hc.tx, hc.ctx, qid, "cancelled").await?;
+        revoke_links(hc.kernel, hc.tx, hc.ctx, qid).await?;
         refresh(hc.kernel, hc.ctx, hc.tx, qid).await.map(|_| ())
     }
 
@@ -464,7 +464,7 @@ async fn mark_lost(hc: &mut HookCtx<'_>, q: &Doc, params: &Value) -> Result<Valu
 /// Records that the quotation was sent to the customer, that they opened it, or their answer: accepted,
 /// or rejected with a reason, by whom it was recorded (a person of the workspace, or the customer by their
 /// link, with the name they typed) and when. A rejection leaves its deal open: another revision may follow.
-/// A new send ends the links sent before; an answer ends them all; a setting (CRM Settings, Order an
+/// A new send ends the links sent before; an answer ends them all (the platform's `revoke_action_links`); a setting (CRM Settings, Order an
 /// Accepted Quotation) makes the order of one the customer accepted.
 async fn answer(hc: &mut HookCtx<'_>, name: &str, q: &Doc, params: &Value) -> Result<Value> {
     let qid = id(q, "id").ok_or_else(|| Error::internal("quotation without id"))?;
@@ -478,8 +478,10 @@ async fn answer(hc: &mut HookCtx<'_>, name: &str, q: &Doc, params: &Value) -> Re
             v.insert("sent_on".into(), today);
             v.insert("sent_at".into(), now);
             v.insert("viewed_at".into(), Value::Null);
-            revoke_links(hc.tx, hc.ctx, qid, "sent again").await?;
+            revoke_links(hc.kernel, hc.tx, hc.ctx, qid).await?;
         }
+        // Only a workspace still on 0.12.0's package asks for this (its Ask a Question invokes it); from 0.13.0 the
+        // platform's `opened` event does it (`Opened` below).
         "mark_viewed" => {
             if s(q, "viewed_at").is_none() {
                 v.insert("viewed_at".into(), now);
@@ -516,7 +518,7 @@ async fn answer(hc: &mut HookCtx<'_>, name: &str, q: &Doc, params: &Value) -> Re
     refresh(hc.kernel, hc.ctx, hc.tx, qid).await?;
     let accepted = matches!(name, "mark_accepted" | "customer_accept");
     if accepted || matches!(name, "mark_rejected" | "customer_decline") {
-        revoke_links(hc.tx, hc.ctx, qid, "answered").await?;
+        revoke_links(hc.kernel, hc.tx, hc.ctx, qid).await?;
     }
     let mut out = json!({});
     if accepted {
@@ -527,19 +529,11 @@ async fn answer(hc: &mut HookCtx<'_>, name: &str, q: &Doc, params: &Value) -> Re
     Ok(out)
 }
 
-/// Ends the signed links of a quotation (the platform keeps them in `action_link` and has no call that does
-/// this inside the caller's transaction). Says so in the quotation's history when any was working.
-pub(crate) async fn revoke_links(tx: &mut Tx, ctx: &Ctx, quotation: Uuid, why: &str) -> Result<()> {
-    let n = sqlx::query("update action_link set revoked_at = now() where tenant_id = $1 and entity = 'Quotation' and record_id = $2 and revoked_at is null")
-        .bind(ctx.tenant)
-        .bind(quotation)
-        .execute(&mut **tx)
-        .await?
-        .rows_affected();
-    if n > 0 {
-        ferrum_kernel::audit::record(tx, ctx, "Quotation", quotation, "revoke_link", None, json!({"links": n, "why": why})).await?;
-    }
-    Ok(())
+/// Ends the signed links of a quotation, in the caller's transaction, by the platform's call (which says so in the
+/// quotation's history when any was working). The customer answering on a link is outside the workspace, so the
+/// engine ends them.
+pub(crate) async fn revoke_links(k: &Kernel, tx: &mut Tx, ctx: &Ctx, quotation: Uuid) -> Result<()> {
+    k.revoke_action_links(tx, &sys(ctx), "Quotation", quotation, None).await.map(|_| ())
 }
 
 /// The sales order of a quotation the customer has accepted, when CRM Settings say to make it: a draft one, as
@@ -679,6 +673,37 @@ async fn track_orders(hc: &mut HookCtx<'_>, order: &Doc, sign: Decimal) -> Resul
     Ok(())
 }
 
+/// The platform's `opened` event for a quotation (the customer first acted on its link's page): a sent quotation
+/// is Viewed. A link ended since (the quotation was sent again, answered or cancelled) says nothing; a repeat of
+/// the event changes nothing. Runs for a workspace on any version of the package: the fields are 0.10's.
+pub(crate) async fn opened(k: &Kernel, ev: &ferrum_kernel::outbox::Event) -> Result<()> {
+    let Some(qid) = ev.record_id else { return Ok(()) };
+    let schema = k.registry.schema(ev.tenant_id).await?;
+    if schema.entity("Quotation").is_none() {
+        return Ok(());
+    }
+    let ctx = Ctx::system(ev.tenant_id, schema);
+    let link = ev.payload["link"]["id"].as_str().unwrap_or_default();
+    let working = k.record_links(&ctx, "Quotation", qid).await?.iter().any(|l| l["id"].as_str() == Some(link) && l["revoked_at"].is_null());
+    if !working {
+        return Ok(());
+    }
+    let mut tx = k.db.system_tenant_tx(ev.tenant_id).await?;
+    let q = match k.get_tx(&ctx, &mut tx, "Quotation", qid, true).await {
+        Ok(q) => q,
+        Err(Error::NotFound(_)) => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    if s(&q, "status") == Some("Sent") && s(&q, "viewed_at").is_none() {
+        let mut v = Doc::new();
+        v.insert("viewed_at".into(), json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)));
+        k.set_values_tx(&ctx, &mut tx, "Quotation", qid, v).await?;
+        refresh(k, &ctx, &mut tx, qid).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Moves open and sent quotations past their validity to Expired, tenant by tenant. Idempotent, and safe on
 /// several replicas at once: one replica handles a tenant per round and only Open → Expired moves.
 pub(crate) async fn expire_all(k: &Kernel) -> Result<()> {
@@ -725,8 +750,9 @@ async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
         v.insert("status".into(), json!("Expired"));
         k.set_values_tx(&ctx, &mut tx, "Quotation", qid, v).await?;
         ferrum_kernel::audit::record(&mut tx, &ctx, "Quotation", qid, "expire", None, json!({"status": [was, "Expired"]})).await?;
-        // What the customer was sent stops working with its validity.
-        revoke_links(&mut tx, &ctx, qid, "expired").await?;
+        // What the customer was sent stops working with its validity. Links sent from 0.13.0 end by themselves on
+        // the quotation's valid-until (`until`); those sent before had 90 days, and this is what ends them.
+        revoke_links(k, &mut tx, &ctx, qid).await?;
         expired += 1;
     }
     tx.commit().await?;

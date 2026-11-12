@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.13.0
+
+What 0.12.0 had to work around, now that the platform (action links, connections) and Mail (0.20) offer it. Needs a platform with the signed-link work of BD-38 and Mail 0.20 where sequences should go through Mail. Two database tables arrive at startup (`009_filed_mail.sql`, `010_sequence_mail.sql`) and one migration (`008_link_lines.sql`); an administrator updates the app for the new fields and connections, and nothing breaks before they do.
+
+Quotation links on the platform's calls:
+- A quotation's links are ended by the platform's own call (when it is sent again, answered or cancelled), recorded in its history.
+- A link now lasts through the quotation's Valid Till (the link's `until`), not a fixed 90 days; it still never outlives the platform's 90 days, and a quotation cannot be sent past its validity.
+- Viewed is set when the platform says the customer first acted on the page (its `opened` event). A link that has since ended (sent again, answered) does not view it. Reading the page alone views nothing, so a mail scanner cannot.
+- The customer's page shows the lines through the link's columns (item, quantity, rate, amount). The hidden Lines Text field and the hidden action Mark as Viewed are gone from the package. Links sent by 0.12.0 keep working: the migration points their page at the lines, they still expire with the quotation at the upkeep (they have 90 days and no `until`) and are revoked when it is cancelled. A workspace not yet updated keeps its old package and still works, because CRM still answers the old action.
+
+Hosted mailboxes file by themselves:
+- Mail raises `MailMessage.received` and `.sent` for a mailbox whose owner allowed filing (Mail decides; CRM reads no mailbox). Each message is filed by exact address on the first of contact, lead, customer or prospect, and on their newest open deal, under the same CRM Settings as a Communication (File Mail and Calls to Their People; Make a Lead of an Unknown Sender), once however many times or at once it is told. It shows on the timeline as an email (subject, other party, time: never a body) and a reply from them ends their sequences. Erasing the person's address removes what was filed.
+
+A mailbox and a calendar at an outside provider (CR-2), as far as configuration reaches: two connections arrive turned off, with placeholder addresses and no scopes: the workspace's shared mailbox (a pull of message headers every 15 minutes onto Mail's communications, which CRM files as above) and a person's own (operations only). `docs/connections.md` says what works end to end, what a workspace or a pack supplies, and what the platform's connections cannot yet express (the personal one cannot be pulled; events cannot be pulled without inviting every guest again; and more).
+
+Sequences send through Mail:
+- Where Mail is 0.20 or later, a message step goes out through Mail's app sending: the template rendered for the person, Reply-To the owner, threaded under what the sequence sent them before, its Message-ID kept with the enrolment. Without Mail it goes through the platform's channels as before.
+- A reply (or any mail from them) ends the sequence as before, but an automatic answer (Auto-Submitted, an auto-response marker, bulk or list mail) is not them replying. A bounce (a failed recipient, a delivery report, the mail system's own sender, or an answer to a message the sequence sent) stops the sequence with the reason Bounced and marks the address (Email Bounced On, on the lead and the contact); nothing more is sent to it.
+- Someone in the platform's marketing opt-outs for e-mail is not sent to: the sequence stops with Opted Out before the step.
+- New: the stopped reason Bounced; Email Bounced On on a lead and a contact.
+
 ## 0.12.0
 
 For a team that lives in mail, calls and quotations.
