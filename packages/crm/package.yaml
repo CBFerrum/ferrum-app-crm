@@ -342,3 +342,94 @@ handover:
   - {entity: Prospect, field: assigned_to}
   # A customer's account owner moves too: src/accounts.rs `Departures` (a package cannot declare a
   # field it adds to another's entity here).
+# Connections to a person's or a team's mail and calendar at an outside provider that speaks a described HTTP API
+# (CR-2). Both arrive turned off, with placeholder addresses and no scopes: a workspace fills in its provider's
+# addresses, scopes and client, the provider's own names for the fields below, and gives the secrets
+# (docs/connections.md says what is what). They carry no provider's name, address or scope. A message is mapped from
+# its headers only (never a body, never a file) onto Mail's Communication, which is where CRM's filing
+# (src/filing.rs) already looks: a mail is filed on its person by exact address. Events are listed by an operation
+# but not pulled: mapped onto Mail's CalendarEvent they would invite every outside guest again (docs/connections.md).
+# The neutral names read here (`id`, `from.address`, `to[].address`, `received_at`...) are what a provider's own shape
+# is edited or mapped to. Needs Mail installed (the mapping names its entity).
+connections:
+  - name: crm_shared_mailbox
+    label: Shared mailbox and calendar (a provider's HTTP API)
+    description:
+      base: https://provider.invalid/api
+      auth:
+        type: oauth
+        owner: workspace
+        provider:
+          authorize_url: https://provider.invalid/oauth/authorize
+          token_url: https://provider.invalid/oauth/token
+          scopes: []
+          client_id: set-by-the-workspace
+          client_secret: client_secret
+          client_auth: body
+      timeout_ms: 20000
+      operations:
+        list_messages:
+          label: Headers of the newest messages
+          method: GET
+          path: /messages
+          query: {folder: inbox, fields: "id,message_id,in_reply_to,subject,from,to,cc,received_at", page_size: "100", page_token: "{{ inputs.cursor }}"}
+          inputs: [cursor]
+        list_events:
+          label: Events of the calendar
+          method: GET
+          path: /events
+          query: {fields: "id,title,start,end,status,organizer,attendees", page_size: "100", page_token: "{{ inputs.cursor }}"}
+          inputs: [cursor]
+      pulls:
+        - name: messages
+          operation: list_messages
+          every_minutes: 15
+          items_at: /messages
+          cursor: token
+          next_at: /next_page_token
+          cursor_input: cursor
+          max_pages: 5
+          map:
+            entity: Communication
+            by: {message_id: "has(item.message_id) ? item.message_id : item.id"}
+            create:
+              channel: "'Email'"
+              direction: "'Received'"
+              status: "'Received'"
+              seen: "true"
+              sender: "has(item.from) ? item.from.address : null"
+              sender_name: "has(item.from) && has(item.from.name) ? item.from.name : null"
+              recipients: "has(item.to) ? item.to.map(a, a.address).join(', ') : null"
+              cc: "has(item.cc) ? item.cc.map(a, a.address).join(', ') : null"
+              subject: "has(item.subject) ? item.subject : null"
+              communication_date: "has(item.received_at) ? item.received_at : null"
+              in_reply_to: "has(item.in_reply_to) ? item.in_reply_to : null"
+  - name: crm_personal_mailbox
+    label: A person's own mailbox and calendar (a provider's HTTP API)
+    description:
+      base: https://provider.invalid/api
+      auth:
+        type: oauth
+        owner: person
+        provider:
+          authorize_url: https://provider.invalid/oauth/authorize
+          token_url: https://provider.invalid/oauth/token
+          scopes: []
+          client_id: set-by-the-workspace
+          client_secret: client_secret
+          client_auth: body
+      roles: [Sales User, Sales Manager]
+      timeout_ms: 20000
+      operations:
+        list_messages:
+          label: Headers of the newest messages
+          method: GET
+          path: /messages
+          query: {folder: inbox, fields: "id,message_id,in_reply_to,subject,from,to,cc,received_at", page_size: "100", page_token: "{{ inputs.cursor }}"}
+          inputs: [cursor]
+        list_events:
+          label: Events of the calendar
+          method: GET
+          path: /events
+          query: {fields: "id,title,start,end,status,organizer,attendees", page_size: "100", page_token: "{{ inputs.cursor }}"}
+          inputs: [cursor]

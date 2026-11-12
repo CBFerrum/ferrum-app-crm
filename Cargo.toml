@@ -22,6 +22,8 @@ tracing = "0.1"
 uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
 
 [dev-dependencies]
+# The real Mail, for the tests that drive the connections and Mail's own sending (tests/mailbox_it.rs).
+ferrum-app-comms = { git = "https://github.com/CBFerrum/ferrum-app-comms", branch = "main" }
 ferrum-apps = { git = "https://github.com/CBFerrum/Ferrum", branch = "main" }
 tokio = { version = "1.45", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 
