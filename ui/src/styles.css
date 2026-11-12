@@ -409,6 +409,7 @@
 
 .crm-composer-foot {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   padding: 0 0.5rem 0.5rem;
@@ -416,6 +417,7 @@
 
 .crm-composer-foot .input {
   width: auto;
+  min-width: 5rem;
   height: var(--control-h-sm);
 }
 
