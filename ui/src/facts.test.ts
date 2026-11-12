@@ -24,7 +24,7 @@ describe("what a quick action writes down", () => {
     expect(task.opportunity).toBe("d1");
     expect(task.due_at).toBe(new Date("2026-11-20T09:30").toISOString());
     expect(activityBody("Customer", "c1", { kind: "Note", text: "x" }, false, now).due_at).toBeNull();
-    expect(activityBody("Prospect", "p1", { kind: "Note", text: "x" }, false, now)).not.toHaveProperty("prospect");
+    expect(activityBody("Prospect", "p1", { kind: "Note", text: "x" }, false, now).prospect).toBe("p1");
   });
 });
 

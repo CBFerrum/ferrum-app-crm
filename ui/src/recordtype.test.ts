@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blankType, entryChoices, fieldChoices, grouped, stagesFor, summary, typeBody, typeIssues, valueKind } from "./recordtype";
+import { allowable, blankType, entryChoices, fieldChoices, grouped, stagesFor, strayStages, summary, toggled, typeBody, typeIssues, valueKind } from "./recordtype";
 
 // Fields as the platform's metadata lists them for a deal.
 const fields = [
@@ -64,8 +64,40 @@ describe("saving a type", () => {
       disabled: false,
       defaults: [{ field: "source", value: "Referral" }],
       requirements: [{ id: "r1", stage_name: null, field: "next_step" }],
+      allowed_stages: [],
     });
     expect(typeBody({ ...ok, applies_to: "Lead", pipeline: "p1" }).pipeline).toBeNull();
+  });
+});
+
+describe("allowed stages", () => {
+  const all = [
+    { id: "1", stage_name: "Qualification", pipeline: "p1", stage_order: 1, outcome: "Open" },
+    { id: "2", stage_name: "Proposal", pipeline: "p1", stage_order: 2, outcome: "Open" },
+    { id: "3", stage_name: "Won", pipeline: "p1", stage_order: 9, outcome: "Won" },
+    { id: "4", stage_name: "Intake", pipeline: "p2", stage_order: 1, outcome: "Open" },
+  ];
+  const ok = { ...blankType(), type_name: "Renewal" };
+  it("offers the open stages of the type's pipeline in their order, and never a closing one", () => {
+    expect(allowable(all, "p1").map((s) => s.stage_name)).toEqual(["Qualification", "Proposal"]);
+    expect(allowable(all, null).map((s) => s.stage_name)).toEqual(["Intake", "Qualification", "Proposal"]);
+  });
+
+  it("ticks a stage on and off, keeping the rows (and ids) of the others", () => {
+    const rows = [{ id: "r1", stage: "1" }];
+    expect(toggled(rows, "2", true)).toEqual([{ id: "r1", stage: "1" }, { stage: "2" }]);
+    expect(toggled(rows, "1", true)).toBe(rows);
+    expect(toggled(rows, "1", false)).toEqual([]);
+  });
+
+  it("finds a stage that is no longer one of the offered", () => {
+    expect(strayStages([{ stage: "1" }, { stage: "4" }], allowable(all, "p1"))).toEqual([{ stage: "4" }]);
+  });
+
+  it("saves them for a deal's type and none for a lead's", () => {
+    const rows = [{ id: "r1", stage: "1" }, { stage: "2" }];
+    expect(typeBody({ ...ok, allowed_stages: rows }).allowed_stages).toEqual(rows);
+    expect(typeBody({ ...ok, applies_to: "Lead", allowed_stages: rows }).allowed_stages).toEqual([]);
   });
 });
 

@@ -181,8 +181,12 @@ export function linkOf(e: TimelineEvent): { to: string } | { href: string } | nu
     case "Ticket":
     case "ServiceRequest":
     case "Booking":
-    case "MailMessage":
       return { href: `/open/${e.entity}/${e.record}` };
+    case "MailMessage": {
+      // A filed message of a hosted mailbox opens in Mail by its mailbox and its own address; one filed before that was kept has neither.
+      const [mailbox, email] = [text(e.details?.mailbox), text(e.details?.email)];
+      return mailbox && email ? { href: `/mail/${encodeURIComponent(mailbox)}/${encodeURIComponent(email)}` } : null;
+    }
     default:
       return null;
   }
