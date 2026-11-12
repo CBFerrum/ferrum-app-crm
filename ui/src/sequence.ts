@@ -161,3 +161,34 @@ export const enrolmentsQuery = (sequence: string) => ({
   limit: 500,
   titles: true,
 });
+
+export interface Enrolled {
+  person: Person;
+  /** Nothing when it went through; the server's own words when it was refused. */
+  refused: string | null;
+}
+
+/** Enrols each person in turn through `post` (the record's action), one at a time so that two refusals do not hide each other;
+ *  a refusal (not open, asked not to be mailed, already in it) is kept with the person it is about and the rest go on. */
+export async function enrolAll(people: Person[], sequence: string, post: (r: ReturnType<typeof enrolRequest>) => Promise<unknown>, say: (e: unknown) => string): Promise<Enrolled[]> {
+  const out: Enrolled[] = [];
+  for (const person of people) {
+    try {
+      await post(enrolRequest(person, sequence));
+      out.push({ person, refused: null });
+    } catch (e) {
+      out.push({ person, refused: say(e) });
+    }
+  }
+  return out;
+}
+
+/** The templates a message step can send: with an e-mail wording, for the kind of person the sequence is for (or for no kind of record). */
+export interface TemplateRow {
+  key: string;
+  label?: string | null;
+  entity?: string | null;
+  channels: string[];
+}
+
+export const templatesFor = (rows: TemplateRow[], appliesTo: string): TemplateRow[] => rows.filter((r) => r.channels.includes("email") && (!r.entity || r.entity === appliesTo)).sort((a, b) => (a.label ?? a.key).localeCompare(b.label ?? b.key));
