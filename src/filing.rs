@@ -48,6 +48,7 @@ impl EventSink for Filing {
             "Communication.created" => communication(k, ev.tenant_id, record).await,
             "CalendarEvent.created" | "CalendarEvent.updated" => meeting(k, ev.tenant_id, record, false).await,
             "CalendarEvent.deleted" => meeting(k, ev.tenant_id, record, true).await,
+            "Quotation.opened" => crate::quotation::opened(k, ev).await,
             _ => Ok(()),
         }
     }

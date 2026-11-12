@@ -286,6 +286,7 @@ async fn scenario() {
         .await;
 
     let (acme, jane) = quotation_link(&k, &admin, &anna, &ben, &cid, &widget, tenant).await;
+    sent_by_0_12_0(&k, &admin, &anna, acme, jane, &widget, tenant).await;
     timeline_and_filing(&k, &admin, &anna, &ben, &maria, (acme, jane), &cid, tenant).await;
     sequences(&k, &admin, &anna, tenant).await;
     forecast(&k, &admin, &anna, &ben, &maria, tenant).await;
@@ -316,11 +317,10 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
         .await);
     let nobody = customer(admin, "No Address Ltd", None).await;
 
-    // ── the lines are text the customer's page can show
     let q1 = quote(anna, acme, Some(jane), widget, "10").await;
     let doc = anna.get("Quotation", q1).await;
     assert_eq!(doc["status"], json!("Open"));
-    assert!(doc["lines_text"].as_str().unwrap_or_default().contains("Widget | 10"), "{}", doc["lines_text"]);
+    assert!(doc.get("lines_text").is_none_or(Value::is_null), "the hidden lines text is gone: the page shows the lines by columns");
 
     // ── nowhere to send it: refused, and nothing is sent
     let bare = quote(anna, nobody, None, widget, "1").await;
@@ -338,7 +338,12 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     assert_eq!(links.len(), 1, "{links:?}");
     let l = &links[0];
     assert_eq!(l["actions"], json!(["customer_accept", "customer_decline", "customer_ask"]));
-    assert!(l["show"].as_array().unwrap().iter().any(|f| f == "lines_text"), "lines and totals by default");
+    assert!(l["show"].as_array().unwrap().iter().any(|f| f == "items"), "lines and totals by default");
+    assert_eq!(l["columns"], json!({"items": ["item_name", "qty", "rate", "amount"]}));
+    // it works through the quotation's valid-until (the platform's `until`), not a fixed 90 days
+    let valid: chrono::NaiveDate = doc["valid_till"].as_str().unwrap().parse().unwrap();
+    let ends = chrono::DateTime::parse_from_rfc3339(l["expires_at"].as_str().unwrap()).unwrap();
+    assert_eq!(ends.date_naive(), valid + chrono::Duration::days(1), "through the whole of its last day: {l}");
     assert_eq!(l["max_uses"], json!(20));
     assert_eq!(l["code"], json!(false));
     assert_eq!(l["recipient"], json!("Acme Corp"));
@@ -356,7 +361,8 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     // ── what the customer does, on a link of their own (the mailed one's address is kept nowhere)
     let spec = |uses| LinkSpec {
         actions: vec!["customer_accept".into(), "customer_decline".into(), "customer_ask".into()],
-        show: vec!["party_name".into(), "valid_till".into(), "lines_text".into(), "grand_total".into()],
+        show: vec!["party_name".into(), "valid_till".into(), "items".into(), "grand_total".into()],
+        columns: [("items".to_string(), vec!["item_name".to_string(), "qty".to_string(), "rate".to_string(), "amount".to_string()])].into(),
         uses: Some(uses),
         recipient: Some("Acme Corp".into()),
         ..Default::default()
@@ -364,10 +370,12 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     let link = admin.k.issue_link_now(&admin.ctx, "Quotation", q1, &spec(20)).await.unwrap();
     let t = token(&link.url);
     let page = admin.k.link_page("tier1", &t).await.unwrap().expect("the page");
-    assert!(page.fields.iter().any(|(_, v)| v.contains("Widget | 10")), "the customer reads the lines: {:?}", page.fields);
+    assert_eq!(page.tables[0].2[0][..2], ["Widget".to_string(), "10".to_string()], "the customer reads the lines: {:?}", page.tables);
     assert_eq!(page.actions.iter().map(|a| a.0.as_str()).collect::<Vec<_>>(), ["customer_accept", "customer_decline", "customer_ask"]);
 
-    // a question lands as a task for the owner, and the quotation was Viewed
+    // a question lands as a task for the owner; the quotation is Viewed once the platform says the page was acted on
+    assert_eq!(anna.get("Quotation", q1).await["status"], json!("Sent"), "reading the page alone views nothing");
+    k.link_opened("tier1", &t).await.unwrap();
     k.use_link("tier1", &t, "customer_ask", &given(json!({"question": "Can you ship by Friday?", "signed_name": "Jane Lee"})), None)
         .await
         .unwrap()
@@ -377,6 +385,7 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     assert_eq!(task["activity_type"], json!("Task"));
     assert_eq!(task["customer"], json!(acme.to_string()));
     assert!(task["details"].as_str().unwrap().contains("Jane Lee"));
+    drain(k).await;
     let doc = anna.get("Quotation", q1).await;
     assert_eq!(doc["status"], json!("Viewed"));
     assert!(doc["viewed_at"].is_string());
@@ -420,7 +429,7 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     let q3 = quote(anna, acme, Some(jane), widget, "3").await;
     anna.action("Quotation", q3, "send_quotation", json!({})).await;
     let shown = anna.k.record_links(&anna.ctx, "Quotation", q3).await.unwrap()[0]["show"].clone();
-    assert!(shown.as_array().unwrap().iter().any(|f| f == "grand_total") && !shown.as_array().unwrap().iter().any(|f| f == "lines_text"), "{shown}");
+    assert!(shown.as_array().unwrap().iter().any(|f| f == "grand_total") && !shown.as_array().unwrap().iter().any(|f| f == "items"), "{shown}");
     admin.update("CrmSettings", uid(&settings), json!({"quote_link_shows": "Neither"})).await;
     anna.action("Quotation", q3, "send_quotation", json!({})).await;
     let shown = anna.k.record_links(&anna.ctx, "Quotation", q3).await.unwrap()[0]["show"].clone();
@@ -480,6 +489,66 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     admin.update("CrmSettings", uid(&settings), json!({"order_on_accept": false})).await;
     let _ = ben;
     (acme, jane)
+}
+
+/// A quotation sent by 0.12.0, whose link (90 days, showing the hidden Lines Text) is in the customer's mail, after
+/// this release's startup has run its migration: the link still shows the lines, still works, is seen as opened,
+/// still ends with the quotation's validity (the maintenance, since it has no `until`) and when it is cancelled.
+async fn sent_by_0_12_0(k: &Arc<Kernel>, admin: &U, anna: &U, acme: Uuid, jane: Uuid, widget: &str, tenant: Uuid) {
+    let old_link = |q: Uuid| {
+        let spec = LinkSpec {
+            actions: vec!["customer_accept".into(), "customer_decline".into(), "customer_ask".into()],
+            show: vec!["party_name".into(), "valid_till".into(), "grand_total".into()],
+            uses: Some(20),
+            recipient: Some("Acme Corp".into()),
+            ..Default::default()
+        };
+        async move { token(&admin.k.issue_link_now(&admin.ctx, "Quotation", q, &spec).await.unwrap().url) }
+    };
+    let as_it_was = "update action_link set show = array['party_name', 'valid_till', 'lines_text', 'grand_total'], columns = '{}'::jsonb, \
+                     expires_at = now() + interval '90 days' where tenant_id = $1 and record_id = $2";
+    let migrate = |what: &'static str| async move {
+        let mut tx = k.db.system_tenant_tx(tenant).await.unwrap();
+        sqlx::raw_sql(what).execute(&mut *tx).await.unwrap();
+        tx.commit().await.unwrap();
+    };
+    let migration = include_str!("../packages/crm/sql/008_link_lines.sql");
+
+    let q = quote(anna, acme, Some(jane), widget, "8").await;
+    anna.action("Quotation", q, "send_quotation", json!({})).await;
+    let t = old_link(q).await;
+    sql(k, as_it_was, tenant, q).await;
+    migrate(migration).await;
+    migrate(migration).await; // and again: nothing moves twice
+    let links = anna.k.record_links(&anna.ctx, "Quotation", q).await.unwrap();
+    assert!(links.iter().any(|l| l["show"] == json!(["party_name", "valid_till", "items", "grand_total"]) && l["columns"]["items"].is_array()), "{links:?}");
+    let page = k.link_page("tier1", &t).await.unwrap().expect("the old link still works");
+    assert_eq!(page.tables[0].2[0][..2], ["Widget".to_string(), "8".to_string()], "and still shows the lines: {:?}", page.tables);
+    k.link_opened("tier1", &t).await.unwrap();
+    k.use_link("tier1", &t, "customer_ask", &given(json!({"question": "Is stock there?", "signed_name": "Jane Lee"})), None).await.unwrap().expect("asked");
+    drain(k).await;
+    assert_eq!(anna.get("Quotation", q).await["status"], json!("Viewed"));
+    // sent again: the old link's later opening says nothing (it is ended), and a fresh quotation's link is not affected
+    anna.action("Quotation", q, "send_quotation", json!({})).await;
+    assert_eq!(anna.get("Quotation", q).await["status"], json!("Sent"));
+    assert!(k.link_page("tier1", &t).await.unwrap().is_none(), "ended by the new send");
+    // its validity passes: the maintenance ends the 90-day link the new platform call would not know of
+    let t2 = old_link(q).await;
+    sql(k, as_it_was, tenant, q).await;
+    sql(k, "update e_quotation set valid_till = current_date - 2 where tenant_id = $1 and id = $2", tenant, q).await;
+    ferrum_app_crm::maintenance(k).await.unwrap();
+    assert_eq!(anna.get("Quotation", q).await["status"], json!("Expired"));
+    assert!(k.use_link("tier1", &t2, "customer_accept", &given(json!({"signed_name": "Late"})), None).await.unwrap().is_none(), "expired with its quotation");
+    // cancelled for a revision: revoked by the platform's call, recorded in the history
+    let q = quote(anna, acme, Some(jane), widget, "9").await;
+    anna.action("Quotation", q, "send_quotation", json!({})).await;
+    let t3 = old_link(q).await;
+    sql(k, as_it_was, tenant, q).await;
+    migrate(migration).await;
+    anna.k.cancel(&anna.ctx, "Quotation", q, None).await.unwrap();
+    assert!(k.use_link("tier1", &t3, "customer_accept", &given(json!({"signed_name": "Old"})), None).await.unwrap().is_none());
+    let trail = anna.k.audit_trail(&anna.ctx, "Quotation", q).await.unwrap();
+    assert!(trail["events"].as_array().unwrap().iter().any(|e| e["action"] == "revoke_link"), "the platform says so in the history");
 }
 
 async fn sql(k: &Kernel, q: &str, tenant: Uuid, record: Uuid) {
