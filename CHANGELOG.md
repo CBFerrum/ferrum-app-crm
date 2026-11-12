@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.13.3
+
+The screens that 0.13.2 listed, built with Ferrum-Frontend (its checkout at `gapui/ferrum/web`). Nothing is changed on the server.
+
+- **Resume.** A stopped person in a sequence has a Resume button (`resume_enrolment`), not offered for Opted Out or Bounced. When the server refuses (the lead is closed, they asked not to be mailed, the step is gone) its reason stays in view above the list, as it words it, until the next try. A double press sends once.
+- **Allowed Stages.** The record type's editor lists the open stages of the deal's pipeline (those of every pipeline, with the pipeline named, while the type has none) to tick; none ticked allows all, and a closing stage is never offered because it is never held up. A tick left over from another pipeline is shown and can be unticked. A lead's type has none.
+- **A prospect's page** has the quick actions: a note, a call or a task is an Activity with `prospect`, and the page's own Log a call sets it too. Write and Schedule are not offered on a prospect (nothing says Mail and the calendar take one as the record).
+- **The timeline.** A filed hosted message links to `/mail/{mailbox}/{email}`, and does not link when it has no mailbox (before, it linked to a page that does not exist).
+- **Sequence steps.** The template picker marks promotional templates and says they need `{{ opt_out }}` in the body; a chosen promotional template is read, and one whose e-mail lacks it in any language is flagged, with a link to edit it. Someone who may not list templates types a key, is told the same, and the check is not made for them (reading a template is for administrators).
+
+Not in this release: the screens were not run against a server; 12 new words are in English until translated into Arabic and Hindi, and one translated hint (the template key's) was reworded and is English again. The entry script is 196.1 KB of 200 KB, as it was.
+
+## 0.13.2
+
+Sequence mail and opt-outs, and what the 0.13.1 screens could not do. Needs a platform with `messages::render_for` (App API 0.3.4); `app.yaml` says `>=0.3.4, <0.4`. One migration (`011_filed_mail_open.sql`) is applied at startup; an administrator updates the app for the new fields and action, and nothing breaks before they do.
+
+- A sequence's message is rendered by the platform for the person (`messages::render_for`) and sent through Mail. A promotional template carries the platform's opt-out link wherever it writes `{{ opt_out }}`, and the mail carries `List-Unsubscribe` and `List-Unsubscribe-Post` as Mail's typed headers (Mail sends them through an email account of the workspace; through the server's own mailer Mail keeps them on the message but cannot send them). The platform decides who may be mailed: an address that opted out, one whose opt-out was kept as a digest when its person was erased, or whose processing is restricted, is refused, and the enrolment stops with the reason Opted Out. CRM no longer reads the opt-outs itself. Whether a step is held up follows its template: a sequence has no kind of its own, a promotional template is stopped by an opt-out and an operational one is not (before, every message step was). Following the link ends the sequence at its next step, before anything is sent.
+- Resume (action on an enrolment): goes on from the step it stopped at, its wait counted again from now (working days on the sequence's calendar). Refused, saying why, when they opted out or their address bounced, when the lead is converted or closed or they asked not to be mailed, and when the sequence was changed so that the step is no longer there.
+- Record types list the stages a deal of the type may enter (Allowed Stages; empty: all, so nothing changes). A stage that closes the deal is never held up, and neither is what the engine does.
+- An Activity has a Prospect: set directly or taken from its lead, contact or deal, and on the prospect's timeline.
+- The timeline row of a filed hosted message carries `details.mailbox` and `details.email`, which open it in Mail at `/mail/{mailbox}/{email}`. Messages filed before this have neither.
+
 ## 0.13.1
 
 The interface for what 0.8.0 to 0.13.0 added on the server. Nothing in the server, the package or the connector changes.

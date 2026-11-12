@@ -913,3 +913,17 @@
   align-items: center;
   gap: 0.75rem;
 }
+
+/* A record type's allowed stages: a ticked list under its own legend. */
+
+.crm-allowed {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.crm-allowed-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}

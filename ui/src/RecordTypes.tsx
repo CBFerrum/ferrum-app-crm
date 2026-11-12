@@ -9,6 +9,8 @@ import { api, docPath, errorMessage, isolate, newKey, t } from "@ferrum/client";
 import { Alert, Badge, Button, Field, Icon, ReaderSkeleton, StatePanel, toast, useShellTitle } from "@ferrum/kit";
 import { can, type EntityMeta, LinkInput, useEntityMeta } from "@ferrum/records";
 import {
+  allowable,
+  type AllowedRow,
   type AppliesTo,
   appliesLabel,
   blankType,
@@ -18,6 +20,8 @@ import {
   grouped,
   type RecordTypeDoc,
   stagesFor,
+  strayStages,
+  toggled,
   type StageInfo,
   summary,
   type TypeRow,
@@ -27,7 +31,7 @@ import {
 } from "./recordtype";
 import { Problem } from "./states";
 
-const stagesQuery = () => api.get<{ rows: StageInfo[] }>("/api/v1/SalesStage", { fields: "stage_name,stage_order,pipeline,outcome", filters: JSON.stringify({ disabled: false }), limit: 500 }).then((r) => r.rows);
+const stagesQuery = () => api.get<{ rows: StageInfo[] }>("/api/v1/SalesStage", { fields: "stage_name,stage_order,pipeline,outcome", filters: JSON.stringify({ disabled: false }), limit: 500, titles: true }).then((r) => r.rows);
 
 /** The types, by what they are for. */
 export function RecordTypesList() {
@@ -138,6 +142,36 @@ function FieldSelect({ id, label, value, fields, onChange }: { id: string; label
   );
 }
 
+/** The open stages a deal of the type may move through, ticked from the deal's own stages. None ticked: every stage. */
+function AllowedStages({ rows, offered, pipelineChosen, loading, error, onRetry, disabled, onChange }: { rows: AllowedRow[]; offered: StageInfo[]; pipelineChosen: boolean; loading: boolean; error: unknown; onRetry: () => void; disabled: boolean; onChange: (rows: AllowedRow[]) => void }) {
+  const stray = strayStages(rows, offered);
+  return (
+    <fieldset className="crm-allowed" disabled={disabled}>
+      <legend className="crm-group">{t("Stages it allows")}</legend>
+      <p className="faint">{t("The open stages a deal of this type moves through. Tick none to allow all of them. Closing a deal as won or lost is never held up.")}</p>
+      {error ? (
+        <Problem error={error} onRetry={onRetry} />
+      ) : loading ? (
+        <ReaderSkeleton paragraphs={1} />
+      ) : offered.length === 0 && stray.length === 0 ? (
+        <p className="muted">{t("There is no open stage to choose from yet.")}</p>
+      ) : (
+        <ul className="crm-checks crm-allowed-list">
+          {[...offered.map((s) => ({ id: s.id, label: s.stage_name, pipeline: pipelineChosen ? "" : (s._titles?.pipeline ?? ""), stray: false })), ...stray.map((r) => ({ id: r.stage, label: t("A stage that is no longer an open stage of this pipeline"), pipeline: "", stray: true }))].map((o) => (
+            <li key={o.id}>
+              <label>
+                <input type="checkbox" checked={rows.some((r) => r.stage === o.id)} onChange={(e) => onChange(toggled(rows, o.id, e.target.checked))} /> {isolate(o.label)}
+                {o.pipeline && <span className="faint"> · {isolate(o.pipeline)}</span>}
+                {o.stray && <span className="faint"> · {t("untick it")}</span>}
+              </label>
+            </li>
+          ))}
+        </ul>
+      )}
+    </fieldset>
+  );
+}
+
 function Editor({ initial, id, version, writable }: { initial: RecordTypeDoc; id?: string; version?: number; writable: boolean }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
@@ -194,10 +228,22 @@ function Editor({ initial, id, version, writable }: { initial: RecordTypeDoc; id
           </label>
         </div>
       </fieldset>
-      {d.applies_to === "Opportunity" && (
+      {d.applies_to === "Opportunity" && d.allowed_stages.length === 0 && (
         <p className="faint">
           {t("Its deals can enter: {stages}", { stages: stagesFor(stages.data ?? [], d.pipeline).join(", ") || t("no stage yet") })}
         </p>
+      )}
+      {d.applies_to === "Opportunity" && (
+        <AllowedStages
+          rows={d.allowed_stages}
+          offered={allowable(stages.data ?? [], d.pipeline)}
+          pipelineChosen={!!d.pipeline}
+          loading={stages.isPending}
+          error={stages.error}
+          onRetry={() => void stages.refetch()}
+          disabled={!writable}
+          onChange={(rows) => setD({ ...d, allowed_stages: rows })}
+        />
       )}
 
       <h2 className="crm-group">{t("What it fills in")}</h2>
@@ -283,7 +329,7 @@ function TypePage({ meta, id }: { meta: EntityMeta; id: string }) {
         <Icon name="chevronRight" size={12} />
       </div>
       <h1 className="page-title">{isolate(doc.type_name)}</h1>
-      <Editor key={`${id}-${doc.version}`} id={id} version={doc.version} writable={can(meta.permissions, "write")} initial={{ ...blankType(doc.applies_to), ...doc, pipeline: doc.pipeline ?? null, disabled: !!doc.disabled, defaults: doc.defaults ?? [], requirements: (doc.requirements ?? []).map((r) => ({ ...r, stage_name: r.stage_name ?? "" })) }} />
+      <Editor key={`${id}-${doc.version}`} id={id} version={doc.version} writable={can(meta.permissions, "write")} initial={{ ...blankType(doc.applies_to), ...doc, pipeline: doc.pipeline ?? null, disabled: !!doc.disabled, defaults: doc.defaults ?? [], allowed_stages: doc.allowed_stages ?? [], requirements: (doc.requirements ?? []).map((r) => ({ ...r, stage_name: r.stage_name ?? "" })) }} />
     </div>
   );
 }

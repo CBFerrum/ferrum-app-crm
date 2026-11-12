@@ -29,8 +29,9 @@ export function Composer({ entity, id, onSaved, doNotCall }: { entity: SubjectEn
   const [minutes, setMinutes] = useState("");
   const [next, setNext] = useState("");
   const [busy, setBusy] = useState(false);
-  const canMail = useCanIntent("compose", "email");
-  const canMeet = useCanIntent("schedule", "event");
+  // Writing and scheduling from the record are offered for a lead, a contact and a deal; whether Mail and the calendar take a prospect as the record is not known here, so a prospect gets the three logs only.
+  const canMail = useCanIntent("compose", "email") && entity !== "Prospect";
+  const canMeet = useCanIntent("schedule", "event") && entity !== "Prospect";
   const placeholder = kind === "Note" ? t("What should the team know?") : kind === "Call" ? t("How did the call go?") : t("What needs doing?");
   const record = { entity, id };
 

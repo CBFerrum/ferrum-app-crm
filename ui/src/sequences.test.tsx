@@ -84,6 +84,34 @@ describe("a sequence's steps", () => {
   });
 });
 
+describe("the opt-out a promotional template needs", () => {
+  const promo = { key: "crm.follow_up", label: "Follow up", entity: "Lead", category: "promotional", channels: ["email"] };
+  it("tells an author which templates are promotional and what they need in the body", () => {
+    const html = draw(client([promo, { key: "crm.receipt", label: "Receipt", category: "operational", channels: ["email"] }]));
+    expect(html).toContain("A promotional template needs {{ opt_out }} in its body");
+    expect(html).toContain("Follow up (promotional)");
+    expect(html).not.toContain("Receipt (promotional)");
+  });
+
+  it("flags the chosen template when its body has no opt-out", () => {
+    const qc = client([promo]);
+    qc.setQueryData(["crm", "template", "crm.follow_up"], { template: { category: "promotional", languages: { en: { email: { body: "Hello" } } } } });
+    const html = draw(qc);
+    expect(html).toContain("This template is promotional and its e-mail has no {{ opt_out }} in the body (en)");
+    expect(html).toContain('href="/customize/messages/crm.follow_up"');
+  });
+
+  it("does not flag one that has it", () => {
+    const qc = client([promo]);
+    qc.setQueryData(["crm", "template", "crm.follow_up"], { template: { category: "promotional", languages: { en: { email: { body: "Hello {{ opt_out }}" } } } } });
+    expect(draw(qc)).not.toContain("This template is promotional");
+  });
+
+  it("still says it to someone who types the key", () => {
+    expect(draw(client(null))).toContain("A promotional template needs {{ opt_out }} in its body");
+  });
+});
+
 describe("the people in a sequence", () => {
   it("tells each person's status, why one stopped and where the rest stand, with a stop for those still going", () => {
     const html = draw(client(null), <Enrolments id="s1" steps={2} appliesTo="Lead" writable />);
@@ -92,6 +120,19 @@ describe("the people in a sequence", () => {
     expect(html).toContain("1 finished");
     expect(html.match(/>Stop</g)).toHaveLength(1);
     expect(html).toContain("Enrol people");
+  });
+
+  it("offers Resume on a stopped person, but not on one who opted out or whose mail bounced", () => {
+    const html = draw(client(null), <Enrolments id="s1" steps={2} appliesTo="Lead" writable />);
+    // Asha (Replied) only: Jo bounced, Ravi is active, Lee is finished.
+    expect(html.match(/>Resume</g)).toHaveLength(1);
+    const qc = client(null);
+    qc.setQueryData(["crm", "enrolments", "s1"], [{ id: "e5", title: "Kim: Welcome", lead: "l5", status: "Stopped", stopped_reason: "Opted Out", _titles: { lead: "Kim Lo" } }]);
+    expect(draw(qc, <Enrolments id="s1" steps={2} appliesTo="Lead" writable />)).not.toContain(">Resume<");
+  });
+
+  it("offers no Resume to someone who may only read", () => {
+    expect(draw(client(null), <Enrolments id="s1" steps={2} appliesTo="Lead" writable={false} />)).not.toContain(">Resume<");
   });
 
   it("offers no stop and no enrolling to someone who may only read", () => {

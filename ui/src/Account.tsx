@@ -71,6 +71,7 @@ function LogCall({ entity, id, people, onDone }: { entity: AccountEntity; id: st
         due_at: new Date().toISOString(),
         contact: contact || null,
         customer: entity === "Customer" ? id : null,
+        prospect: entity === "Prospect" ? id : null,
         call_reason: refused ? reason.trim() || null : null,
       });
       setSubject("");
@@ -211,7 +212,7 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
         save={save}
         writable={can(meta.permissions, "write")}
         doNotCall={false}
-        noCompose
+        noCompose={customer}
         changed={refresh}
         label={t("Account details")}
         before={

@@ -20,6 +20,12 @@ export interface RequirementRow {
   field: string;
 }
 
+/** A row of the type's Allowed Stages: a stage of the deal's pipeline. */
+export interface AllowedRow {
+  id?: string;
+  stage: string;
+}
+
 export interface RecordTypeDoc {
   id?: string;
   version?: number;
@@ -29,9 +35,11 @@ export interface RecordTypeDoc {
   disabled: boolean;
   defaults: DefaultRow[];
   requirements: RequirementRow[];
+  /** The open stages a deal of the type moves through; none: all of them. */
+  allowed_stages: AllowedRow[];
 }
 
-export const blankType = (applies: AppliesTo = "Opportunity"): RecordTypeDoc => ({ type_name: "", applies_to: applies, pipeline: null, disabled: false, defaults: [], requirements: [] });
+export const blankType = (applies: AppliesTo = "Opportunity"): RecordTypeDoc => ({ type_name: "", applies_to: applies, pipeline: null, disabled: false, defaults: [], requirements: [], allowed_stages: [] });
 
 export const appliesLabel = (a: AppliesTo) => (a === "Opportunity" ? t("Deals") : t("Leads"));
 
@@ -72,7 +80,22 @@ export interface StageInfo {
   pipeline?: string | null;
   stage_order?: number | string | null;
   outcome?: string | null;
+  _titles?: Record<string, string>;
 }
+
+/** The stages an author can allow: the open ones of the type's pipeline (of every pipeline while it names none), in their order. A closing stage (won or
+ *  lost) is never held up, so it is not offered. */
+export function allowable(stages: StageInfo[], pipeline: string | null): StageInfo[] {
+  return stages
+    .filter((s) => (s.outcome ?? "Open") === "Open" && (!pipeline || !s.pipeline || s.pipeline === pipeline))
+    .sort((a, b) => (a._titles?.pipeline ?? "").localeCompare(b._titles?.pipeline ?? "") || Number(a.stage_order ?? 0) - Number(b.stage_order ?? 0) || a.stage_name.localeCompare(b.stage_name));
+}
+
+/** Ticks a stage on or off, keeping the rows (and their ids) of those that stay. */
+export const toggled = (rows: AllowedRow[], stage: string, on: boolean): AllowedRow[] => (on ? (rows.some((r) => r.stage === stage) ? rows : [...rows, { stage }]) : rows.filter((r) => r.stage !== stage));
+
+/** The allowed stages that are no longer open stages of the type's pipeline (chosen before its pipeline changed, or since closed or switched off). */
+export const strayStages = (rows: AllowedRow[], offered: StageInfo[]): AllowedRow[] => rows.filter((r) => !offered.some((s) => s.id === r.stage));
 
 /** The stages a deal of the type can enter: those of its pipeline (those of every pipeline when it names none), open ones in their order,
  *  then the won and lost ones: a requirement is asked on entering any of them. A stage name two pipelines share is listed once. */
@@ -115,6 +138,7 @@ export function typeBody(d: RecordTypeDoc): Record<string, unknown> {
     disabled: d.disabled,
     defaults: d.defaults.map((r) => ({ ...(r.id ? { id: r.id } : {}), field: r.field, value: r.value.trim() })),
     requirements: d.requirements.map((r) => ({ ...(r.id ? { id: r.id } : {}), stage_name: r.stage_name.trim() || null, field: r.field })),
+    allowed_stages: d.applies_to === "Opportunity" ? d.allowed_stages.map((r) => ({ ...(r.id ? { id: r.id } : {}), stage: r.stage })) : [],
   };
 }
 

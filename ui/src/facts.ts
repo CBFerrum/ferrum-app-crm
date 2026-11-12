@@ -8,11 +8,12 @@ import type { SubjectEntity } from "./story";
 
 type Doc = Record<string, unknown>;
 
-/** The field of an Activity that points at each kind of record (a prospect has none: its people and deals carry theirs). */
-export const ACTIVITY_FIELD: Partial<Record<SubjectEntity, "lead" | "contact" | "customer" | "opportunity">> = {
+/** The field of an Activity that points at each kind of record. */
+export const ACTIVITY_FIELD: Record<SubjectEntity, "lead" | "contact" | "customer" | "opportunity" | "prospect"> = {
   Lead: "lead",
   Contact: "contact",
   Customer: "customer",
+  Prospect: "prospect",
   Opportunity: "opportunity",
 };
 
@@ -36,7 +37,7 @@ export function activityBody(entity: SubjectEntity, id: string, input: LogInput,
     activity_type: input.kind,
     subject: subject.slice(0, 140),
     details: rest.join("\n").trim() || null,
-    ...(field ? { [field]: id } : {}),
+    [field]: id,
     due_at: input.kind === "Task" && input.due ? new Date(input.due).toISOString() : input.kind === "Call" ? now.toISOString() : null,
     call_reason: input.kind === "Call" && doNotCall ? input.reason?.trim() || null : null,
   };

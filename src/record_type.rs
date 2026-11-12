@@ -53,7 +53,9 @@ pub(crate) async fn check(hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>, en
         if old.is_some_and(|o| id(o, "sales_stage") == id(doc, "sales_stage")) {
             None
         } else {
-            crate::lookup(hc, "SalesStage", id(doc, "sales_stage")).await?.and_then(|st| s(&st, "stage_name").map(str::to_string))
+            let stage = crate::lookup(hc, "SalesStage", id(doc, "sales_stage")).await?;
+            allowed(hc, &kind, stage.as_ref()).await?;
+            stage.and_then(|st| s(&st, "stage_name").map(str::to_string))
         }
     } else if old.is_some_and(|o| s(o, "status") == s(doc, "status")) {
         None
@@ -79,6 +81,29 @@ pub(crate) async fn check(hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>, en
     }
     let at = entered.map(|e| format!(" before {e}")).unwrap_or_default();
     Err(Error::invalid(format!("{} asks for {}{at}", s(&kind, "type_name").unwrap_or("its record type"), missing.join(", "))))
+}
+
+/// A deal of a type that lists allowed stages enters only those (all of them when it lists none). A stage that
+/// closes the deal (won or lost) is an outcome, not a step, and is never held up.
+async fn allowed(hc: &mut HookCtx<'_>, kind: &Doc, entering: Option<&Doc>) -> Result<()> {
+    let listed: Vec<uuid::Uuid> = rows(kind, "allowed_stages").iter().filter_map(|r| id(r, "stage")).collect();
+    let Some(stage) = entering.filter(|st| !listed.is_empty() && s(st, "outcome").unwrap_or("Open") == "Open") else { return Ok(()) };
+    if id(stage, "id").is_some_and(|i| listed.contains(&i)) {
+        return Ok(());
+    }
+    let mut names = Vec::new();
+    for l in listed {
+        names.extend(crate::lookup(hc, "SalesStage", Some(l)).await?.and_then(|st| s(&st, "stage_name").map(str::to_string)));
+    }
+    Err(Error::field(
+        "sales_stage",
+        format!(
+            "{} does not take a deal to {}: its deals move through {}",
+            s(kind, "type_name").unwrap_or("its record type"),
+            s(stage, "stage_name").unwrap_or("that stage"),
+            names.join(", ")
+        ),
+    ))
 }
 
 fn empty(v: Option<&Value>) -> bool {

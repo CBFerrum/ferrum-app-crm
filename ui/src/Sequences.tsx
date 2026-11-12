@@ -29,6 +29,10 @@ import {
   tally,
   templatesFor,
   stopReason,
+  canResume,
+  isPromotional,
+  lacksOptOut,
+  type TemplateRead,
 } from "./sequence";
 import { ENROLMENT_STATUS, Problem } from "./states";
 
@@ -52,6 +56,21 @@ function StepRow({ n, step, last, appliesTo, templates, onChange, onMove, onRemo
   const issues = stepIssues(step);
   const set = (patch: Partial<Step>) => onChange({ ...step, ...patch });
   const options = templates ? templatesFor(templates, appliesTo) : null;
+  // A promotional template is sent with the opt-out link only where its body writes it: the chosen one is read to see that it does.
+  const chosen = options?.find((o) => o.key === step.message);
+  const read = useQuery({
+    queryKey: ["crm", "template", step.message],
+    enabled: step.step_type === "Message" && !!step.message && isPromotional(chosen),
+    staleTime: 60_000,
+    retry: false,
+    queryFn: ({ signal }) =>
+      api.get<TemplateRead>(`/api/admin/messages/templates/${encodeURIComponent(step.message ?? "")}`, undefined, signal).catch((e) => {
+        if (e instanceof ApiError && (e.status === 403 || e.status === 404)) return null;
+        throw e;
+      }),
+  });
+  const missing = lacksOptOut(read.data);
+  const tag = "{{ opt_out }}";
   return (
     <li className="crm-step" aria-label={t("Step {n}", { n })}>
       <div className="crm-step-head">
@@ -81,7 +100,7 @@ function StepRow({ n, step, last, appliesTo, templates, onChange, onMove, onRemo
           <input id={`step-wait-${n}`} className="input" type="number" min={0} max={365} inputMode="numeric" value={Number.isFinite(step.after_days) ? step.after_days : ""} onChange={(e) => set({ after_days: e.target.value === "" ? Number.NaN : Number(e.target.value) })} />
         </Field>
         {step.step_type === "Message" ? (
-          <Field label={t("Message")} htmlFor={`step-message-${n}`} error={issues.message} hint={options ? undefined : t("The key of a message template, e.g. crm.follow_up. Listing them is for administrators.")}>
+          <Field label={t("Message")} htmlFor={`step-message-${n}`} error={issues.message} hint={options ? t("A promotional template needs {tag} in its body, so that the person can opt out. Those are marked.", { tag }) : t("The key of a message template, e.g. crm.follow_up. Listing them is for administrators. A promotional template needs {tag} in its body, so that the person can opt out.", { tag })}>
             {options ? (
               <select id={`step-message-${n}`} className="input" value={step.message ?? ""} onChange={(e) => set({ message: e.target.value || null })}>
                 <option value="">{t("Choose a message")}</option>
@@ -89,6 +108,7 @@ function StepRow({ n, step, last, appliesTo, templates, onChange, onMove, onRemo
                 {options.map((o) => (
                   <option key={o.key} value={o.key}>
                     {isolate(o.label ?? o.key)}
+                    {isPromotional(o) ? ` (${t("promotional")})` : ""}
                   </option>
                 ))}
               </select>
@@ -107,6 +127,12 @@ function StepRow({ n, step, last, appliesTo, templates, onChange, onMove, onRemo
           </>
         )}
       </div>
+      {step.step_type === "Message" && missing.length > 0 && (
+        <Alert tone="warning">
+          {t("This template is promotional and its e-mail has no {tag} in the body ({languages}). So the message gives the person no link to opt out.", { tag, languages: missing.join(", ") })}{" "}
+          <a href={`/customize/messages/${encodeURIComponent(step.message ?? "")}`}>{t("Edit the template")}</a>
+        </Alert>
+      )}
     </li>
   );
 }
@@ -263,6 +289,9 @@ export function Enrolments({ id, steps, appliesTo, writable }: { id: string; ste
   const qc = useQueryClient();
   const [adding, setAdding] = useState(false);
   const [stopping, setStopping] = useState<string | null>(null);
+  const [resuming, setResuming] = useState<string | null>(null);
+  // The server's own reason when it will not resume one (they opted out, the step is gone, the lead is closed), kept in view until the next try.
+  const [refusal, setRefusal] = useState<string | null>(null);
   const list = useQuery({ queryKey: ["crm", "enrolments", id], queryFn: () => api.get<{ rows: Enrolment[] }>("/api/v1/SequenceEnrolment", enrolmentsQuery(id)).then((r) => r.rows) });
   const stop = async (e: Enrolment) => {
     if (!(await confirmDialog({ title: t("Stop this sequence for this person?"), message: t("No step is sent or given after this."), confirmLabel: t("Stop") }))) return;
@@ -274,6 +303,20 @@ export function Enrolments({ id, steps, appliesTo, writable }: { id: string; ste
       toast(errorMessage(err), "error");
     } finally {
       setStopping(null);
+    }
+  };
+  const resume = async (e: Enrolment) => {
+    if (resuming) return;
+    setResuming(e.id);
+    setRefusal(null);
+    try {
+      await api.post(docPath("SequenceEnrolment", e.id, "actions", "resume_enrolment"), {}, { idempotencyKey: newKey() });
+      toast(t("The sequence goes on from the step it stopped at."));
+      await qc.invalidateQueries({ queryKey: ["crm", "enrolments", id] });
+    } catch (err) {
+      setRefusal(errorMessage(err));
+    } finally {
+      setResuming(null);
     }
   };
   const rows = list.data ?? [];
@@ -302,6 +345,7 @@ export function Enrolments({ id, steps, appliesTo, writable }: { id: string; ste
               ...Object.entries(sum.stopped).map(([reason, n]) => `${stopReason(reason) || t("Stopped")}: ${n}`),
             ].join(" · ")}
           </p>
+          {refusal && <Alert tone="error">{isolate(refusal)}</Alert>}
           <table className="table">
             <thead>
               <tr>
@@ -327,6 +371,11 @@ export function Enrolments({ id, steps, appliesTo, writable }: { id: string; ste
                       {writable && e.status === "Active" && (
                         <Button size="sm" loading={stopping === e.id} onClick={() => void stop(e)}>
                           {t("Stop")}
+                        </Button>
+                      )}
+                      {writable && canResume(e) && (
+                        <Button size="sm" loading={resuming === e.id} disabled={!!resuming} onClick={() => void resume(e)}>
+                          {t("Resume")}
                         </Button>
                       )}
                     </td>
