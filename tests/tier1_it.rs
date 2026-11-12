@@ -288,6 +288,7 @@ async fn scenario() {
     let (acme, jane) = quotation_link(&k, &admin, &anna, &ben, &cid, &widget, tenant).await;
     sent_by_0_12_0(&k, &admin, &anna, acme, jane, &widget, tenant).await;
     timeline_and_filing(&k, &admin, &anna, &ben, &maria, (acme, jane), &cid, tenant).await;
+    hosted_mail(&k, &admin, &anna, tenant).await;
     sequences(&k, &admin, &anna, tenant).await;
     forecast(&k, &admin, &anna, &ben, &maria, tenant).await;
     record_types(&admin, &anna).await;
@@ -786,6 +787,87 @@ async fn timeline_and_filing(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, mari
     drain(k).await;
     assert!(!titles(&anna.timeline("Contact", jane, json!({})).await, "email").contains(&"While filing is off".to_string()));
     set(json!({"file_communications": true})).await;
+}
+
+/// What Mail raises for a message of a hosted mailbox whose owner allowed filing (`MailMessage.received`, `.sent`).
+async fn raise(k: &Kernel, tenant: Uuid, kind: &str, record: Uuid, from: &str, to: &[&str], subject: &str) {
+    let mut tx = k.db.system_tenant_tx(tenant).await.unwrap();
+    let payload = json!({"kind": kind, "mailbox": Uuid::nil(), "mailbox_address": "anna@tier1.test", "owner": null, "account": "a1", "email": "e1", "thread": "T1",
+                         "message_id": "m1@x.test", "in_reply_to": [], "from": from, "to": to, "cc": [], "subject": subject, "at": chrono::Utc::now().to_rfc3339()});
+    ferrum_kernel::outbox::enqueue(&mut tx, tenant, &format!("MailMessage.{kind}"), Some("MailMessage"), Some(record), payload).await.unwrap();
+    tx.commit().await.unwrap();
+}
+
+async fn filed_mail(k: &Kernel, tenant: Uuid, message: Uuid) -> i64 {
+    scalar(k, "select count(*) from crm_filed_mail where tenant_id = $1 and message = $2", tenant, Some(message)).await
+}
+
+/// Hosted mailboxes file by themselves: by address, on the same people and the newest open deal as a Communication,
+/// under the same settings, once for each message however often and however concurrently it is told, and an
+/// erasure reaches what is filed.
+async fn hosted_mail(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
+    let settings = admin.one("CrmSettings", json!({})).await;
+    let lee = uid(&anna.insert("Lead", json!({"first_name": "Lee", "last_name": "Hosted", "email": "Lee@Hosted.test", "source": "Website"})).await);
+    let deal = uid(&anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": lee.to_string(), "title": "Lee's deal", "amount": "10"})).await);
+    let m1 = Uuid::now_v7();
+    raise(k, tenant, "received", m1, "lee@hosted.test", &["anna@tier1.test"], "Hosted hello").await;
+    // The same message told again, and at once from two workers: still one filing (a lead and a deal)
+    raise(k, tenant, "received", m1, "lee@hosted.test", &["anna@tier1.test"], "Hosted hello").await;
+    tokio::join!(drain(k), drain(k));
+    assert_eq!(filed_mail(k, tenant, m1).await, 2, "on the lead and on its deal, once");
+    let t = anna.timeline("Lead", lee, json!({})).await;
+    assert_eq!(titles(&t, "email"), ["Hosted hello"]);
+    assert_eq!(t["events"][0]["details"]["sender"], json!("lee@hosted.test"));
+    assert_eq!(titles(&anna.timeline("Opportunity", deal, json!({})).await, "email"), ["Hosted hello"]);
+    assert!(anna.get("Lead", lee).await["last_touched_at"].is_string(), "heard from: touched");
+    // one that anna sent him is filed too; one between colleagues, to nobody known, or to outsiders only, is not
+    let m2 = Uuid::now_v7();
+    raise(k, tenant, "sent", m2, "anna@tier1.test", &["lee@hosted.test", "ben@tier1.test"], "Re: Hosted hello").await;
+    let (m3, m4) = (Uuid::now_v7(), Uuid::now_v7());
+    raise(k, tenant, "sent", m3, "anna@tier1.test", &["ben@tier1.test"], "Internal").await;
+    raise(k, tenant, "received", m4, "stranger@hosted-new.test", &["anna@tier1.test"], "Who is this").await;
+    drain(k).await;
+    assert_eq!(titles(&anna.timeline("Lead", lee, json!({})).await, "email"), ["Re: Hosted hello", "Hosted hello"]);
+    assert_eq!((filed_mail(k, tenant, m3).await, filed_mail(k, tenant, m4).await), (0, 0));
+    assert!(admin.list("Lead", json!({"email": "stranger@hosted-new.test"})).await.is_empty(), "no lead unless the setting says so");
+    // the unknown-sender setting makes a lead of a stranger, never of an automatic sender
+    admin.update("CrmSettings", uid(&settings), json!({"unknown_sender_lead": true})).await;
+    let (m5, m6) = (Uuid::now_v7(), Uuid::now_v7());
+    raise(k, tenant, "received", m5, "stranger@hosted-new.test", &["anna@tier1.test"], "Who is this").await;
+    raise(k, tenant, "received", m6, "no-reply@hosted-news.test", &["anna@tier1.test"], "Newsletter").await;
+    drain(k).await;
+    let stranger = admin.one("Lead", json!({"email": "stranger@hosted-new.test"})).await;
+    assert_eq!(titles(&admin.timeline("Lead", uid(&stranger), json!({})).await, "email"), ["Who is this"]);
+    assert!(admin.list("Lead", json!({"email": "no-reply@hosted-news.test"})).await.is_empty());
+    admin.update("CrmSettings", uid(&settings), json!({"unknown_sender_lead": false})).await;
+    // the setting that files is CRM's too: off, nothing is filed
+    admin.update("CrmSettings", uid(&settings), json!({"file_communications": false})).await;
+    let m7 = Uuid::now_v7();
+    raise(k, tenant, "received", m7, "lee@hosted.test", &["anna@tier1.test"], "While it was off").await;
+    drain(k).await;
+    assert_eq!(filed_mail(k, tenant, m7).await, 0);
+    admin.update("CrmSettings", uid(&settings), json!({"file_communications": true})).await;
+    // a reply stops the sequence the person was in (as for a Communication)
+    let seq = uid(&admin
+        .insert(
+            "Sequence",
+            json!({"sequence_name": "Hosted follow-up", "applies_to": "Lead", "steps": [{"step_type": "Task", "after_days": 5, "subject": "Call"}]}),
+        )
+        .await);
+    anna.action("Lead", lee, "enrol_in_sequence", json!({"sequence": seq.to_string()})).await;
+    let m8 = Uuid::now_v7();
+    raise(k, tenant, "received", m8, "lee@hosted.test", &["anna@tier1.test"], "Interested").await;
+    drain(k).await;
+    assert_eq!(admin.one("SequenceEnrolment", json!({"lead": lee.to_string()})).await["stopped_reason"], json!("Replied"));
+
+    // ── erasure reaches what is filed: reported, then gone, the record's other mail untouched
+    let found = k.personal_data(&admin.ctx, "lee@hosted.test").await.unwrap();
+    assert!(found.to_string().contains("MailMessage"), "{found}");
+    k.erase_personal_data(&admin.ctx, "lee@hosted.test", "Request 12").await.unwrap();
+    assert_eq!(filed_mail(k, tenant, m1).await + filed_mail(k, tenant, m2).await + filed_mail(k, tenant, m8).await, 0);
+    let left: i64 =
+        scalar(k, "select count(*) from crm_filed_mail where tenant_id = $1 and subject is not null and record_id <> $2", tenant, Some(Uuid::nil())).await;
+    assert_eq!(left, 1, "only the stranger's, on the lead made of it: {left}");
 }
 
 async fn run_steps(k: &Kernel) {

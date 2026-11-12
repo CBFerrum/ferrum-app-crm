@@ -48,6 +48,8 @@ impl EventSink for Filing {
             "Communication.created" => communication(k, ev.tenant_id, record).await,
             "CalendarEvent.created" | "CalendarEvent.updated" => meeting(k, ev.tenant_id, record, false).await,
             "CalendarEvent.deleted" => meeting(k, ev.tenant_id, record, true).await,
+            "MailMessage.received" => mailbox_message(k, ev, true).await,
+            "MailMessage.sent" => mailbox_message(k, ev, false).await,
             "Quotation.opened" => crate::quotation::opened(k, ev).await,
             _ => Ok(()),
         }
@@ -258,23 +260,20 @@ async fn communication(k: &Kernel, tenant: Uuid, comm: Uuid) -> Result<()> {
     let received = s(&doc, "direction") == Some("Received");
     let at = s(&doc, "communication_date").and_then(|t| parse_datetime(t).ok()).unwrap_or_else(Utc::now);
     let mut people: Vec<Person> = Vec::new();
-    let mut unknown: Option<(String, Option<String>)> = None;
     match s(&doc, "channel") {
         Some("Email") => {
-            let mut list = if received {
+            let list = if received {
                 addresses(s(&doc, "sender"))
             } else {
                 [s(&doc, "recipients"), s(&doc, "cc"), s(&doc, "bcc")].into_iter().flat_map(addresses).collect()
             };
-            let own = ours(&mut tx, &ctx, &list).await?;
-            list.retain(|a| !own.contains(a));
-            for a in list {
-                match person_by_email(&mut tx, tenant, &a).await? {
-                    Some(p) => people.push(p),
-                    None if received && unknown_lead && !automatic(&a) && unknown.is_none() => unknown = Some((a, s(&doc, "sender_name").map(str::to_string))),
-                    None => {}
+            let company = match id(&doc, "email_account") {
+                Some(a) => {
+                    sqlx::query_scalar("select company from e_email_account where tenant_id = $1 and id = $2").bind(tenant).bind(a).fetch_one(&mut *tx).await?
                 }
-            }
+                None => None,
+            };
+            people = people_of(k, &ctx, &mut tx, list, received && unknown_lead, company, s(&doc, "sender_name")).await?;
         }
         Some("Phone") => {
             let list = if received { s(&doc, "sender") } else { s(&doc, "recipients") };
@@ -287,26 +286,6 @@ async fn communication(k: &Kernel, tenant: Uuid, comm: Uuid) -> Result<()> {
             }
         }
         _ => return Ok(()),
-    }
-    if let Some((address, name)) = unknown {
-        // Two copies of one event, or two mails from one sender at once, make one lead.
-        sqlx::query("select pg_advisory_xact_lock(hashtext($1))").bind(format!("ferrum:crm:filing:{tenant}:{address}")).execute(&mut *tx).await?;
-        if let Some(p) = person_by_email(&mut tx, tenant, &address).await? {
-            people.push(p);
-        } else {
-            // A lead that cannot be made (no company to put it in) does not undo the filing.
-            sqlx::query("savepoint crm_unknown_sender").execute(&mut *tx).await?;
-            match new_lead(k, &ctx, &mut tx, &doc, &address, name.as_deref()).await {
-                Ok(lead) => {
-                    sqlx::query("release savepoint crm_unknown_sender").execute(&mut *tx).await?;
-                    people.push(Person { entity: "Lead", id: lead });
-                }
-                Err(e) => {
-                    sqlx::query("rollback to savepoint crm_unknown_sender").execute(&mut *tx).await?;
-                    tracing::info!("no lead was made of {address}: {e}");
-                }
-            }
-        }
     }
     people.dedup();
     for p in people {
@@ -326,20 +305,209 @@ async fn communication(k: &Kernel, tenant: Uuid, comm: Uuid) -> Result<()> {
     Ok(())
 }
 
+/// A message of a hosted mailbox, as Mail raises it (`MailMessage.received`, `.sent`: addresses, thread, subject,
+/// never the body), once its owner has allowed apps to file their mail (Mail decides; nothing is read of a mailbox
+/// here). It is filed by address on the same people and the same newest open deal as a `Communication`, under the
+/// same CRM Settings, once for each message: the platform's once-per-consumer record for the event, and the
+/// primary key of `crm_filed_mail` for the same message raised again.
+async fn mailbox_message(k: &Kernel, ev: &Event, received: bool) -> Result<()> {
+    let (tenant, Some(message)) = (ev.tenant_id, ev.record_id) else { return Ok(()) };
+    let schema = k.registry.schema(tenant).await?;
+    if schema.entity("SequenceEnrolment").is_none() {
+        return Ok(());
+    }
+    let ctx = Ctx::system(tenant, schema);
+    let mut tx = k.db.system_tenant_tx(tenant).await?;
+    if !ferrum_kernel::outbox::first_time(&mut tx, tenant, "crm.filing.mailbox", ev.id).await? {
+        return Ok(());
+    }
+    let (file_them, unknown_lead) = settings(k, &ctx, &mut tx).await?;
+    if !file_them {
+        return Ok(());
+    }
+    let p = &ev.payload;
+    let text = |f: &str| p.get(f).and_then(Value::as_str).map(str::to_string);
+    let list = |f: &str| p.get(f).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect::<Vec<_>>().join(",");
+    let list = if received { addresses(text("from").as_deref()) } else { addresses(Some(&format!("{},{}", list("to"), list("cc")))) };
+    let at = text("at").and_then(|t| parse_datetime(&t).ok()).unwrap_or_else(Utc::now);
+    let people = people_of(k, &ctx, &mut tx, list.clone(), received && unknown_lead, None, None).await?;
+    for person in people {
+        // The address that made them theirs: kept so that erasing it reaches this.
+        let party = match person.entity {
+            "Contact" | "Lead" | "Customer" | "Prospect" => {
+                let mut found = None;
+                for a in &list {
+                    if person_by_email(&mut tx, tenant, a).await? == Some(person) {
+                        found = Some(a.clone());
+                        break;
+                    }
+                }
+                found
+            }
+            _ => None,
+        };
+        let row = Filed {
+            message,
+            kind: if received { "received" } else { "sent" },
+            party,
+            subject: text("subject"),
+            thread: text("thread"),
+            message_id: text("message_id"),
+            at,
+        };
+        if !file_mail(&mut tx, tenant, &row, person.entity, person.id, "address").await? {
+            continue;
+        }
+        let deal = newest_open_deal(&mut tx, tenant, person).await?;
+        if let Some(d) = deal {
+            file_mail(&mut tx, tenant, &row, "Opportunity", d, "deal").await?;
+        }
+        touch(k, &ctx, &mut tx, person, deal, at).await?;
+        if received {
+            crate::sequence::stop_for(&mut tx, tenant, person, "Replied", "stop_on_reply").await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// What `crm_filed_mail` keeps of a hosted message: its id in Mail's events, who it was with and what it said in
+/// its subject line. Never the body (Mail does not send one).
+struct Filed {
+    message: Uuid,
+    kind: &'static str,
+    party: Option<String>,
+    subject: Option<String>,
+    thread: Option<String>,
+    message_id: Option<String>,
+    at: DateTime<Utc>,
+}
+
+/// Files a hosted message on `record`; whether it was not there already.
+async fn file_mail(tx: &mut Tx, tenant: Uuid, m: &Filed, entity: &str, record: Uuid, via: &str) -> Result<bool> {
+    let n = sqlx::query(
+        "insert into crm_filed_mail (tenant_id, message, entity, record_id, via, kind, party, subject, thread, message_id, at) \
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict do nothing",
+    )
+    .bind(tenant)
+    .bind(m.message)
+    .bind(entity)
+    .bind(record)
+    .bind(via)
+    .bind(m.kind)
+    .bind(&m.party)
+    .bind(&m.subject)
+    .bind(&m.thread)
+    .bind(&m.message_id)
+    .bind(m.at)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    Ok(n > 0)
+}
+
+/// What hosted mail filed holds of a person (their address and the subjects of what they wrote or were written):
+/// in their report and gone with their erasure, as the rest of what CRM keeps outside its entities.
+pub struct FiledMailHeld;
+
+#[async_trait]
+impl ferrum_kernel::privacy::PersonalHeld for FiledMailHeld {
+    fn app(&self) -> &'static str {
+        "CRM mail filing"
+    }
+
+    async fn report(&self, tx: &mut Tx, tenant: Uuid, _account: Option<Uuid>, emails: &[String]) -> Result<Vec<Value>> {
+        if !table_here(tx).await? {
+            return Ok(vec![]);
+        }
+        let lower: Vec<String> = emails.iter().map(|e| e.trim().to_lowercase()).collect();
+        let found: Vec<(Uuid, String, String)> = sqlx::query_as(
+            "select distinct on (message) message, kind, at::text from crm_filed_mail where tenant_id = $1 and lower(party) = any($2) order by message",
+        )
+        .bind(tenant)
+        .bind(&lower)
+        .fetch_all(&mut **tx)
+        .await?;
+        Ok(found
+            .into_iter()
+            .map(|(m, kind, at)| json!({"entity": "MailMessage", "id": m, "what": format!("A message {kind} in a hosted mailbox ({at}) filed on their record: its subject and their address")}))
+            .collect())
+    }
+
+    async fn erase(&self, tx: &mut Tx, tenant: Uuid, _account: Option<Uuid>, emails: &[String], _reason: &str) -> Result<u64> {
+        if !table_here(tx).await? {
+            return Ok(0);
+        }
+        let lower: Vec<String> = emails.iter().map(|e| e.trim().to_lowercase()).collect();
+        Ok(sqlx::query("delete from crm_filed_mail where tenant_id = $1 and lower(party) = any($2)")
+            .bind(tenant)
+            .bind(&lower)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected())
+    }
+}
+
+async fn table_here(tx: &mut Tx) -> Result<bool> {
+    Ok(sqlx::query_scalar("select to_regclass('crm_filed_mail') is not null").fetch_one(&mut **tx).await?)
+}
+
+/// The people the addresses of a mail are: for each, the first of contact, lead, customer and prospect that has it.
+/// The workspace's own people and Mail's accounts are nobody's other party. With `make_lead`, the first address
+/// nobody knows (and that is not an automatic sender) makes a lead, whose company is `company` or the workspace's
+/// only one; two copies of one event, or two mails from one sender at once, make one lead.
+async fn people_of(
+    k: &Kernel,
+    ctx: &Ctx,
+    tx: &mut Tx,
+    mut list: Vec<String>,
+    make_lead: bool,
+    company: Option<Uuid>,
+    name: Option<&str>,
+) -> Result<Vec<Person>> {
+    let tenant = ctx.tenant;
+    let own = ours(tx, ctx, &list).await?;
+    list.retain(|a| !own.contains(a));
+    let mut people: Vec<Person> = Vec::new();
+    let mut unknown: Option<String> = None;
+    for a in list {
+        match person_by_email(tx, tenant, &a).await? {
+            Some(p) => people.push(p),
+            None if make_lead && !automatic(&a) && unknown.is_none() => unknown = Some(a),
+            None => {}
+        }
+    }
+    if let Some(address) = unknown {
+        sqlx::query("select pg_advisory_xact_lock(hashtext($1))").bind(format!("ferrum:crm:filing:{tenant}:{address}")).execute(&mut **tx).await?;
+        if let Some(p) = person_by_email(tx, tenant, &address).await? {
+            people.push(p);
+        } else {
+            // A lead that cannot be made (no company to put it in) does not undo the filing.
+            sqlx::query("savepoint crm_unknown_sender").execute(&mut **tx).await?;
+            match new_lead(k, ctx, tx, company, &address, name).await {
+                Ok(lead) => {
+                    sqlx::query("release savepoint crm_unknown_sender").execute(&mut **tx).await?;
+                    people.push(Person { entity: "Lead", id: lead });
+                }
+                Err(e) => {
+                    sqlx::query("rollback to savepoint crm_unknown_sender").execute(&mut **tx).await?;
+                    tracing::info!("no lead was made of {address}: {e}");
+                }
+            }
+        }
+    }
+    people.dedup();
+    Ok(people)
+}
+
 /// A lead from an unknown sender: its name from the sender's, its source Email, its company Mail's
 /// account's or the workspace's only one. Assignment rules and the lead's own rules apply.
-async fn new_lead(k: &Kernel, ctx: &Ctx, tx: &mut Tx, comm: &Doc, address: &str, name: Option<&str>) -> Result<Uuid> {
+async fn new_lead(k: &Kernel, ctx: &Ctx, tx: &mut Tx, account_company: Option<Uuid>, address: &str, name: Option<&str>) -> Result<Uuid> {
     let from_name = name.map(str::trim).filter(|n| !n.is_empty()).map(String::from);
     let full = from_name.unwrap_or_else(|| address.split('@').next().unwrap_or(address).to_string());
     let (first, last) = match full.split_once(' ') {
         Some((a, b)) => (a.to_string(), Some(b.trim().to_string())),
         None => (full, None),
-    };
-    let account_company: Option<Uuid> = match id(comm, "email_account") {
-        Some(a) => {
-            sqlx::query_scalar("select company from e_email_account where tenant_id = $1 and id = $2").bind(ctx.tenant).bind(a).fetch_one(&mut **tx).await?
-        }
-        None => None,
     };
     let company = match account_company {
         Some(c) => c,
