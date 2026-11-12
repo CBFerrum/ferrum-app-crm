@@ -67,6 +67,9 @@ const router = createBrowserRouter(
         { path: "today", lazy: () => import("./Today").then((m) => ({ Component: m.Today })) },
         { path: "forecast", lazy: () => import("./ForecastPage").then((m) => ({ Component: m.ForecastPage })) },
         { path: "d/:id", lazy: () => import("./Deal").then((m) => ({ Component: m.DealRoute })) },
+        // Record types: a list by what they are for, and an editor that chooses fields and stages from the entity's own.
+        { path: "e/RecordType", lazy: () => import("./RecordTypes").then((m) => ({ Component: m.RecordTypesList })) },
+        { path: "e/RecordType/:id", lazy: () => import("./RecordTypes").then((m) => ({ Component: m.RecordTypeRoute })) },
         { path: "e/:entity", lazy: page("ListView") },
         // A lead's and a contact's page: the workspace (their full form, with its actions, at /f/).
         // A sequence: its steps and the people in it.
