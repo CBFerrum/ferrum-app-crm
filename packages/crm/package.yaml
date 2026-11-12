@@ -1,5 +1,5 @@
 package: crm
-version: 0.4.0
+version: 0.5.0
 label: CRM
 description: Leads, opportunities and the sales pipeline, prospects, contacts and addresses, campaigns, activities and quotations.
 # Contacts, customers and items are shared with other apps; ERP's sales orders and taxes come with
@@ -29,6 +29,16 @@ overlays:
             - {name: prospect, type: link, to: Prospect, label: New Prospect}
             - {name: title, type: data, label: Title or Role There}
             - {name: on, type: date, label: Since, description: "Today when empty: the day they left their company and started at the new one"}
+  - entity: Contact
+    ops:
+      - op: add_action
+        action:
+          name: enrol_in_sequence
+          label: Enrol in Sequence
+          permission: write
+          condition: "!doc.unsubscribed"
+          params:
+            - {name: sequence, type: link, to: Sequence, required: true, label: Sequence}
   # An account's owner, territory and parent (who may read a customer stays as it was).
   - entity: Customer
     ops:
@@ -47,7 +57,8 @@ modules:
     order: 35
     items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, AccountContact, Address, Customer, Item, Campaign, SalesPipeline, SalesStage, BuyingRole, Territory, SalesTeam,
             SalesTarget, LostReason, QuotationApprovalRule, ProductRule, LeadAssignmentRule, LeadScoringRule, CrmSettings, report:sales_pipeline, report:sales_forecast, report:sales_targets, report:lead_funnel, report:campaign_performance,
-            report:campaign_attribution, report:quotation_register, report:win_rate, report:sales_cycle, report:lost_reasons, report:activity_by_person]
+            report:campaign_attribution, report:quotation_register, report:win_rate, report:sales_cycle, report:lost_reasons, report:activity_by_person,
+            Sequence, SequenceEnrolment, ForecastSubmission, ForecastSnapshot, RecordType, report:forecast_vs_closed, report:forecast_history]
 
 roles:
   - name: Sales User
@@ -87,6 +98,14 @@ roles:
       - {entity: ItemPrice, read: true}
       - {entity: Territory, read: true}
       - {entity: LostReason, read: true}
+      - {entity: Sequence, read: true}
+      - {entity: RecordType, read: true}
+      - {entity: SequenceEnrolment, read: true, write: true, create: true, if_owner: true}
+      - {entity: SequenceEnrolment, read: true, write: true, via: sales_team.manager}
+      - {entity: ForecastSubmission, read: true, write: true, create: true, if_owner: true}
+      - {entity: ForecastSubmission, read: true, write: true, via: sales_team.manager}
+      - {entity: ForecastSnapshot, read: true, if_owner: true}
+      - {entity: ForecastSnapshot, read: true, via: sales_team.manager}
   - name: Sales Manager
     description: The whole team's CRM records, pipeline and quotations.
     permissions:
@@ -111,6 +130,11 @@ roles:
       - {entity: LeadScoringRule, read: true, write: true, create: true, delete: true}
       - {entity: AccountContact, read: true, write: true, create: true, delete: true, export: true, import: true}
       - {entity: CrmSettings, read: true, write: true, create: true}
+      - {entity: Sequence, read: true, write: true, create: true, delete: true}
+      - {entity: SequenceEnrolment, read: true, write: true, create: true, delete: true, export: true}
+      - {entity: ForecastSubmission, read: true, write: true, create: true, delete: true, export: true}
+      - {entity: ForecastSnapshot, read: true, export: true}
+      - {entity: RecordType, read: true, write: true, create: true, delete: true}
       - {entity: Customer, read: true, write: true, create: true, export: true}
       - {entity: CustomerGroup, read: true}
       - {entity: Item, read: true}
@@ -139,6 +163,9 @@ roles:
       - {entity: LeadAssignmentRule, read: true}
       - {entity: LeadScoringRule, read: true, write: true, create: true, delete: true}
       - {entity: AccountContact, read: true}
+      - {entity: Sequence, read: true, write: true, create: true}
+      - {entity: SequenceEnrolment, read: true, write: true, create: true}
+      - {entity: RecordType, read: true}
       - {entity: Company, read: true}
       - {entity: Currency, read: true}
   - name: CRM Viewer
@@ -160,6 +187,11 @@ roles:
       - {entity: AccountContact, read: true}
       - {entity: SalesTeam, read: true}
       - {entity: SalesTarget, read: true}
+      - {entity: Sequence, read: true}
+      - {entity: SequenceEnrolment, read: true}
+      - {entity: ForecastSubmission, read: true}
+      - {entity: ForecastSnapshot, read: true}
+      - {entity: RecordType, read: true}
 
 # What a personal-data request exports and erases for a person (their email).
 personal_data:
@@ -176,6 +208,91 @@ personal_data:
   # What was written down about the person on their lead or contact: calls, meetings and notes.
   - {entity: Activity, match: lead, erase: [subject, details, call_reason]}
   - {entity: Activity, match: contact, erase: [subject, details, call_reason]}
+  # What a customer typed on their quotation's link (their name and reason), and a sequence's record of the person.
+  - {entity: Quotation, match: lead, erase: [answer_name, answer_detail]}
+  - {entity: Quotation, match: contact, erase: [answer_name, answer_detail]}
+  - {entity: SequenceEnrolment, match: lead, erase: [title, log]}
+  - {entity: SequenceEnrolment, match: contact, erase: [title, log]}
+# What the package sends and prints, as templates a workspace edits (Settings, Messages and Documents).
+messages:
+  - key: crm.quotation_sent
+    label: Quotation sent to the customer
+    entity: Quotation
+    category: operational
+    channels: [email]
+    values: [url]
+    languages:
+      en:
+        email:
+          subject: "Quotation {{ doc.number }}{% if doc.party_name %} for {{ doc.party_name }}{% endif %}"
+          body: "<p>Hello{% if doc.party_name %} {{ doc.party_name }}{% endif %},</p><p>Quotation {{ doc.number }} is attached{% if doc.valid_till %} and valid until {{ doc.valid_till }}{% endif %}. You can read it online, accept it, decline it or ask us a question: <a href=\"{{ values.url }}\">open the quotation</a>.</p><p>Thank you.</p>"
+  - key: crm.quotation_question
+    label: Customer's question on a quotation
+    entity: Quotation
+    category: operational
+    channels: [inapp]
+    languages:
+      en:
+        inapp: {title: "A question on quotation {{ doc.number }}", text: "{{ doc.party_name }} asked a question on their quotation: it is a task for you."}
+documents:
+  - key: crm.quotation_document
+    label: Quotation (sent to the customer)
+    entity: Quotation
+    output: page
+    languages:
+      en:
+        body: |
+          <!doctype html>
+          <html><head><meta charset="utf-8"><title>Quotation {{ doc.number }}</title>
+          <style>
+           body{font:13px/1.5 system-ui,-apple-system,Segoe UI,sans-serif;color:#111;margin:32px}
+           h1{font-size:20px;margin:0} h2{font-size:22px;margin:0;letter-spacing:.04em;text-transform:uppercase;color:#444}
+           .head,.parties{display:flex;justify-content:space-between;align-items:flex-start;gap:32px}
+           .head{margin-bottom:24px} .parties{margin-bottom:16px}
+           .muted{color:#666} .right{text-align:right}
+           table{border-collapse:collapse;width:100%} th,td{padding:6px 8px;text-align:left;vertical-align:top}
+           .items th{background:#f6f6f6;border-bottom:1px solid #ccc} .items td{border-bottom:1px solid #eee}
+           .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+           .totals{width:auto;margin:12px 0 0 auto} .totals td{padding:3px 8px} .grand td{border-top:2px solid #111;font-weight:700}
+           .terms{white-space:pre-line;margin-top:24px}
+           @media print{body{margin:0}}
+          </style></head><body>
+          {% set t = doc._titles or {} %}
+          <div class="head">
+           <div><h1>{{ t.company or "" }}</h1></div>
+           <div class="right"><h2>Quotation</h2><div>{{ doc.number or "Draft" }}</div></div>
+          </div>
+          <div class="parties">
+           <div><div class="muted">To</div><strong>{{ doc.party_name or "" }}</strong>{% if t.contact %}<div>Attn: {{ t.contact }}</div>{% endif %}</div>
+           <div class="right">
+            <div><span class="muted">Date</span> {{ doc.posting_date }}</div>
+            {% if doc.valid_till %}<div><span class="muted">Valid till</span> {{ doc.valid_till }}</div>{% endif %}
+           </div>
+          </div>
+          <table class="items">
+           <thead><tr><th>#</th><th>Description</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
+           <tbody>
+           {% for r in doc["items"] or [] %}{% set rt = r._titles or {} %}
+           <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ r.item_name or rt.item or "" }}{% if r.description %}<div class="muted">{{ r.description }}</div>{% endif %}</td>
+            <td class="num">{{ r.qty }}{% if rt.uom %} {{ rt.uom }}{% endif %}</td>
+            <td class="num">{{ r.rate | amount }}</td>
+            <td class="num">{{ r.amount | amount }}</td>
+           </tr>
+           {% endfor %}
+           </tbody>
+          </table>
+          <table class="totals">
+           <tr><td>Total</td><td class="num">{{ doc.total | amount }}</td></tr>
+           {% if doc.discount_amount and doc.discount_amount != "0" %}<tr><td>Discount</td><td class="num">-{{ doc.discount_amount | amount }}</td></tr>{% endif %}
+           {% if doc.total_taxes and doc.total_taxes != "0" %}<tr><td>Taxes</td><td class="num">{{ doc.total_taxes | amount }}</td></tr>{% endif %}
+           {% if doc.rounding_adjustment and doc.rounding_adjustment != "0" %}<tr><td>Rounding</td><td class="num">{{ doc.rounding_adjustment | amount }}</td></tr>{% endif %}
+           <tr class="grand"><td>Grand Total {{ t.currency or "" }}</td><td class="num">{{ (doc.rounded_total or doc.grand_total) | amount }}</td></tr>
+          </table>
+          {% if doc.terms %}<div class="terms"><strong>Terms and Conditions</strong>
+          {{ doc.terms }}</div>{% endif %}
+          </body></html>
 seed:
   # One pipeline (sql/004_pipelines.sql gives a workspace already there the same one, holding its stages).
   - entity: SalesPipeline
@@ -220,6 +337,7 @@ handover:
   - {entity: Lead, field: assigned_to, where: {status: [New, Contacted, Qualified]}}
   - {entity: Opportunity, field: assigned_to, where: {status: Open}}
   - {entity: Activity, field: assigned_to, where: {status: Open}}
+  - {entity: SequenceEnrolment, field: assigned_to, where: {status: Active}}
   - {entity: Quotation, field: assigned_to, where: {status: [Draft, Open]}}
   - {entity: Prospect, field: assigned_to}
   # A customer's account owner moves too: src/accounts.rs `Departures` (a package cannot declare a

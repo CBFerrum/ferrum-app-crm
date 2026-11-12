@@ -10,14 +10,19 @@ mod accounts;
 mod activity;
 mod assign;
 mod consent;
+mod filing;
+mod forecast;
 mod lead;
 mod opportunity;
 mod pipeline;
 mod quotation;
+mod record_type;
 mod remind;
 mod reports;
 mod score;
+mod sequence;
 mod targets;
+mod timeline;
 
 use ferrum_domain::reports::ReportSource;
 use ferrum_domain::util::{find, id, s, sys};
@@ -41,7 +46,10 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("SalesTeam", Arc::new(accounts::SalesTeamHook))
         .register("AccountContact", Arc::new(accounts::AccountContactHook))
         .register("SalesTarget", Arc::new(targets::TargetHook))
-        .register("LeadScoringRule", Arc::new(score::RuleHook));
+        .register("LeadScoringRule", Arc::new(score::RuleHook))
+        .register("SequenceEnrolment", Arc::new(sequence::EnrolmentHook))
+        .register("ForecastSubmission", Arc::new(forecast::SubmissionHook))
+        .register("RecordType", Arc::new(record_type::TypeHook));
     // On the platform's contacts, only where CRM is installed.
     hooks.scoped(&["crm".to_string()], |h| {
         h.register("Contact", Arc::new(accounts::ContactHook));
@@ -49,6 +57,8 @@ pub fn register(hooks: &mut HookRegistry) {
     hooks.add_site("crm", Arc::new(remind::CrmSite));
     hooks.add_personal_held(Arc::new(consent::ConsentHeld));
     hooks.add_event_sink(Arc::new(accounts::Departures));
+    // Mail's communications and calendar events, filed on the people they are with (filing.rs).
+    hooks.add_event_sink(Arc::new(filing::Filing));
     hooks.scoped(&[CONNECTOR_PACKAGE.to_string()], |h| {
         h.register("SalesOrder", Arc::new(quotation::SalesOrderHook)).register("SalesInvoice", Arc::new(quotation::SalesInvoiceHook));
     });
@@ -56,6 +66,13 @@ pub fn register(hooks: &mut HookRegistry) {
 
 /// The connector with ERP's package.
 pub const CONNECTOR_PACKAGE: &str = "crm_erp";
+
+/// The timeline of a lead, contact, prospect, customer or deal for the caller (the app's
+/// `GET /api/app/crm/timeline/{entity}/{id}`, whose shape `timeline.rs` describes): `query` is the
+/// request's query (`kinds`, `before`, `before_id`, `limit`).
+pub async fn timeline(k: &Kernel, ctx: &ferrum_kernel::Ctx, entity: &str, record: Uuid, query: &serde_json::Map<String, Value>) -> Result<Value> {
+    timeline::timeline(k, ctx, entity, record, &timeline::Query::parse(query)?).await
+}
 
 /// This package's reports.
 pub fn reports() -> Vec<Arc<dyn ReportSource>> {
@@ -66,7 +83,10 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
 pub async fn maintenance(k: &Kernel) -> Result<()> {
     quotation::expire_all(k).await?;
     remind::remind_all(k).await?;
-    score::rescore_all(k).await
+    score::rescore_all(k).await?;
+    filing::finish_meetings(k).await?;
+    sequence::run_due(k).await?;
+    forecast::snapshot_all(k).await
 }
 
 /// The notification kinds app.yaml declares (`shell.notification`), with the defaults it declares.
@@ -103,6 +123,12 @@ pub(crate) async fn tell(
     let default = ferrum_kernel::notify::declared_default(if kind == ASSIGNED { &["inapp", "email"] } else { &["inapp"] });
     ferrum_kernel::notify::send_kind(tx, tenant, user, kind, default, title, body, Some(entity), record).await?;
     Ok(true)
+}
+
+/// CRM Settings as saved (the one record, or nothing when it never was): a field of it, or `None` for the default.
+pub(crate) async fn setting(k: &Kernel, ctx: &ferrum_kernel::Ctx, tx: &mut Tx, field: &str) -> Result<Option<Value>> {
+    let found = k.find_tx(&sys(ctx), tx, "CrmSettings", &[], None, 1).await?;
+    Ok(found.into_iter().next().and_then(|r| r.get(field).cloned()).filter(|v| !v.is_null()))
 }
 
 /// "First Last" from the parts that are present.

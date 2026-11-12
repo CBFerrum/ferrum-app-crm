@@ -1,0 +1,55 @@
+- name: SequenceStep
+  label: Sequence Step
+  kind: child
+  fields:
+    - {name: step_type, type: select, options: [Message, Task, Call], required: true, default: Message, in_list: true, label: Step}
+    - {name: after_days, type: int, min: 0, max: 365, default: 0, in_list: true, label: Wait (Working Days), description: "After the step before it; for the first step, after the person is enrolled. Zero: at once"}
+    - {name: message, type: data, in_list: true, visible_if: "doc.step_type == 'Message'", required_if: "doc.step_type == 'Message'", label: Message Template,
+       description: "The key of a message template (Settings, Messages) sent to the person's address, e.g. crm.follow_up"}
+    - {name: subject, type: data, in_list: true, visible_if: "doc.step_type != 'Message'", required_if: "doc.step_type != 'Message'", description: "What the task or call is about, for its owner"}
+    - {name: details, type: text, visible_if: "doc.step_type != 'Message'"}
+
+- name: Sequence
+  label: Sequence
+  kind: master
+  module: crm
+  title_field: sequence_name
+  description: "Timed steps for a lead or a contact: send a message from a template, give its owner a task or a call, wait working days. A person is in a sequence once, and it stops when they reply, book a meeting, are converted or closed, ask not to be mailed, or their owner stops it."
+  fields:
+    - {name: sequence_name, type: data, required: true, unique: true, in_list: true, label: Name}
+    - {name: enabled, type: check, default: true, in_list: true, in_filter: true, description: "A sequence switched off runs no step: people already in it wait"}
+    - {name: applies_to, type: select, options: [Lead, Contact], required: true, default: Lead, in_list: true, in_filter: true, label: For}
+    - {name: calendar, type: data, label: Working Days Of, description: "The name of a business calendar (Administration, Calendars): a wait counts its business days. Empty: calendar days"}
+    - {name: stop_on_reply, type: check, default: true, label: Stop When They Reply, description: "A mail from them, filed by CRM (Mail's communications), ends it"}
+    - {name: stop_on_meeting, type: check, default: true, label: Stop When They Book a Meeting, description: "A calendar event with them as a guest, filed by CRM, ends it"}
+    - {name: steps, type: table, of: SequenceStep}
+  rules:
+    - {name: has_steps, check: "size(doc.steps) > 0", message: "Add at least one step"}
+  list: {columns: [sequence_name, applies_to, enabled], sort: sequence_name asc}
+
+- name: SequenceEnrolment
+  label: Sequence Enrolment
+  kind: master
+  module: crm
+  title_field: title
+  owner_fields: [assigned_to]
+  description: "One person in one sequence: where they are, when the next step is due, and why it stopped. Made by Enrol in Sequence on a lead or a contact (on a selection of a list too), or by an automation that creates one."
+  fields:
+    - {name: title, type: data, read_only: true, in_list: true}
+    - {name: sequence, type: link, to: Sequence, required: true, in_list: true, in_filter: true}
+    - {name: lead, type: link, to: Lead, in_filter: true, index: true}
+    - {name: contact, type: link, to: Contact, in_filter: true, index: true}
+    - {name: assigned_to, type: email, default_expr: "user.email", in_list: true, in_filter: true, label: Owner, description: "A user's email: who gets its tasks and calls, unless the lead has an owner of its own"}
+    - {name: sales_team, type: link, to: SalesTeam, in_filter: true, description: "Empty: its owner's first team. Its manager sees and works it"}
+    - {name: status, type: select, options: [Active, Stopped, Completed], default: Active, read_only: true, in_list: true, in_filter: true}
+    - {name: stopped_reason, type: select, options: [Replied, Booked a Meeting, Converted, Lead Closed, Opted Out, Stopped by Owner, Sequence Off], read_only: true, no_copy: true, in_filter: true}
+    - {name: next_step, type: int, read_only: true, no_copy: true, label: Next Step, description: "The number (from 1) of the step due next"}
+    - {name: next_run_at, type: datetime, read_only: true, no_copy: true, in_list: true, in_filter: true, label: Next Step Due}
+    - {name: last_run_at, type: datetime, read_only: true, no_copy: true}
+    - {name: log, type: text, read_only: true, no_copy: true, description: "What each step did or why it was skipped"}
+  rules:
+    - {name: one_person, check: "(doc.lead != null) != (doc.contact != null)", message: "Enrol a lead or a contact"}
+  unique: [[sequence, lead], [sequence, contact]]
+  actions:
+    - {name: stop_enrolment, label: Stop, permission: write, condition: "doc.status == 'Active'", confirm: "Stop this sequence for this person?"}
+  list: {columns: [title, sequence, status, next_run_at, assigned_to], sort: next_run_at asc}

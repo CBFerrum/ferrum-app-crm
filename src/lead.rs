@@ -41,6 +41,7 @@ impl DocHook for LeadHook {
             set(doc, key, json!(national));
         }
         let old = stored(hc, doc).await?;
+        crate::record_type::apply(hc, doc, old.as_ref(), "Lead").await?;
         if old.as_ref().is_none_or(|o| ["email", "phone", "mobile"].iter().any(|f| o.get(*f) != doc.get(*f))) {
             duplicates(hc, doc).await?;
         }
@@ -59,10 +60,19 @@ impl DocHook for LeadHook {
         Ok(())
     }
 
+    /// On saving only, like a deal's: what its record type asks for the status it enters.
+    async fn validate_change(&self, hc: &mut HookCtx<'_>, old: Option<&Doc>, doc: &Doc) -> Result<()> {
+        crate::record_type::check(hc, doc, old, "Lead").await
+    }
+
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
         check_assignee(hc, doc, old).await?;
         if old.is_none_or(|o| s(o, "assigned_to") != s(doc, "assigned_to")) {
             assign::tell_owner(hc, doc).await?;
+        }
+        // A closed lead, or one that asks not to be mailed, leaves the sequences it was in.
+        if let (Some(lead), Some(_)) = (id(doc, "id"), old) {
+            crate::sequence::person_saved(hc, crate::filing::Person { entity: "Lead", id: lead }, doc).await?;
         }
         Ok(())
     }
@@ -73,6 +83,10 @@ impl DocHook for LeadHook {
             "undo_conversion" => undo_conversion(hc, doc).await.map(Some),
             "make_opportunity" => make_opportunity(hc, doc).await.map(Some),
             "assign_by_rules" => assign::assign_by_rules(hc, doc).await.map(Some),
+            "enrol_in_sequence" => {
+                let lead = id(doc, "id").ok_or_else(|| Error::internal("lead without id"))?;
+                crate::sequence::enrol(hc, crate::filing::Person { entity: "Lead", id: lead }, params).await.map(Some)
+            }
             _ => Ok(None),
         }
     }
