@@ -64,12 +64,11 @@
     - {name: sent_on, type: date, read_only: true, no_copy: true, description: "When it was marked sent to the customer"}
     - {name: sent_at, type: datetime, read_only: true, no_copy: true, description: "The moment it was sent (Sent On is its day)"}
     - {name: answered_at, type: datetime, read_only: true, no_copy: true, description: "The moment of the customer's answer (Answered On is its day)"}
-    - {name: viewed_at, type: datetime, read_only: true, no_copy: true, description: "When the customer first opened what was sent (their link's page); empty until they do, and again after it is sent anew"}
+    - {name: viewed_at, type: datetime, read_only: true, no_copy: true, description: "When the customer first opened what was sent (the platform says so when they first act on their link's page); empty until they do, and again after it is sent anew"}
     - {name: answer, type: select, options: [Accepted, Rejected], read_only: true, no_copy: true, in_filter: true, label: Customer's Answer}
     - {name: answered_on, type: date, read_only: true, no_copy: true}
     - {name: answered_by, type: email, read_only: true, no_copy: true, description: Who recorded the customer's answer; empty when the customer answered by their link}
     - {name: answer_name, type: data, read_only: true, no_copy: true, label: Name the Customer Typed, description: "The name typed when the customer answered by their link"}
-    - {name: lines_text, type: text, read_only: true, no_copy: true, hidden: true, computed: "doc.items.map(l, concat(l.item_name, ' | ', l.qty, ' | ', l.rate, ' | ', l.amount)).join('\\n')", description: "The lines as text (item, quantity, rate, amount), which the customer's page can show"}
     - {name: answer_reason, type: link, to: LostReason, read_only: true, no_copy: true, label: Reason Rejected}
     - {name: answer_detail, type: text, read_only: true, no_copy: true, label: Rejection Detail}
     - {name: campaign, type: link, to: Campaign, in_filter: true}
@@ -118,8 +117,9 @@
         - type: link
           when: "settings.CrmSettings.quote_link_shows == 'Lines and Totals'"
           actions: [customer_accept, customer_decline, customer_ask]
-          show: [party_name, posting_date, valid_till, lines_text, total, discount_amount, total_taxes, grand_total, terms]
-          days: 90
+          show: [party_name, posting_date, valid_till, items, total, discount_amount, total_taxes, grand_total, terms]
+          columns: {items: [item_name, qty, rate, amount]}
+          until: doc.valid_till
           uses: 20
           recipient: doc.party_name
           code_to: "settings.CrmSettings.quote_link_code ? coalesce(has(params.to) ? params.to : null, links.contact != null ? links.contact.email : null, links.lead != null ? links.lead.email : null, links.prospect != null ? links.prospect.email : null, links.customer != null ? links.customer.email : null) : null"
@@ -127,7 +127,7 @@
           when: "settings.CrmSettings.quote_link_shows == 'Totals Only'"
           actions: [customer_accept, customer_decline, customer_ask]
           show: [party_name, posting_date, valid_till, total, discount_amount, total_taxes, grand_total, terms]
-          days: 90
+          until: doc.valid_till
           uses: 20
           recipient: doc.party_name
           code_to: "settings.CrmSettings.quote_link_code ? coalesce(has(params.to) ? params.to : null, links.contact != null ? links.contact.email : null, links.lead != null ? links.lead.email : null, links.prospect != null ? links.prospect.email : null, links.customer != null ? links.customer.email : null) : null"
@@ -135,7 +135,7 @@
           when: "settings.CrmSettings.quote_link_shows == 'Neither'"
           actions: [customer_accept, customer_decline, customer_ask]
           show: [party_name, posting_date, valid_till]
-          days: 90
+          until: doc.valid_till
           uses: 20
           recipient: doc.party_name
           code_to: "settings.CrmSettings.quote_link_code ? coalesce(has(params.to) ? params.to : null, links.contact != null ? links.contact.email : null, links.lead != null ? links.lead.email : null, links.prospect != null ? links.prospect.email : null, links.customer != null ? links.customer.email : null) : null"
@@ -174,7 +174,6 @@
         - {name: question, type: text, label: Your question, required: true}
         - {name: signed_name, type: data, label: Your name}
       effects:
-        - {type: invoke, capability: crm.quotation.mark_viewed, input: {id: doc.id}, when: "doc.status == 'Sent'"}
         - type: create_document
           entity: Activity
           values:
@@ -188,13 +187,6 @@
             customer: doc.customer
             contact: doc.contact
         - {type: message, template: crm.quotation_question, to: [owner], channels: [inapp]}
-    - name: mark_viewed
-      label: Mark as Viewed
-      hidden: true
-      docstatus: [1]
-      permission: read
-      condition: "doc.status == 'Sent'"
-      contract: {completion: "The quotation is Viewed: the customer opened what was sent"}
     - name: mark_rejected
       label: Rejected
       docstatus: [1]
