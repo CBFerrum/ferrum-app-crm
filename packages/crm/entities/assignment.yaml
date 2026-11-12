@@ -45,6 +45,21 @@
     - {name: activity_points, type: int, default: 10, min: 0, max: 1000, label: Points for a Recent Activity,
        description: "What a done call, meeting or email adds to its lead's score the day it happens; zero leaves activities out of scores"}
     - {name: activity_half_life_days, type: int, default: 14, min: 1, max: 3650, label: Activity Points Halve Every (Days)}
+    - {name: quote_link_shows, type: select, options: [Lines and Totals, Totals Only, Neither], default: Lines and Totals, label: Customer's Page Shows,
+       description: "What the page a quotation's link opens shows the customer besides the answer: the lines and the totals, the totals only, or neither (the document mailed with it has them all)"}
+    - {name: quote_link_code, type: check, default: false, label: Ask a One-Time Code Before an Answer,
+       description: "Before the customer answers on their link, a code is sent to the address the quotation went to, and they type it"}
+    - {name: order_on_accept, type: check, default: false, label: Order an Accepted Quotation,
+       description: "When a customer accepts a quotation (on their link, or a person records it), a draft sales order is made from it, as Create Sales Order makes it; needs ERP and the CRM and ERP connector"}
+    - {name: file_communications, type: check, default: true, label: File Mail and Calls to Their People,
+       description: "A mail or a call in Mail's communications whose other party is a lead, contact, prospect or customer by exact address or number is shown on their timeline (and on the newest open deal of theirs); a calendar event with such a guest becomes a meeting activity"}
+    - {name: unknown_sender_lead, type: check, default: false, label: Make a Lead of an Unknown Sender,
+       description: "Mail received from an address CRM does not know (and that is not a person of the workspace or an automatic sender) makes a lead, from the sender's name and address"}
+    - {name: forecast_period, type: select, options: [Month, Quarter, Year], default: Month, label: Forecast Period, description: "The period of the snapshots CRM takes of each owner's forecast"}
+    - {name: forecast_snapshot_days, type: int, default: 7, min: 0, max: 365, label: Forecast Snapshot Every (Days), description: "Zero takes none"}
   form:
     - {label: Reminders, fields: [overdue_activity_hours, untouched_lead_hours, quiet_deal_days, no_next_step_days]}
     - {label: Lead Scoring, fields: [activity_points, activity_half_life_days]}
+    - {label: Quotations, fields: [quote_link_shows, quote_link_code, order_on_accept]}
+    - {label: Mail and Calendar, fields: [file_communications, unknown_sender_lead]}
+    - {label: Forecast, fields: [forecast_period, forecast_snapshot_days]}

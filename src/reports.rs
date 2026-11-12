@@ -51,6 +51,10 @@ impl ReportSource for CrmReports {
                 {"name": "group_by", "label": "Group By", "type": "select", "options": ["Owner", "Stage"], "default": "Owner"}]}),
             json!({"name": "lost_reasons", "label": "Lost Reasons", "module": "crm", "entity": "Opportunity", "params": [
                 param_def("company"), date("from_date", "Lost From"), date("to_date", "Lost To"), pipeline(), {"name": "assigned_to", "label": "Opportunity Owner (email)", "type": "data"}]}),
+            json!({"name": "forecast_vs_closed", "label": "Forecast against Closed", "module": "crm", "entity": "ForecastSubmission", "params": [
+                param_def("company"), date("from_date", "Periods Starting From"), date("to_date", "Periods Starting To"), {"name": "assigned_to", "label": "Forecast Owner (email)", "type": "data"}]}),
+            json!({"name": "forecast_history", "label": "Forecast History", "module": "crm", "entity": "ForecastSnapshot", "params": [
+                param_def("company"), date("from_date", "Taken From"), date("to_date", "Taken To"), {"name": "assigned_to", "label": "Forecast Owner (email)", "type": "data"}]}),
             json!({"name": "activity_by_person", "label": "Activity by Person", "module": "crm", "entity": "Activity", "params": [
                 param_def("company"), date("from_date", "Done From"), date("to_date", "Done To"),
                 {"name": "period", "label": "Period", "type": "select", "options": ["Month", "Week", "Day"], "default": "Month"}]}),
@@ -73,6 +77,8 @@ impl ReportSource for CrmReports {
             "sales_cycle" => sales_cycle(k, ctx, &mut tx, &co, &p).await?,
             "lost_reasons" => lost_reasons(k, ctx, &mut tx, &co, &p).await?,
             "activity_by_person" => activity_by_person(k, ctx, &mut tx, &co, &p).await?,
+            "forecast_vs_closed" => crate::forecast::against_closed(k, ctx, &mut tx, &co, &p).await?,
+            "forecast_history" => crate::forecast::history(k, ctx, &mut tx, &co, &p).await?,
             _ => return Err(Error::NotFound(format!("report {name}"))),
         };
         tx.rollback().await?;
@@ -929,7 +935,7 @@ mod tests {
     #[test]
     fn catalog_names_entities_and_params() {
         let c = CrmReports.catalog();
-        assert_eq!(c.len(), 11);
+        assert_eq!(c.len(), 13, "the eleven, and the two forecast reports");
         assert!(c.iter().all(|r| r["entity"].is_string() && r["params"].as_array().is_some_and(|p| p.iter().any(|x| x["name"] == "company"))));
     }
 }
