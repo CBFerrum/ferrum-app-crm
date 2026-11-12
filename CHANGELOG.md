@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.13.1
+
+The interface for what 0.8.0 to 0.13.0 added on the server. Nothing in the server, the package or the connector changes.
+
+- A record's workspace, one page for a lead, a contact, a deal and an account (a customer's or a prospect's): its key facts (a mail that came back undelivered, do-not-call and unsubscribed are said at the top), quick actions to log a note, a call or a task and, where Mail and the calendar are installed, to write or schedule from the record, the timeline from CRM's route (mail, calls, meetings, notes, tasks, quotation events, orders, stage changes, tickets and bookings) filtered by kind and read in pages, an open task ticked off from it, and what relates to the record. A lead is at `/e/Lead/{id}` and a contact at `/e/Contact/{id}`; their full forms, with their actions, are at `/f/`. A deal's page and an account's now use it in place of their own story and latest activities.
+- A submitted quotation's page (`/e/Quotation/{id}`; its form is the other tab, and a draft or a cancelled one is the form): Send to Customer with the message the customer is mailed (the platform's preview, which is for administrators) and the customer's page as CRM Settings have it shown before anything is sent; where it stands (Sent, Viewed, Accepted or Declined, each with its moment); the name the customer typed and when, their reason for declining and their questions, from the history's link entries; the links that are out, each of which can be revoked.
+- Sequences (`/e/Sequence/{id}`): the steps in order (a message from a template, a task or a call for the owner, each after a wait in working days), the rules that stop it, and the people in it with where each stands, why one stopped (replied, booked a meeting, converted, closed, opted out, bounced, stopped by its owner), and a stop. People are enrolled from the sequence, from a lead's or a contact's page, or from a list's selection.
+- Forecast (`/forecast`): a period (a month, a quarter or a year) with each owner's line for every forecast category beside what their deals expect, the owner's call to type and submit, the manager's call to adjust, reopen, the team's roll-up, and the trend of the snapshots, in the workspace's currency.
+- Record types (`/e/RecordType`): listed by what they are for, edited with the type's fields and stages chosen from the deal's or the lead's own, each default typed in as its field takes it.
+- CRM Settings and Email Bounced On are unchanged: the settings form already groups the 0.12 and 0.13 settings, and the lead's and the contact's forms show the day a mail came back, now also at the top of their pages.
+- Not here, for lack of a route: resuming a stopped enrolment (the server only stops one), and a preview of the customer's page as the platform draws it (the page is drawn from the same settings).
+- Rebuilt with Ferrum-Frontend 6d4c321. The words of the new screens are in the Arabic and Hindi catalogs in English until someone writes them.
+
 ## 0.13.0
 
 What 0.12.0 had to work around, now that the platform (action links, connections) and Mail (0.20) offer it. Needs a platform with the signed-link work of BD-38 and Mail 0.20 where sequences should go through Mail. Two database tables arrive at startup (`009_filed_mail.sql`, `010_sequence_mail.sql`) and one migration (`008_link_lines.sql`); an administrator updates the app for the new fields and connections, and nothing breaks before they do.
