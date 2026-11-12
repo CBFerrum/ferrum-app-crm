@@ -692,3 +692,47 @@
 .crm-account-section .crm-people {
   margin-bottom: 0.5rem;
 }
+
+/* ── a record's workspace: its timeline's filters and what a page of it ends in ── */
+
+.crm-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-bottom: 0.5rem;
+}
+
+.crm-chip {
+  min-height: var(--control-h-sm);
+  padding: 0 0.625rem;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.crm-chip:hover {
+  background: var(--surface-2);
+}
+
+.crm-chip[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.crm-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 0.75rem;
+}
+
+.crm-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-top: 0.375rem;
+}

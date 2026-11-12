@@ -1,6 +1,6 @@
 // One account, whole: a customer (or a prospect) with its owner, territory and parent, its people
 // there now and before, its open deals and quotations, and where ERP is installed its orders,
-// invoices and what it owes, where Helpdesk is its open tickets, with the latest activities; and the
+// invoices and what it owes, where Helpdesk is its open tickets, with its timeline (Workspace.tsx); and the
 // usual ways to act on it. Each section asks the records API as the person reading, and shows only
 // what it gives: an app not installed, or records the person may not read, leave no trace. Its fields
 // change where they stand; the full form is one click away.
@@ -10,10 +10,11 @@ import { type FormEvent, useCallback, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 import { api, ApiError, errorMessage, formatMoment, isolate, t } from "@ferrum/client";
 import { Badge, Button, Icon, ReaderSkeleton, StatusBadge, toast, useShellTitle } from "@ferrum/kit";
-import { can, type Doc, type EntityMeta, FormView, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
+import { can, type Doc, type EntityMeta, FormView, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
+import { Workspace } from "./Workspace";
 import { ACCOUNTS, type AccountEntity, openWorth, owed, peopleAt, shown } from "./accounts";
 import { money } from "./pipeline";
-import { ACTIVITY_STATUS, INVOICE_STATUS, ORDER_STATUS, Problem, QUOTATION_STATUS, TICKET_STATUS } from "./states";
+import { INVOICE_STATUS, ORDER_STATUS, Problem, QUOTATION_STATUS, TICKET_STATUS } from "./states";
 
 type Row = Doc & { id: string };
 
@@ -129,16 +130,10 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
   const orders = useRows("SalesOrder", customer && has("SalesOrder"), { customer: id, docstatus: 1 }, "number,status,grand_total,currency", { limit: 10 });
   const invoices = useRows("SalesInvoice", customer && has("SalesInvoice"), { customer: id, docstatus: 1 }, "number,status,grand_total,outstanding_amount,currency", { limit: 200 });
   const tickets = useRows("Ticket", customer && has("Ticket"), { customer: id, status: ["in", ["Open", "Replied", "On Hold"]] }, "number,subject,status,priority", { limit: 20 });
-  const dealIds = (deals.data ?? []).map((d) => d.id);
-  const activities = useRows(
-    "Activity",
-    has("Activity") && (customer || dealIds.length > 0),
-    customer ? { customer: id } : { opportunity: ["in", dealIds] },
-    "activity_type,subject,status,due_at,completed_at,created_at,assigned_to",
-    { limit: 10 },
-  );
-
-  const refresh = useCallback(() => void qc.invalidateQueries({ queryKey: ["crm", "account"] }), [qc]);
+  const refresh = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: ["crm", "account"] });
+    void qc.invalidateQueries({ queryKey: ["crm", "timeline"] });
+  }, [qc]);
   const create = async (target: "Opportunity" | "Quotation") => {
     const values =
       target === "Opportunity"
@@ -208,8 +203,19 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
           }}
         />
       )}
-      <div className="crm-deal-body">
-        <div className="crm-deal-main">
+      <Workspace
+        entity={entity}
+        id={id}
+        meta={meta}
+        doc={doc}
+        save={save}
+        writable={can(meta.permissions, "write")}
+        doNotCall={false}
+        noCompose
+        changed={refresh}
+        label={t("Account details")}
+        before={
+          <>
           {shown(has("Opportunity"), deals.data) && (
             <Section title={t("Open deals")} extra={deals.data.length > 0 ? money(openWorth(deals.data)) : undefined}>
               {deals.data.length ? (
@@ -291,28 +297,10 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
               </ul>
             </Section>
           )}
-          {shown(has("Activity"), activities.data) && (
-            <Section title={t("Latest activities")}>
-              {activities.data.length ? (
-                <ul className="crm-people">
-                  {activities.data.map((a) => (
-                    <li key={a.id}>
-                      <Link to={`/e/Activity/${a.id}`}>{isolate(String(a.subject ?? ""))}</Link>
-                      <span className="faint">
-                        {" · "}
-                        {isolate([a.activity_type, day(a.completed_at ?? a.due_at ?? a.created_at)].filter(Boolean).join(" · "))}
-                      </span>
-                      {a.status && a.status !== "Done" ? <StatusBadge value={a.status} tones={ACTIVITY_STATUS} /> : null}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="muted">{t("Nothing logged yet.")}</p>
-              )}
-            </Section>
-          )}
-        </div>
-        <aside className="crm-deal-side" aria-label={t("Account details")}>
+          </>
+        }
+        side={
+          <>
           {people.length > 0 && (
             <>
               <h2 className="crm-group">{t("People")}</h2>
@@ -341,10 +329,9 @@ function AccountPage({ entity, meta, id }: { entity: AccountEntity; meta: Entity
               </ul>
             </>
           )}
-          <RecordFields meta={meta} doc={doc} save={(n, v) => save(n, v).then(refresh)} />
-          {!can(meta.permissions, "write") && <p className="faint">{t("You can read this account but not change it.")}</p>}
-        </aside>
-      </div>
+          </>
+        }
+      />
     </div>
   );
 }
