@@ -1,161 +1,18 @@
-// One deal, whole: where it stands, what is coming up, everything that happened, and logging a
-// call, a note or a task without leaving it. Its fields change where they stand, against the version
+// One deal, whole: where it stands, and its workspace (Workspace.tsx: quick actions, the timeline of everything
+// that happened, its key facts) with its stages, people and quotations beside it. Its fields change where they stand, against the version
 // on screen. Its people with their buying roles and its quotations, the latest revision first, sit
 // beside it. The full form stays one click away for lines, contacts and competitors.
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type FormEvent, useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router";
-import { api, ApiError, docPath, errorMessage, formatMoment, shell, t, isolate } from "@ferrum/client";
-import { Badge, Button, Icon, ReaderSkeleton, StatusBadge, toast, useCanIntent, useLiveEntity, useShellTitle } from "@ferrum/kit";
-import { can, CollabPanel, type Doc, type EntityMeta, RecordFields, useEntityMeta, useMetaIndex, useRecord } from "@ferrum/records";
+import { api, docPath, errorMessage, t, isolate } from "@ferrum/client";
+import { Badge, Button, Icon, ReaderSkeleton, StatusBadge, toast, useLiveEntity, useShellTitle } from "@ferrum/kit";
+import { can, CollabPanel, type EntityMeta, useEntityMeta, useRecord } from "@ferrum/records";
 import { LostDialog } from "./Lost";
-import { completion, type Deal, type DealContact, daysSince, isOpenStage, money, people, type Pipeline, type Stage } from "./pipeline";
+import { type Deal, type DealContact, daysSince, isOpenStage, money, people, type Pipeline, type Stage } from "./pipeline";
 import { Problem, DEAL_STATUS, QUOTATION_STATUS } from "./states";
-import { type Activity, type AuditEvent, type Item, type Mail, timeline } from "./timeline";
-
-const ICONS: Record<Item["kind"], string> = { call: "phone", meeting: "calendar", email: "mail", mail: "mail", task: "check", note: "file", change: "refresh" };
-
-const when = (at: string) => formatMoment(at, { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
-
-function Row({ item, onDone }: { item: Item; onDone?: (id: string) => void }) {
-  return (
-    <li className="crm-event" data-kind={item.kind}>
-      <span className="crm-event-icon" aria-hidden="true">
-        <Icon name={ICONS[item.kind]} size={13} />
-      </span>
-      <div className="crm-event-body">
-        <div className="crm-event-line">
-          <strong>{isolate(item.title)}</strong>
-          <time className="faint">{isolate(when(item.at))}</time>
-        </div>
-        {item.detail && <p className="crm-event-detail">{isolate(item.detail)}</p>}
-        {item.who && <div className="faint crm-event-who">{isolate(item.who)}</div>}
-      </div>
-      {item.activity && onDone && (
-        <button type="button" className="btn btn-default btn-sm" onClick={() => onDone(item.activity!)}>
-          {t("Done")}
-        </button>
-      )}
-    </li>
-  );
-}
-
-type Log = "Note" | "Call" | "Task";
-
-/** A call's outcomes, as stored and as read. */
-const outcomes = (): [string, string][] => [
-  ["Reached", t("Reached")],
-  ["No Answer", t("No Answer")],
-  ["Left Message", t("Left Message")],
-  ["Busy", t("Busy")],
-  ["Wrong Number", t("Wrong Number")],
-];
-
-/** Writes down what happened, or what is to happen, on the deal. A call to a primary contact on
- *  do-not-call says why it is made. */
-function Composer({ deal, onSaved, doNotCall }: { deal: Doc; onSaved: () => void; doNotCall: boolean }) {
-  const [kind, setKind] = useState<Log>("Note");
-  const [text, setText] = useState("");
-  const [reason, setReason] = useState("");
-  const [due, setDue] = useState("");
-  const [outcome, setOutcome] = useState("");
-  const [minutes, setMinutes] = useState("");
-  const [next, setNext] = useState("");
-  const [busy, setBusy] = useState(false);
-  const canMail = useCanIntent("compose", "email");
-  const canMeet = useCanIntent("schedule", "event");
-  const placeholder = kind === "Note" ? t("What should the team know?") : kind === "Call" ? t("How did the call go?") : t("What needs doing?");
-
-  const submit = async (e?: FormEvent) => {
-    e?.preventDefault();
-    const body = text.trim();
-    if (!body) return;
-    setBusy(true);
-    const [subject, ...rest] = body.split("\n");
-    try {
-      const made = await api.post<{ id: string }>("/api/v1/Activity", {
-        activity_type: kind,
-        subject: subject.slice(0, 140),
-        details: rest.join("\n").trim() || null,
-        opportunity: deal.id,
-        due_at: kind === "Task" && due ? new Date(due).toISOString() : kind === "Call" ? new Date().toISOString() : null,
-        call_reason: kind === "Call" && doNotCall ? reason.trim() || null : null,
-      });
-      // A call being logged has happened: its outcome, length and the next follow-up go with it.
-      if (kind === "Call") await api.post(docPath("Activity", made.id, "actions", "complete"), completion(outcome, minutes, next));
-      setText("");
-      setReason("");
-      setDue("");
-      setOutcome("");
-      setMinutes("");
-      setNext("");
-      onSaved();
-    } catch (err) {
-      toast(errorMessage(err), "error");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <form className="crm-composer" onSubmit={submit}>
-      <div className="crm-composer-tabs" role="tablist" aria-label={t("Log")}>
-        {(["Note", "Call", "Task"] as const).map((k) => (
-          <button key={k} type="button" role="tab" aria-selected={kind === k} onClick={() => setKind(k)}>
-            {isolate(k)}
-          </button>
-        ))}
-        <span className="spacer" />
-        {canMail && (
-          <button type="button" onClick={() => void shell().intent({ action: "compose", type: "email", data: { record: { entity: "Opportunity", id: deal.id } } })}>
-            {t("Email")}
-          </button>
-        )}
-        {canMeet && (
-          <button type="button" onClick={() => void shell().intent({ action: "schedule", type: "event", data: { record: { entity: "Opportunity", id: deal.id } } })}>
-            {t("Schedule")}
-          </button>
-        )}
-      </div>
-      <textarea
-        className="textarea"
-        rows={2}
-        aria-label={placeholder}
-        placeholder={placeholder}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) void submit();
-        }}
-      />
-      <div className="crm-composer-foot">
-        {kind === "Task" && <input className="input" type="datetime-local" aria-label={t("Due")} value={due} onChange={(e) => setDue(e.target.value)} />}
-        {kind === "Call" && (
-          <>
-            <select className="input" aria-label={t("Outcome")} value={outcome} onChange={(e) => setOutcome(e.target.value)}>
-              <option value="">{t("Outcome")}</option>
-              {outcomes().map(([o, read]) => (
-                <option key={o} value={o}>
-                  {isolate(read)}
-                </option>
-              ))}
-            </select>
-            <input className="input crm-minutes" type="number" min={0} inputMode="numeric" aria-label={t("Minutes")} placeholder={t("Minutes")} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
-            <input className="input" type="date" aria-label={t("Next follow-up")} title={t("Next follow-up")} value={next} onChange={(e) => setNext(e.target.value)} />
-            {doNotCall && (
-              <input className="input" required aria-label={t("Reason for calling")} placeholder={t("On do-not-call: the reason for calling")} value={reason} onChange={(e) => setReason(e.target.value)} />
-            )}
-          </>
-        )}
-        <span className="spacer" />
-        <Button type="submit" size="sm" variant="primary" loading={busy} disabled={!text.trim() || (kind === "Call" && doNotCall && !reason.trim())}>
-          {t("Save")}
-        </Button>
-      </div>
-    </form>
-  );
-}
+import { Workspace } from "./Workspace";
 
 /** The stages as a strip: where the deal is, and a click to move it. */
 function StageStrip({ stages, current, open, onMove }: { stages: Stage[]; current: unknown; open: boolean; onMove: (s: Stage) => void }) {
@@ -176,14 +33,12 @@ function StageStrip({ stages, current, open, onMove }: { stages: Stage[]; curren
 function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const index = useMetaIndex().data;
   const { record, save } = useRecord(meta, id);
   const [view, setView] = useState<"story" | "discussion">("story");
   const [losing, setLosing] = useState(false);
   const doc = record.data;
   useShellTitle(doc ? String(doc.title ?? "Deal") : null);
 
-  const hasMail = !!index?.entities.some((e) => e.name === "Communication");
   const stages = useQuery({
     queryKey: ["crm", "stages"],
     queryFn: () =>
@@ -229,25 +84,8 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
         })
         .then((r) => r.rows),
   });
-  const story = useQuery({
-    queryKey: ["crm", "story", id],
-    queryFn: async () => {
-      const [activities, audit, mail] = await Promise.all([
-        api.get<{ rows: Activity[] }>("/api/v1/Activity", { filters: JSON.stringify({ opportunity: id }), fields: "activity_type,subject,details,status,due_at,completed_at,created_at,assigned_to", sort: "created_at desc", limit: 200 }),
-        api.get<{ events: AuditEvent[] }>(docPath("Opportunity", id, "audit")).catch((e) => {
-          // Reading a deal does not always include its history.
-          if (e instanceof ApiError && e.status === 403) return { events: [] };
-          throw e;
-        }),
-        hasMail
-          ? api.get<{ rows: Mail[] }>("/api/v1/Communication", { filters: JSON.stringify({ reference_entity: "Opportunity", reference_id: id }), fields: "subject,direction,sender_name,sender,recipients,communication_date,sent_at,created_at,text_content", limit: 100 })
-          : Promise.resolve({ rows: [] as Mail[] }),
-      ]);
-      return { activities: activities.rows, events: audit.events, mail: mail.rows };
-    },
-  });
   const refresh = useCallback(() => {
-    void qc.invalidateQueries({ queryKey: ["crm", "story", id] });
+    void qc.invalidateQueries({ queryKey: ["crm", "timeline", "Opportunity", id] });
     void qc.invalidateQueries({ queryKey: ["peek", "Opportunity", id] });
     void qc.invalidateQueries({ queryKey: ["crm", "pipeline"] });
     void qc.invalidateQueries({ queryKey: ["crm", "quotes", id] });
@@ -272,8 +110,6 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
     },
     [stages.data, pipelines.data],
   );
-  const told = useMemo(() => (story.data ? timeline(story.data.activities, story.data.events, story.data.mail, name) : null), [story.data, name]);
-
   if (record.error) return <Problem error={record.error} onRetry={() => void record.refetch()} />;
   if (!doc) return <ReaderSkeleton />;
   const isOpen = doc.status === "Open";
@@ -283,14 +119,6 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
   // Its account's page: the customer's, else the prospect's.
   const account = doc.customer ? `/e/Customer/${doc.customer}` : doc.prospect ? `/e/Prospect/${doc.prospect}` : null;
   const refused = who.data?.refused ?? new Set<string>();
-  const done = async (activity: string) => {
-    try {
-      await api.post(docPath("Activity", activity, "actions", "complete"), {});
-      refresh();
-    } catch (e) {
-      toast(errorMessage(e), "error");
-    }
-  };
   const won = async () => {
     try {
       await api.post(docPath("Opportunity", id, "actions", "mark_won"), {});
@@ -364,8 +192,18 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
         </div>
       </header>
       {open.length > 0 && <StageStrip stages={open} current={doc.sales_stage} open={isOpen && writable} onMove={(s) => void save("sales_stage", s.id).then(refresh)} />}
-      <div className="crm-deal-body">
-        <section className="crm-deal-main" aria-label={t("Deal history")}>
+      <Workspace
+        entity="Opportunity"
+        id={id}
+        meta={meta}
+        doc={doc}
+        save={save}
+        writable={writable}
+        doNotCall={!!doc.contact && refused.has(doc.contact as string)}
+        changed={refresh}
+        label={t("Deal details")}
+        only={["Opportunity", "Pipeline", "Value"]}
+        before={
           <div className="crm-switch" role="tablist">
             <button type="button" role="tab" aria-selected={view === "story"} onClick={() => setView("story")}>
               {t("Story")}
@@ -374,76 +212,43 @@ function DealPage({ meta, id }: { meta: EntityMeta; id: string }) {
               {t("Discussion")}
             </button>
           </div>
-          {view === "discussion" ? (
-            <CollabPanel entity="Opportunity" id={id} canWrite={writable} />
-          ) : (
-            <>
-              {writable && <Composer deal={doc} onSaved={refresh} doNotCall={!!doc.contact && refused.has(doc.contact as string)} />}
-              {story.error ? (
-                <Problem error={story.error} onRetry={() => void story.refetch()} />
-              ) : !told ? (
-                <ReaderSkeleton paragraphs={1} />
-              ) : (
-                <>
-                  {told.upcoming.length > 0 && (
-                    <>
-                      <h2 className="crm-group">{t("Coming up")}</h2>
-                      <ol className="crm-events">
-                        {told.upcoming.map((i) => (
-                          <Row key={i.key} item={i} onDone={writable ? (a) => void done(a) : undefined} />
-                        ))}
-                      </ol>
-                    </>
-                  )}
-                  <h2 className="crm-group">{t("What happened")}</h2>
-                  {told.past.length ? (
-                    <ol className="crm-events">
-                      {told.past.map((i) => (
-                        <Row key={i.key} item={i} />
-                      ))}
-                    </ol>
-                  ) : (
-                    <p className="muted">{t("Nothing yet. Log the first call above.")}</p>
-                  )}
-                </>
-              )}
-            </>
-          )}
-        </section>
-        <aside className="crm-deal-side" aria-label={t("Deal details")}>
-          {contactIds.length > 0 && (
-            <>
-              <h2 className="crm-group">{t("People")}</h2>
-              <ul className="crm-people">
-                {people(rows, doc.contact as string | null, who.data?.names ?? {}, who.data?.roles ?? {}).map((p) => (
-                  <li key={p.id}>
-                    <Link to={`/e/Contact/${p.id}`}>{isolate(p.name || t("Contact"))}</Link>
-                    {p.role && <span className="faint"> · {isolate(p.role)}</span>}
-                    {p.primary && <Badge tone="blue">{t("Primary")}</Badge>}
-                    {refused.has(p.id) && <Badge tone="red">{t("Do not call")}</Badge>}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          {(quotes.data?.length ?? 0) > 0 && (
-            <>
-              <h2 className="crm-group">{t("Quotations")}</h2>
-              <ul className="crm-people">
-                {quotes.data!.map((q) => (
-                  <li key={q.id}>
-                    <Link to={`/e/Quotation/${q.id}`}>{isolate(q.number ?? t("Draft"))}</Link>
-                    {(q.revision ?? 1) > 1 && <span className="faint"> · {t("revision {revision}", { revision: q.revision ?? 1 })}</span>}
-                    {q.grand_total != null && <span className="faint"> · {isolate(money(Number(q.grand_total)))}</span>}
-                    {q.status && <StatusBadge value={q.status} tones={QUOTATION_STATUS} />}
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-          <RecordFields meta={meta} doc={doc} save={(n, v) => save(n, v).then(refresh)} only={["Opportunity", "Pipeline", "Value"]} />
-        </aside>
-      </div>
+        }
+        replace={view === "discussion" ? <CollabPanel entity="Opportunity" id={id} canWrite={writable} /> : undefined}
+        side={
+          <>
+            {contactIds.length > 0 && (
+              <>
+                <h2 className="crm-group">{t("People")}</h2>
+                <ul className="crm-people">
+                  {people(rows, doc.contact as string | null, who.data?.names ?? {}, who.data?.roles ?? {}).map((p) => (
+                    <li key={p.id}>
+                      <Link to={`/e/Contact/${p.id}`}>{isolate(p.name || t("Contact"))}</Link>
+                      {p.role && <span className="faint"> · {isolate(p.role)}</span>}
+                      {p.primary && <Badge tone="blue">{t("Primary")}</Badge>}
+                      {refused.has(p.id) && <Badge tone="red">{t("Do not call")}</Badge>}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+            {(quotes.data?.length ?? 0) > 0 && (
+              <>
+                <h2 className="crm-group">{t("Quotations")}</h2>
+                <ul className="crm-people">
+                  {quotes.data!.map((q) => (
+                    <li key={q.id}>
+                      <Link to={`/e/Quotation/${q.id}`}>{isolate(q.number ?? t("Draft"))}</Link>
+                      {(q.revision ?? 1) > 1 && <span className="faint"> · {t("revision {revision}", { revision: q.revision ?? 1 })}</span>}
+                      {q.grand_total != null && <span className="faint"> · {isolate(money(Number(q.grand_total)))}</span>}
+                      {q.status && <StatusBadge value={q.status} tones={QUOTATION_STATUS} />}
+                    </li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </>
+        }
+      />
       {losing && <LostDialog deal={doc as unknown as Deal} onClose={() => setLosing(false)} onDone={() => { setLosing(false); refresh(); }} />}
     </div>
   );
