@@ -149,7 +149,7 @@ export function Workspace(p: WorkspaceProps) {
         {p.before}
         {p.replace ?? (
           <>
-            {p.writable && !p.noCompose && entity !== "Prospect" && <Composer entity={entity} id={id} doNotCall={p.doNotCall} onSaved={after} />}
+            {p.writable && !p.noCompose && <Composer entity={entity} id={id} doNotCall={p.doNotCall} onSaved={after} />}
             <h2 className="crm-group">{t("Timeline")}</h2>
             <Timeline entity={entity} id={id} writable={p.writable} changed={p.changed} />
           </>

@@ -19,7 +19,7 @@ use crate::{lookup, stored};
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use ferrum_domain::util::{b, find, id, rows, s, set, sys};
-use ferrum_kernel::messages::{self, Message, Recipient};
+use ferrum_kernel::messages::{self, Message, Recipient, Rendered};
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, Filter, HookCtx, Kernel, Result, Tx};
 use serde_json::{Value, json};
 use uuid::Uuid;
@@ -66,17 +66,68 @@ impl DocHook for EnrolmentHook {
     }
 
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, _params: &Value) -> Result<Option<Value>> {
-        if name != "stop_enrolment" {
-            return Ok(None);
-        }
         let e = id(doc, "id").ok_or_else(|| Error::internal("enrolment without id"))?;
         let mut v = Doc::new();
-        v.insert("status".into(), json!("Stopped"));
-        v.insert("stopped_reason".into(), json!("Stopped by Owner"));
-        v.insert("next_run_at".into(), Value::Null);
+        match name {
+            "stop_enrolment" => {
+                v.insert("status".into(), json!("Stopped"));
+                v.insert("stopped_reason".into(), json!("Stopped by Owner"));
+                v.insert("next_run_at".into(), Value::Null);
+            }
+            "resume_enrolment" => resume(hc, doc, &mut v).await?,
+            _ => return Ok(None),
+        }
         hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "SequenceEnrolment", e, v).await?;
-        Ok(Some(json!({"status": "Stopped"})))
+        Ok(Some(json!({"status": v_status(name)})))
     }
+}
+
+fn v_status(action: &str) -> &'static str {
+    if action == "resume_enrolment" { "Active" } else { "Stopped" }
+}
+
+/// What resuming a stopped enrolment sets: it goes on from the step it stopped at, whose wait is counted again from
+/// now (working days on the sequence's calendar). Refused, in words, when they opted out or their address bounced
+/// (nothing may be sent to them), when the person is no longer an open lead or asked not to be mailed, when the
+/// sequence is gone, or when it was changed so that the step is no longer there.
+async fn resume(hc: &mut HookCtx<'_>, doc: &Doc, v: &mut Doc) -> Result<()> {
+    match s(doc, "stopped_reason") {
+        Some("Opted Out") => return Err(Error::invalid("they opted out of mail: the sequence is not resumed for them")),
+        Some("Bounced") => return Err(Error::invalid("their address bounced: nothing is sent to it, so the sequence is not resumed")),
+        _ => {}
+    }
+    let seq = lookup(hc, "Sequence", id(doc, "sequence")).await?.ok_or_else(|| Error::invalid("the sequence is gone"))?;
+    let at = doc.get("next_step").and_then(Value::as_u64).unwrap_or(0) as usize;
+    let steps = rows(&seq, "steps");
+    let Some(step) = at.checked_sub(1).and_then(|i| steps.get(i)) else {
+        let n = steps.len();
+        return Err(Error::invalid(format!(
+            "it stopped before step {at}, and the sequence has {n} step{} now: there is nothing to resume at",
+            if n == 1 { "" } else { "s" }
+        )));
+    };
+    let person = match (lookup(hc, "Lead", id(doc, "lead")).await?, lookup(hc, "Contact", id(doc, "contact")).await?) {
+        (Some(l), _) => {
+            if !s(&l, "status").is_some_and(|st| OPEN.contains(&st)) {
+                return Err(Error::invalid("the lead is converted or closed: the sequence is not resumed"));
+            }
+            l
+        }
+        (_, Some(c)) => c,
+        _ => return Err(Error::invalid("the person is gone")),
+    };
+    if b(&person, "unsubscribed") {
+        return Err(Error::invalid("they have asked not to be mailed: the sequence is not resumed"));
+    }
+    let wait = step.get("after_days").and_then(Value::as_i64).unwrap_or(0);
+    let now = Utc::now();
+    let due = due_at(hc.tx, hc.ctx.tenant, s(&seq, "calendar"), wait, now).await?;
+    let line = format!("{}: resumed at step {at}", now.to_rfc3339_opts(SecondsFormat::Secs, true));
+    v.insert("status".into(), json!("Active"));
+    v.insert("stopped_reason".into(), Value::Null);
+    v.insert("next_run_at".into(), json!(due.to_rfc3339_opts(SecondsFormat::Millis, true)));
+    v.insert("log".into(), json!(format!("{}{}{line}", s(doc, "log").unwrap_or_default(), if s(doc, "log").is_some() { "\n" } else { "" })));
+    Ok(())
 }
 
 /// Enrol a lead or a contact (the action on them): once for each sequence, whoever asks.
@@ -253,7 +304,7 @@ async fn step(k: &Kernel, ctx: &Ctx, tx: &mut Tx, e: Uuid) -> Result<bool> {
         .is_some_and(|st| s(st, "step_type").unwrap_or("Message") == "Message");
     let ended = if entity == "Lead" && !s(&person, "status").is_some_and(|st| OPEN.contains(&st)) {
         Some(if s(&person, "status") == Some("Converted") { "Converted" } else { "Lead Closed" })
-    } else if b(&person, "unsubscribed") || (kind_is_message && opted_out(tx, ctx.tenant, s(&person, "email")).await?) {
+    } else if b(&person, "unsubscribed") {
         Some("Opted Out")
     } else if s(&person, "email_bounced_on").is_some() && kind_is_message {
         Some("Bounced")
@@ -261,14 +312,7 @@ async fn step(k: &Kernel, ctx: &Ctx, tx: &mut Tx, e: Uuid) -> Result<bool> {
         None
     };
     if let Some(reason) = ended {
-        sqlx::query(
-            "update e_sequence_enrolment set status = 'Stopped', stopped_reason = $3, next_run_at = null, updated_at = now() where tenant_id = $1 and id = $2",
-        )
-        .bind(ctx.tenant)
-        .bind(e)
-        .bind(reason)
-        .execute(&mut **tx)
-        .await?;
+        stop(tx, ctx.tenant, e, reason).await?;
         return Ok(true);
     }
     let steps = rows(&seq, "steps");
@@ -288,33 +332,31 @@ async fn step(k: &Kernel, ctx: &Ctx, tx: &mut Tx, e: Uuid) -> Result<bool> {
         "Message" => {
             let address = s(&person, "email").map(str::to_string);
             match (s(this, "message"), address) {
-                (Some(template), Some(address)) if through_mail(ctx) => {
-                    let reply_to = owner.as_deref().filter(|o| !o.is_empty());
-                    via_mail(k, ctx, tx, e, (entity, person_id), template, &address, reply_to).await?;
-                    said += &format!("{template} sent through Mail");
-                    let mut a = Doc::new();
-                    a.insert("activity_type".into(), json!("Email"));
-                    a.insert("status".into(), json!("Done"));
-                    a.insert("subject".into(), json!(template));
-                    a.insert("details".into(), json!(s(&seq, "sequence_name")));
-                    link(&mut a, who, owner.as_deref());
-                    k.insert_tx(&sctx, tx, "Activity", a).await?;
-                }
                 (Some(template), Some(address)) => {
-                    let sent = messages::send(
-                        k,
-                        tx,
-                        &sctx,
-                        &Message {
-                            template: template.into(),
-                            entity: Some(entity.into()),
-                            record: Some(person_id),
-                            to: vec![Recipient::address(&address)],
-                            ..Default::default()
-                        },
-                    )
-                    .await?;
-                    said += &format!("{template} {}", sent.iter().map(|x| x.state.as_str()).collect::<Vec<_>>().join(", "));
+                    // The platform decides who may be mailed (BD-45): its opt-outs, an erased person's included, and
+                    // what the template's own kind (promotional or operational) makes of them.
+                    let message = Message {
+                        template: template.into(),
+                        entity: Some(entity.into()),
+                        record: Some(person_id),
+                        to: vec![Recipient::address(&address)],
+                        ..Default::default()
+                    };
+                    let rendered = match messages::render_for(k, tx, &sctx, &message, "email").await {
+                        Err(Error::Forbidden(_)) => {
+                            stop(tx, ctx.tenant, e, "Opted Out").await?;
+                            return Ok(true);
+                        }
+                        r => r,
+                    };
+                    if through_mail(ctx) {
+                        let reply_to = owner.as_deref().filter(|o| !o.is_empty());
+                        via_mail(k, ctx, tx, e, (entity, person_id), rendered?, reply_to).await?;
+                        said += &format!("{template} sent through Mail");
+                    } else {
+                        let sent = messages::send(k, tx, &sctx, &message).await?;
+                        said += &format!("{template} {}", sent.iter().map(|x| x.state.as_str()).collect::<Vec<_>>().join(", "));
+                    }
                     let mut a = Doc::new();
                     a.insert("activity_type".into(), json!("Email"));
                     a.insert("status".into(), json!("Done"));
@@ -382,57 +424,57 @@ fn through_mail(ctx: &Ctx) -> bool {
     ctx.schema.entity("Communication").is_some_and(|c| c.field("reply_to_address").is_some())
 }
 
-/// Whether `address` withdrew its consent to marketing e-mail in the platform's opt-outs (Settings, Messages; the
-/// link in a promotional message; a person's own choice). An opt-out whose address was erased is no longer found here.
-async fn opted_out(tx: &mut Tx, tenant: Uuid, address: Option<&str>) -> Result<bool> {
-    let Some(address) = address else { return Ok(false) };
-    Ok(sqlx::query_scalar(
-        "select exists (select 1 from contact_consent where tenant_id = $1 and purpose = 'marketing' and channel = 'email' and not granted and lower(email::text) = lower($2))",
+/// Ends enrolment `e` for `reason` (nothing more is sent, nothing is due).
+async fn stop(tx: &mut Tx, tenant: Uuid, e: Uuid, reason: &str) -> Result<()> {
+    sqlx::query(
+        "update e_sequence_enrolment set status = 'Stopped', stopped_reason = $3, next_run_at = null, updated_at = now() where tenant_id = $1 and id = $2",
     )
     .bind(tenant)
-    .bind(address)
-    .fetch_one(&mut **tx)
-    .await?)
+    .bind(e)
+    .bind(reason)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
-/// One step's message sent through Mail (`outbound::send`): the template rendered for the person's record, Reply-To
-/// their owner (so an answer reaches the person who is working them), threaded under what the sequence sent them
-/// before (In-Reply-To the last, References all), and its Message-ID kept with the enrolment so that an answer or a
-/// bounce finds it (`crm_sequence_mail`, `filing.rs`).
-#[allow(clippy::too_many_arguments)]
-async fn via_mail(
-    k: &Kernel,
-    ctx: &Ctx,
-    tx: &mut Tx,
-    enrolment: Uuid,
-    record: (&str, Uuid),
-    template: &str,
-    address: &str,
-    reply_to: Option<&str>,
-) -> Result<()> {
+/// One step's message, rendered by the platform for the person (`messages::render_for`: its subject, body, plain text
+/// and, for a promotional template, the opt-out link in the body and the List-Unsubscribe headers), sent through Mail
+/// (`outbound::send`): Reply-To their owner (so an answer reaches the person who is working them), threaded under what
+/// the sequence sent them before (In-Reply-To the last, References all), and its Message-ID kept with the enrolment so
+/// that an answer or a bounce finds it (`crm_sequence_mail`, `filing.rs`).
+async fn via_mail(k: &Kernel, ctx: &Ctx, tx: &mut Tx, enrolment: Uuid, record: (&str, Uuid), shown: Rendered, reply_to: Option<&str>) -> Result<()> {
     let sctx = sys(ctx);
-    let shown = k.preview_message(&sctx, &json!(template), "email", None, Some(record.1)).await?;
-    let (subject, html) =
-        (s(shown["message"].as_object().unwrap_or(&Doc::new()), "subject").map(str::to_string), shown["message"]["html"].as_str().map(str::to_string));
-    let (Some(subject), Some(html)) = (subject, html) else { return Err(Error::invalid(format!("{template} has no e-mail wording"))) };
+    let Rendered { address, subject, html, text, list_unsubscribe, .. } = shown;
+    let (Some(subject), Some(html)) = (subject, html) else { return Err(Error::invalid("the template has no e-mail wording")) };
     let before: Vec<String> =
         sqlx::query_scalar("select message_id from crm_sequence_mail where tenant_id = $1 and enrolment = $2 order by sent_at desc limit 50")
             .bind(ctx.tenant)
             .bind(enrolment)
             .fetch_all(&mut **tx)
             .await?;
+    // Mail takes these as typed headers (its `Message.headers`); a Mail before that has no field for them, and the
+    // link stays in the body alone.
+    let mut headers = std::collections::BTreeMap::new();
+    if let Some((url, post)) = list_unsubscribe
+        && ctx.schema.entity("Communication").is_some_and(|c| c.field("headers").is_some())
+    {
+        headers.insert("List-Unsubscribe".to_string(), url);
+        headers.insert("List-Unsubscribe-Post".to_string(), post);
+    }
     let sent = ferrum_app_comms::outbound::send(
         k,
         &sctx,
         tx,
         &ferrum_app_comms::outbound::Message {
-            to: vec![address.to_string()],
+            to: vec![address.clone()],
             subject,
             html,
+            text,
             reference: Some((record.0.to_string(), record.1)),
             reply_to: reply_to.map(str::to_string),
             in_reply_to: before.first().cloned(),
             references: before.iter().rev().cloned().collect(),
+            headers,
             ..Default::default()
         },
     )

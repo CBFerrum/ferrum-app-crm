@@ -246,6 +246,7 @@
     - {name: lead, type: link, to: Lead, in_filter: true}
     - {name: opportunity, type: link, to: Opportunity, in_filter: true}
     - {name: customer, type: link, to: Customer, in_filter: true}
+    - {name: prospect, type: link, to: Prospect, in_filter: true, description: "The prospect it is about: taken from its lead, contact or deal when they have one"}
     - {name: contact, type: link, to: Contact, in_filter: true}
     - {name: call_outcome, type: select, options: [Reached, No Answer, Left Message, Busy, Wrong Number], label: Outcome, visible_if: "doc.activity_type == 'Call'", in_filter: true}
     - {name: duration_minutes, type: int, min: 0, label: Duration (Minutes), visible_if: "doc.activity_type == 'Call' || doc.activity_type == 'Meeting'"}

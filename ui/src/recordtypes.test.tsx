@@ -38,6 +38,7 @@ function client(write = "all") {
     disabled: false,
     defaults: [{ id: "d1", field: "source", value: "Referral" }],
     requirements: [{ id: "q1", stage_name: "Proposal", field: "next_step" }],
+    allowed_stages: [{ id: "a1", stage: "2" }],
   });
   return qc;
 }
@@ -81,7 +82,7 @@ describe("the record types", () => {
 describe("a record type's editor", () => {
   it("chooses fields from the deal's own, shows the stages its deals can enter, and keeps what it fills in and asks for", () => {
     const html = draw(client(), "/e/RecordType/t1");
-    expect(html).toContain("Its deals can enter: Qualification, Proposal");
+    expect(html).not.toContain("Its deals can enter");
     expect(html).toContain("What it fills in");
     expect(html).toContain("What it asks for");
     expect(html).toContain('<option value="source" selected="">Source</option>');
@@ -90,6 +91,14 @@ describe("a record type's editor", () => {
     expect(html).toContain('<option value="Proposal" selected="">Proposal</option>');
     expect(html).toContain("Add a default");
     expect(html).toContain("Add a requirement");
+  });
+
+  it("ticks the stages it allows from the deal's own, and says what none ticked means", () => {
+    const html = draw(client(), "/e/RecordType/t1");
+    expect(html).toContain("Stages it allows");
+    expect(html).toContain("Tick none to allow all of them");
+    expect(html.match(/type="checkbox"[^>]*checked=""/g)).toHaveLength(1);
+    expect(html.indexOf("Qualification")).toBeLessThan(html.indexOf("Proposal"));
   });
 
   it("only reads for someone who may not write it", () => {

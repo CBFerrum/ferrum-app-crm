@@ -1,6 +1,6 @@
 id: crm
 name: CRM
-version: 0.13.1
+version: 0.13.3
 publisher: cbferrum
 summary: Leads, opportunities and pipeline, contacts, campaigns, activities and quotations
 description: README.md
@@ -9,7 +9,7 @@ license: AGPL-3.0-only
 homepage: https://github.com/CBFerrum/ferrum-app-crm
 support: https://github.com/CBFerrum/ferrum-app-crm/issues
 runtime: native
-platform: ">=0.3.2, <0.4"
+platform: ">=0.3.4, <0.4"
 packages: [crm]
 uninstall: ask
 # Its own interface at /crm/ (Ferrum docs/plan/apps-ui.md §13, U4b): the pipeline, and its records

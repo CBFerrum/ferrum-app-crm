@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { blankSequence, blankStep, enrolAll, enrolRequest, moved, type Person, sequenceBody, sequenceIssues, standing, stepIssues, stopReason, tally, templatesFor } from "./sequence";
+import { blankSequence, blankStep, canResume, enrolAll, enrolRequest, moved, type Person, isPromotional, lacksOptOut, sequenceBody, sequenceIssues, standing, stepIssues, stopReason, tally, templatesFor } from "./sequence";
 
 const ravi: Person = { entity: "Lead", id: "l1", name: "Ravi" };
 
@@ -96,5 +96,33 @@ describe("where the people in a sequence stand", () => {
         { id: "5", status: "Stopped", stopped_reason: "Bounced" },
       ]),
     ).toEqual({ active: 1, completed: 1, stopped: { Replied: 2, Bounced: 1 } });
+  });
+});
+
+describe("resuming a stopped enrolment", () => {
+  it("is offered for a stopped one, never for Opted Out or Bounced, nor for one still going or finished", () => {
+    expect(canResume({ status: "Stopped", stopped_reason: "Replied" })).toBe(true);
+    expect(canResume({ status: "Stopped", stopped_reason: "Stopped by Owner" })).toBe(true);
+    expect(canResume({ status: "Stopped", stopped_reason: "Opted Out" })).toBe(false);
+    expect(canResume({ status: "Stopped", stopped_reason: "Bounced" })).toBe(false);
+    expect(canResume({ status: "Active" })).toBe(false);
+    expect(canResume({ status: "Completed" })).toBe(false);
+  });
+});
+
+describe("the opt-out a promotional template needs", () => {
+  const read = (category: string, bodies: Record<string, string | null>) => ({ template: { category, languages: Object.fromEntries(Object.entries(bodies).map(([l, body]) => [l, body === null ? {} : { email: { body } }])) } });
+  it("names the languages whose e-mail body has no {{ opt_out }}", () => {
+    expect(lacksOptOut(read("promotional", { en: "Hi {{ opt_out }}", hi: "नमस्ते" }))).toEqual(["hi"]);
+    expect(lacksOptOut(read("promotional", { en: "Hi {{opt_out}}" }))).toEqual([]);
+    expect(lacksOptOut(read("promotional", { en: "Hi {{ opt_outs }}" }))).toEqual(["en"]);
+  });
+  it("asks nothing of an operational template, of a language with no e-mail, or of what was not read", () => {
+    expect(lacksOptOut(read("operational", { en: "Hi" }))).toEqual([]);
+    expect(lacksOptOut(read("promotional", { en: null }))).toEqual([]);
+    expect(lacksOptOut(null)).toEqual([]);
+    expect(isPromotional({ category: "promotional" })).toBe(true);
+    expect(isPromotional({ category: "operational" })).toBe(false);
+    expect(isPromotional(undefined)).toBe(false);
   });
 });

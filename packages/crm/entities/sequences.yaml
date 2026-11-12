@@ -52,4 +52,5 @@
   unique: [[sequence, lead], [sequence, contact]]
   actions:
     - {name: stop_enrolment, label: Stop, permission: write, condition: "doc.status == 'Active'", confirm: "Stop this sequence for this person?"}
+    - {name: resume_enrolment, label: Resume, permission: write, condition: "doc.status == 'Stopped'", confirm: "Go on from the step it stopped at? Its wait is counted again from now."}
   list: {columns: [title, sequence, status, next_run_at, assigned_to], sort: next_run_at asc}

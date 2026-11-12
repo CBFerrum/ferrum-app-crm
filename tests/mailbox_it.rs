@@ -114,6 +114,8 @@ async fn scenario() {
     let _ = anna;
     connections(&admin, tenant, &company).await;
     sequence_mail(&admin, tenant, &company).await;
+    sequence_opt_out(&admin, &company).await;
+    resume(&admin, &company).await;
 }
 
 /// The two connections CRM offers: valid as shipped and off; pulled through a test connection, the headers and the
@@ -354,4 +356,165 @@ async fn sequence_mail(admin: &U, tenant: Uuid, company: &Value) {
         .unwrap();
     assert_eq!(left, 0);
     let _ = tenant;
+}
+
+/// What a promotional step carries and what an opt-out does to a sequence: the platform's opt-out link in the body and
+/// its List-Unsubscribe headers on the mail; following the link stops the sequence before its next step; an address that
+/// opted out, was erased and is enrolled again is not mailed; an operational template is not held up by an opt-out.
+/// (A sequence has no kind of its own: each step's template is promotional or operational.)
+async fn sequence_opt_out(admin: &U, company: &Value) {
+    let k = &admin.k;
+    for (key, category, body) in [
+        ("x_opt_promo", "promotional", "<p>Sale for {{ doc.lead_name }} <a href=\"{{ opt_out }}\">Unsubscribe</a></p>"),
+        ("x_opt_ops", "operational", "<p>Your account, {{ doc.lead_name }}</p>"),
+    ] {
+        let def: ferrum_meta::MessageDef = serde_json::from_value(json!({
+            "key": key, "entity": "Lead", "category": category,
+            "languages": {"en": {"email": {"subject": "Hello {{ doc.lead_name }}", "body": body}}}
+        }))
+        .unwrap();
+        k.save_message_template(&admin.ctx, &def).await.unwrap();
+    }
+    let sequence = |name: &str, templates: &[&str]| {
+        let steps: Vec<Value> = templates.iter().map(|m| json!({"step_type": "Message", "after_days": 0, "message": m})).collect();
+        let (admin, name) = (admin, name.to_string());
+        async move { uid(&admin.insert("Sequence", json!({"sequence_name": name, "applies_to": "Lead", "steps": steps})).await).to_string() }
+    };
+    let promo = sequence("Opt-out promo", &["x_opt_promo", "x_opt_promo"]).await;
+    let ops = sequence("Opt-out operational", &["x_opt_ops"]).await;
+    let lead = |name: &'static str| async move {
+        uid(&admin
+            .insert("Lead", json!({"first_name": name, "last_name": "Opt", "email": format!("{}@optout.test", name.to_lowercase()), "company": company}))
+            .await)
+    };
+    let enrol = |seq: &str, l: Uuid| {
+        let seq = seq.to_string();
+        async move { uid(&admin.insert("SequenceEnrolment", json!({"sequence": seq, "lead": l.to_string()})).await) }
+    };
+    let step = || async { ferrum_app_crm::maintenance(k).await.unwrap() };
+    let sent_to = |address: &'static str| async move { admin.list("Communication", json!({"direction": "Sent", "recipients": address})).await };
+
+    // ── the mail holds the platform's link in its body and its headers; following it stops the sequence, nothing more goes
+    let eve = lead("Eve").await;
+    let eve_en = enrol(&promo, eve).await;
+    step().await;
+    let mails = sent_to("eve@optout.test").await;
+    assert_eq!(mails.len(), 1, "{mails:?}");
+    let body = mails[0]["content"].as_str().unwrap();
+    let link = body.split("href=\"").nth(1).and_then(|r| r.split('"').next()).unwrap().replace("&#x2f;", "/").replace("&amp;", "&");
+    assert!(link.starts_with("https://ferrum.test/api/messages/opt-out?token="), "the platform's link in the body: {body}");
+    let headers = mails[0]["headers"].as_object().unwrap_or_else(|| panic!("headers kept on the mail: {:?}", mails[0]));
+    let header = |name: &str| headers.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone());
+    assert_eq!(header("List-Unsubscribe"), Some(json!(format!("<{link}>"))));
+    assert_eq!(header("List-Unsubscribe-Post"), Some(json!("List-Unsubscribe=One-Click")));
+    assert!(mails[0]["text_content"].as_str().is_some_and(|t| t.contains(&link)) || mails[0]["text_content"].is_null());
+    assert_eq!(k.opt_out_by_link(link.rsplit("token=").next().unwrap()).await.unwrap(), "email");
+    step().await;
+    let e = admin.get("SequenceEnrolment", eve_en).await;
+    assert_eq!((e["status"].clone(), e["stopped_reason"].clone()), (json!("Stopped"), json!("Opted Out")));
+    assert_eq!(sent_to("eve@optout.test").await.len(), 1, "the second step never went");
+
+    // ── opted out, erased, then enrolled again (another lead, the same address): the platform still knows, nothing goes
+    let fay = lead("Fay").await;
+    k.set_message_opt_out(&admin.ctx, "fay@optout.test", "email", true).await.unwrap();
+    k.erase_personal_data(&admin.ctx, "fay@optout.test", "Request 14").await.unwrap();
+    assert!(!k.opted_out(&mut k.db.tenant_tx(admin.ctx.tenant).await.unwrap(), admin.ctx.tenant, "email", "nobody@optout.test").await.unwrap());
+    let _ = fay;
+    let again = lead("Fay").await;
+    let again_en = enrol(&promo, again).await;
+    step().await;
+    assert_eq!(admin.get("SequenceEnrolment", again_en).await["stopped_reason"], json!("Opted Out"));
+    assert!(sent_to("fay@optout.test").await.is_empty(), "an erased opt-out still stops the mail");
+
+    // ── an operational step is the platform's own: an opt-out to promotion does not hold it up
+    let gus = lead("Gus").await;
+    k.set_message_opt_out(&admin.ctx, "gus@optout.test", "email", true).await.unwrap();
+    let gus_en = enrol(&ops, gus).await;
+    step().await;
+    assert_eq!(sent_to("gus@optout.test").await.len(), 1);
+    assert_eq!(admin.get("SequenceEnrolment", gus_en).await["status"], json!("Completed"));
+}
+
+/// Resuming a stopped enrolment: from the step it stopped at, its wait counted again from now on the sequence's
+/// calendar; refused for an opt-out or a bounce, and when the step is no longer in the sequence.
+async fn resume(admin: &U, company: &Value) {
+    let k = &admin.k;
+    let tenant = admin.ctx.tenant;
+    k.put_logic_calendar(&admin.ctx, "resume_days", &json!({"zone": "UTC", "weekends": ["sat", "sun"], "holidays": []})).await.unwrap();
+    let seq = uid(&admin
+        .insert(
+            "Sequence",
+            json!({"sequence_name": "Resumable", "applies_to": "Lead", "calendar": "resume_days",
+                   "steps": [{"step_type": "Task", "after_days": 0, "subject": "One"}, {"step_type": "Task", "after_days": 3, "subject": "Two"},
+                             {"step_type": "Task", "after_days": 1, "subject": "Three"}]}),
+        )
+        .await);
+    let lead = |name: &'static str| async move {
+        uid(&admin
+            .insert("Lead", json!({"first_name": name, "last_name": "Res", "email": format!("{}@resume.test", name.to_lowercase()), "company": company}))
+            .await)
+    };
+    let enrol = |l: Uuid| async move { uid(&admin.insert("SequenceEnrolment", json!({"sequence": seq.to_string(), "lead": l.to_string()})).await) };
+    let step = || async { ferrum_app_crm::maintenance(k).await.unwrap() };
+    let refused = |r: ferrum_kernel::Result<Value>, words: &str| {
+        let e = r.expect_err("refused").to_string();
+        assert!(e.contains(words), "{e}");
+    };
+    let due_now = || async {
+        let mut tx = k.db.system_tx().await.unwrap();
+        sqlx::query("update e_sequence_enrolment set next_run_at = now() - interval '1 minute' where tenant_id = $1 and status = 'Active'")
+            .bind(tenant)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+    };
+
+    let hal = lead("Hal").await;
+    let hal_en = enrol(hal).await;
+    step().await;
+    assert_eq!(admin.get("SequenceEnrolment", hal_en).await["next_step"], json!(2));
+    refused(k.run_action(&admin.ctx, "SequenceEnrolment", hal_en, "resume_enrolment", json!({})).await, "not available");
+    admin.action("SequenceEnrolment", hal_en, "stop_enrolment", json!({})).await;
+    due_now().await;
+    step().await;
+    assert_eq!(admin.list("Activity", json!({"lead": hal.to_string()})).await.len(), 1, "stopped: step two does not run");
+    admin.action("SequenceEnrolment", hal_en, "resume_enrolment", json!({})).await;
+    let e = admin.get("SequenceEnrolment", hal_en).await;
+    assert_eq!((e["status"].clone(), e["stopped_reason"].clone(), e["next_step"].clone()), (json!("Active"), Value::Null, json!(2)));
+    let wait = chrono::DateTime::parse_from_rfc3339(e["next_run_at"].as_str().unwrap()).unwrap().signed_duration_since(chrono::Utc::now());
+    assert!(wait > chrono::Duration::hours(71), "three working days from now, not from when it was due: {wait}");
+    assert!(e["log"].as_str().unwrap().contains("resumed at step 2"));
+    due_now().await;
+    step().await;
+    assert_eq!(admin.list("Activity", json!({"lead": hal.to_string()})).await.len(), 2, "it goes on from step two");
+
+    // an opt-out and a bounce are not resumed
+    for (name, reason, words) in [("Ida", "Opted Out", "opted out"), ("Jon", "Bounced", "bounced")] {
+        let l = lead(name).await;
+        let en = enrol(l).await;
+        step().await;
+        let mut tx = k.db.system_tx().await.unwrap();
+        sqlx::query("update e_sequence_enrolment set status = 'Stopped', stopped_reason = $3, next_run_at = null where tenant_id = $1 and id = $2")
+            .bind(tenant)
+            .bind(en)
+            .bind(reason)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        refused(k.run_action(&admin.ctx, "SequenceEnrolment", en, "resume_enrolment", json!({})).await, words);
+    }
+
+    // a sequence changed so that the step is gone: refused, saying which
+    let kit = lead("Kit").await;
+    let kit_en = enrol(kit).await;
+    step().await;
+    admin.action("SequenceEnrolment", kit_en, "stop_enrolment", json!({})).await;
+    let current = admin.get("Sequence", seq).await;
+    k.update(&admin.ctx, "Sequence", seq, obj(json!({"steps": [current["steps"][0].clone()]})), None).await.unwrap();
+    refused(
+        k.run_action(&admin.ctx, "SequenceEnrolment", kit_en, "resume_enrolment", json!({})).await,
+        "stopped before step 2, and the sequence has 1 step now",
+    );
 }
