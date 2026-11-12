@@ -398,6 +398,10 @@ impl DocHook for ContactHook {
         {
             join(hc, contact, "prospect", p, title.as_deref(), None, false).await?;
         }
+        // Asking not to be mailed takes them out of the sequences they are in.
+        if old.is_some() {
+            crate::sequence::person_saved(hc, crate::filing::Person { entity: "Contact", id: contact }, doc).await?;
+        }
         Ok(())
     }
 
@@ -407,10 +411,14 @@ impl DocHook for ContactHook {
     }
 
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
-        if name != "move_to_account" {
-            return Ok(None);
+        match name {
+            "move_to_account" => move_to(hc, doc, params).await.map(Some),
+            "enrol_in_sequence" => {
+                let contact = id(doc, "id").ok_or_else(|| Error::internal("contact without id"))?;
+                crate::sequence::enrol(hc, crate::filing::Person { entity: "Contact", id: contact }, params).await.map(Some)
+            }
+            _ => Ok(None),
         }
-        move_to(hc, doc, params).await.map(Some)
     }
 }
 

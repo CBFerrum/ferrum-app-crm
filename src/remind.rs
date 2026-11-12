@@ -187,6 +187,13 @@ impl Site for CrmSite {
         let user = req.user.as_ref().ok_or_else(|| Error::Unauthorized("sign in first".into()))?;
         let out = match (req.method.as_str(), req.path.trim_end_matches('/')) {
             ("GET", "/work") => work(k, user).await?,
+            ("GET", path) if path.starts_with("/timeline/") => {
+                let mut parts = path.trim_start_matches("/timeline/").split('/');
+                let (Some(entity), Some(record), None) = (parts.next(), parts.next(), parts.next()) else { return Err(Error::NotFound("crm timeline".into())) };
+                let record = record.parse::<Uuid>().map_err(|_| Error::NotFound("record".into()))?;
+                let query = crate::timeline::Query::parse(&req.query)?;
+                crate::timeline::timeline(k, user, entity, record, &query).await?
+            }
             _ => return Err(Error::NotFound(format!("crm endpoint {} {}", req.method, req.path))),
         };
         let mut r = SiteResponse::json(200, &out);

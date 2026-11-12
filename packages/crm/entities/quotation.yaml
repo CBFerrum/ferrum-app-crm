@@ -55,16 +55,21 @@
     - {name: base_grand_total, type: currency, read_only: true}
     - {name: base_rounded_total, type: currency, read_only: true}
     - {name: per_ordered, type: percent, read_only: true, no_copy: true}
-    - {name: status, type: select, options: [Draft, Open, Sent, Accepted, Rejected, Partially Ordered, Ordered, Lost, Expired, Cancelled], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "Ordered once ERP makes sales orders from it: a submitted quotation offers Create Sales Order where ERP and the CRM and ERP connector are installed"}
+    - {name: status, type: select, options: [Draft, Open, Sent, Viewed, Accepted, Rejected, Partially Ordered, Ordered, Lost, Expired, Cancelled], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "Ordered once ERP makes sales orders from it: a submitted quotation offers Create Sales Order where ERP and the CRM and ERP connector are installed"}
     - {name: lost_reason, type: link, to: LostReason, read_only: true, no_copy: true}
     - {name: lost_detail, type: text, read_only: true, no_copy: true}
     - {name: revision, type: int, read_only: true, no_copy: true, in_list: true, description: "1, then one more each time it is cancelled and amended"}
     - {name: revision_of, type: link, to: Quotation, read_only: true, no_copy: true, on_delete: set_null, label: Revises, description: The quotation this revision replaces}
     - {name: replaced_by, type: link, to: Quotation, read_only: true, no_copy: true, on_delete: set_null, in_filter: true, label: Replaced By, description: Its next revision}
     - {name: sent_on, type: date, read_only: true, no_copy: true, description: "When it was marked sent to the customer"}
+    - {name: sent_at, type: datetime, read_only: true, no_copy: true, description: "The moment it was sent (Sent On is its day)"}
+    - {name: answered_at, type: datetime, read_only: true, no_copy: true, description: "The moment of the customer's answer (Answered On is its day)"}
+    - {name: viewed_at, type: datetime, read_only: true, no_copy: true, description: "When the customer first opened what was sent (their link's page); empty until they do, and again after it is sent anew"}
     - {name: answer, type: select, options: [Accepted, Rejected], read_only: true, no_copy: true, in_filter: true, label: Customer's Answer}
     - {name: answered_on, type: date, read_only: true, no_copy: true}
-    - {name: answered_by, type: email, read_only: true, no_copy: true, description: Who recorded the customer's answer}
+    - {name: answered_by, type: email, read_only: true, no_copy: true, description: Who recorded the customer's answer; empty when the customer answered by their link}
+    - {name: answer_name, type: data, read_only: true, no_copy: true, label: Name the Customer Typed, description: "The name typed when the customer answered by their link"}
+    - {name: lines_text, type: text, read_only: true, no_copy: true, hidden: true, computed: "doc.items.map(l, concat(l.item_name, ' | ', l.qty, ' | ', l.rate, ' | ', l.amount)).join('\\n')", description: "The lines as text (item, quantity, rate, amount), which the customer's page can show"}
     - {name: answer_reason, type: link, to: LostReason, read_only: true, no_copy: true, label: Reason Rejected}
     - {name: answer_detail, type: text, read_only: true, no_copy: true, label: Rejection Detail}
     - {name: campaign, type: link, to: Campaign, in_filter: true}
@@ -85,7 +90,7 @@
     - {label: Items, fields: [items]}
     - {label: Taxes, fields: [tax_template, taxes, discount_percent]}
     - {label: Totals, fields: [total, discount_amount, net_total, total_taxes, grand_total, rounding_adjustment, rounded_total, per_ordered, status]}
-    - {label: Customer's Answer, collapsible: true, fields: [revision, revision_of, replaced_by, sent_on, answer, answered_on, answered_by, answer_reason, answer_detail]}
+    - {label: Customer's Answer, collapsible: true, fields: [revision, revision_of, replaced_by, sent_on, sent_at, viewed_at, answer, answered_on, answered_at, answered_by, answer_name, answer_reason, answer_detail]}
     - {label: More, collapsible: true, fields: [base_net_total, base_grand_total, base_rounded_total, lost_reason, lost_detail, campaign, terms]}
   rules:
     - {name: validity_after_date, check: "doc.valid_till == null || doc.valid_till >= doc.posting_date", message: "Valid till cannot be before the quotation date"}
@@ -93,13 +98,108 @@
   actions:
     - {name: approve_quotation, label: Approve, docstatus: [0], permission: write, condition: "doc.needs_approval && doc.approved_by == null"}
     - {name: add_rule_needs, label: Add What the Rules Need, docstatus: [0], permission: write, condition: "doc.rule_issues != null && doc.rule_issues != ''"}
-    - {name: mark_sent, label: Mark as Sent, docstatus: [1], permission: submit, condition: "doc.status == 'Open'"}
-    - {name: mark_accepted, label: Accepted, docstatus: [1], permission: submit, condition: "doc.status == 'Open' || doc.status == 'Sent'", confirm: "Record that the customer accepted this quotation?"}
+    - {name: mark_sent, label: Mark as Sent, docstatus: [1], permission: submit, condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Viewed'"}
+    - {name: mark_accepted, label: Accepted, docstatus: [1], permission: submit, condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Viewed'", confirm: "Record that the customer accepted this quotation?"}
+    # Sending: one press makes the document, the signed link and the message from the package's templates (a workspace
+    # edits them under Settings), and records it as sent. The customer's link runs the three actions below it.
+    - name: send_quotation
+      label: Send to Customer
+      docstatus: [1]
+      permission: submit
+      condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Viewed'"
+      confirm: "Send this quotation to the customer, with a link on which they can read and answer it? Links sent before stop working."
+      params:
+        - {name: to, type: email, label: Send To, description: "Empty: the quotation's contact, else its lead's, prospect's or customer's address"}
+      refuse_if:
+        - {when: "isEmpty(coalesce(has(params.to) ? params.to : null, links.contact != null ? links.contact.email : null, links.lead != null ? links.lead.email : null, links.prospect != null ? links.prospect.email : null, links.customer != null ? links.customer.email : null))", message: "There is no address to send it to: choose one, or give the contact or the customer one"}
+      effects:
+        - {type: invoke, capability: crm.quotation.mark_sent, input: {id: doc.id}, key: "'sent:' + doc.id + ':' + string(now)"}
+        - {type: generate, template: crm.quotation_document, name: "'Quotation ' + doc.number", replace: true}
+        - type: link
+          when: "settings.CrmSettings.quote_link_shows == 'Lines and Totals'"
+          actions: [customer_accept, customer_decline, customer_ask]
+          show: [party_name, posting_date, valid_till, lines_text, total, discount_amount, total_taxes, grand_total, terms]
+          days: 90
+          uses: 20
+          recipient: doc.party_name
+          code_to: "settings.CrmSettings.quote_link_code ? coalesce(has(params.to) ? params.to : null, links.contact != null ? links.contact.email : null, links.lead != null ? links.lead.email : null, links.prospect != null ? links.prospect.email : null, links.customer != null ? links.customer.email : null) : null"
+        - type: link
+          when: "settings.CrmSettings.quote_link_shows == 'Totals Only'"
+          actions: [customer_accept, customer_decline, customer_ask]
+          show: [party_name, posting_date, valid_till, total, discount_amount, total_taxes, grand_total, terms]
+          days: 90
+          uses: 20
+          recipient: doc.party_name
+          code_to: "settings.CrmSettings.quote_link_code ? coalesce(has(params.to) ? params.to : null, links.contact != null ? links.contact.email : null, links.lead != null ? links.lead.email : null, links.prospect != null ? links.prospect.email : null, links.customer != null ? links.customer.email : null) : null"
+        - type: link
+          when: "settings.CrmSettings.quote_link_shows == 'Neither'"
+          actions: [customer_accept, customer_decline, customer_ask]
+          show: [party_name, posting_date, valid_till]
+          days: 90
+          uses: 20
+          recipient: doc.party_name
+          code_to: "settings.CrmSettings.quote_link_code ? coalesce(has(params.to) ? params.to : null, links.contact != null ? links.contact.email : null, links.lead != null ? links.lead.email : null, links.prospect != null ? links.prospect.email : null, links.customer != null ? links.customer.email : null) : null"
+        - type: message
+          template: crm.quotation_sent
+          to: ["expr:coalesce(has(params.to) ? params.to : null, links.contact != null ? links.contact.email : null, links.lead != null ? links.lead.email : null, links.prospect != null ? links.prospect.email : null, links.customer != null ? links.customer.email : null)"]
+          channels: [email]
+          attachments: ["results[1]"]
+          values: {url: "results[2] != null ? results[2].url : (results[3] != null ? results[3].url : results[4].url)"}
+          secret: [url]
+    # What the customer does on their link. They are not signed in: each action's conditions and parameters are all they have.
+    - name: customer_accept
+      label: Accept
+      hidden: true
+      docstatus: [1]
+      permission: read
+      condition: "(doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Viewed') && (doc.valid_till == null || doc.valid_till >= today)"
+      params:
+        - {name: signed_name, type: data, label: Type your full name to accept, required: true}
+    - name: customer_decline
+      label: Decline
+      hidden: true
+      docstatus: [1]
+      permission: read
+      condition: "(doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Viewed') && (doc.valid_till == null || doc.valid_till >= today)"
+      params:
+        - {name: reason, type: text, label: Why do you decline, required: true}
+        - {name: signed_name, type: data, label: Your name}
+    - name: customer_ask
+      label: Ask a Question
+      hidden: true
+      docstatus: [1]
+      permission: read
+      condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Viewed'"
+      params:
+        - {name: question, type: text, label: Your question, required: true}
+        - {name: signed_name, type: data, label: Your name}
+      effects:
+        - {type: invoke, capability: crm.quotation.mark_viewed, input: {id: doc.id}, when: "doc.status == 'Sent'"}
+        - type: create_document
+          entity: Activity
+          values:
+            activity_type: "'Task'"
+            subject: "size(params.question) > 80 ? params.question.substring(0, 80) : params.question"
+            details: "concat(params.signed_name, ': ', params.question)"
+            assigned_to: doc.assigned_to
+            sales_team: doc.sales_team
+            opportunity: doc.opportunity
+            lead: doc.lead
+            customer: doc.customer
+            contact: doc.contact
+        - {type: message, template: crm.quotation_question, to: [owner], channels: [inapp]}
+    - name: mark_viewed
+      label: Mark as Viewed
+      hidden: true
+      docstatus: [1]
+      permission: read
+      condition: "doc.status == 'Sent'"
+      contract: {completion: "The quotation is Viewed: the customer opened what was sent"}
     - name: mark_rejected
       label: Rejected
       docstatus: [1]
       permission: submit
-      condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Expired'"
+      condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Viewed' || doc.status == 'Expired'"
       params:
         - {name: lost_reason, type: link, to: LostReason, label: Reason, required: true}
         - {name: lost_detail, type: text, label: Detail}
@@ -107,7 +207,7 @@
       label: Mark as Lost
       docstatus: [1]
       permission: submit
-      condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Accepted' || doc.status == 'Rejected' || doc.status == 'Expired'"
+      condition: "doc.status == 'Open' || doc.status == 'Sent' || doc.status == 'Viewed' || doc.status == 'Accepted' || doc.status == 'Rejected' || doc.status == 'Expired'"
       params:
         - {name: lost_reason, type: link, to: LostReason, label: Lost Reason, required: true}
         - {name: lost_detail, type: text, label: Detail}
