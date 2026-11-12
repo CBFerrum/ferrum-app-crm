@@ -12,6 +12,12 @@
     - {name: stage_name, type: data, in_list: true, label: When Entering, description: "The name of a stage (deals) or a status (leads). Empty: whenever it is saved at all"}
     - {name: field, type: data, required: true, in_list: true, description: "A field of the deal or lead, by its name, that must have a value then"}
 
+- name: RecordTypeStage
+  label: Record Type Stage
+  kind: child
+  fields:
+    - {name: stage, type: link, to: SalesStage, required: true, in_list: true, description: "A stage of the deal's pipeline"}
+
 - name: RecordType
   label: Record Type
   kind: master
@@ -25,4 +31,5 @@
     - {name: disabled, type: check, in_list: true, in_filter: true}
     - {name: defaults, type: table, of: RecordTypeDefault}
     - {name: requirements, type: table, of: RecordTypeRequirement}
+    - {name: allowed_stages, type: table, of: RecordTypeStage, visible_if: "doc.applies_to == 'Opportunity'", label: Allowed Stages, description: "The open stages a deal of this type moves through. Empty: all of them. Closing a deal as won or lost is never held up"}
   list: {columns: [type_name, applies_to, pipeline, disabled], sort: type_name asc}

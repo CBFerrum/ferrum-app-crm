@@ -818,6 +818,8 @@ async fn hosted_mail(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
     let t = anna.timeline("Lead", lee, json!({})).await;
     assert_eq!(titles(&t, "email"), ["Hosted hello"]);
     assert_eq!(t["events"][0]["details"]["sender"], json!("lee@hosted.test"));
+    // what opens it in Mail: its hosted mailbox and its id there (from the event, never an address)
+    assert_eq!((t["events"][0]["details"]["mailbox"].clone(), t["events"][0]["details"]["email"].clone()), (json!(Uuid::nil().to_string()), json!("e1")));
     assert_eq!(titles(&anna.timeline("Opportunity", deal, json!({})).await, "email"), ["Hosted hello"]);
     assert!(anna.get("Lead", lee).await["last_touched_at"].is_string(), "heard from: touched");
     // one that anna sent him is filed too; one between colleagues, to nobody known, or to outsiders only, is not
@@ -1176,6 +1178,47 @@ async fn record_types(admin: &U, anna: &U) {
     assert_eq!(l["source"], json!("Trade Show"));
     refused(anna.k.update(&anna.ctx, "Lead", uid(&l), obj(json!({"status": "Qualified"})), None).await, "asks for Budget before Qualified");
     anna.update("Lead", uid(&l), json!({"status": "Qualified", "budget": "5000"})).await;
+    // allowed stages: a deal of the type moves through those only (none listed: all, as before); winning is never held up
+    let pipeline_id = pipeline.clone();
+    let stage_of = move |name: &'static str| {
+        let pipeline = pipeline_id.clone();
+        async move { admin.one("SalesStage", json!({"pipeline": pipeline, "stage_name": name})).await["id"].clone() }
+    };
+    let stage_of = &stage_of;
+    let staged = uid(&admin
+        .insert(
+            "RecordType",
+            json!({"type_name": "Fast deal", "applies_to": "Opportunity", "pipeline": pipeline,
+                   "allowed_stages": [{"stage": stage_of("Discovery").await}, {"stage": stage_of("Contract").await}]}),
+        )
+        .await)
+    .to_string();
+    let f = anna.insert("Opportunity", json!({"opportunity_from": "Customer", "customer": acme, "record_type": staged, "amount": "100"})).await;
+    refused(
+        anna.k.update(&anna.ctx, "Opportunity", uid(&f), obj(json!({"sales_stage": stage_of("Proposal").await})), None).await,
+        "Fast deal does not take a deal to Proposal: its deals move through Discovery, Contract",
+    );
+    anna.update("Opportunity", uid(&f), json!({"sales_stage": stage_of("Contract").await})).await;
+    anna.update("Opportunity", uid(&f), json!({"status": "Won"})).await;
+    let other = anna.insert("Opportunity", json!({"opportunity_from": "Customer", "customer": acme, "amount": "100"})).await;
+    anna.update("Opportunity", uid(&other), json!({"sales_stage": stage_of("Proposal").await})).await;
     admin.update("RecordType", vid(&json!({"id": lead_kind})), json!({"disabled": true})).await;
     refused(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "Off", "record_type": lead_kind}))).await, "switched off");
+    prospect_activities(admin, anna).await;
+}
+
+/// An activity is linked to a prospect, directly or through its lead, contact or deal, and shows on the prospect's timeline.
+async fn prospect_activities(admin: &U, anna: &U) {
+    let p = uid(&admin.insert("Prospect", json!({"prospect_name": "Prospect Quick Actions Ltd"})).await);
+    let q = uid(&admin.insert("Prospect", json!({"prospect_name": "Other Prospect Ltd"})).await);
+    let lead = uid(&anna.insert("Lead", json!({"first_name": "Pia", "last_name": "Prospect", "prospect": p.to_string()})).await);
+    let through = anna.insert("Activity", json!({"activity_type": "Note", "subject": "Through the lead", "lead": lead.to_string()})).await;
+    assert_eq!(through["prospect"], json!(p.to_string()), "taken from its lead");
+    let direct = anna.insert("Activity", json!({"activity_type": "Task", "subject": "Straight on the prospect", "prospect": p.to_string()})).await;
+    assert_eq!(direct["prospect"], json!(p.to_string()));
+    anna.insert("Activity", json!({"activity_type": "Note", "subject": "Elsewhere", "prospect": q.to_string()})).await;
+    let t = anna.timeline("Prospect", p, json!({})).await;
+    let mut seen: Vec<String> = t["events"].as_array().unwrap().iter().filter_map(|e| e["title"].as_str().map(str::to_string)).collect();
+    seen.sort();
+    assert_eq!(seen, ["Straight on the prospect", "Through the lead"], "the prospect's own timeline");
 }

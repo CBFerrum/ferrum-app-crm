@@ -29,16 +29,26 @@ impl DocHook for ActivityHook {
         if s(doc, "activity_type") == Some("Note") && s(doc, "status") == Some("Open") {
             set(doc, "status", "Done");
         }
-        // Put the activity on every timeline it belongs to.
+        // Put the activity on every timeline it belongs to. (Before the package is updated to 0.13.2 it has no prospect.)
+        let prospects = hc.ctx.schema.entity("Activity").is_some_and(|a| a.field("prospect").is_some());
         if let Some(o) = lookup(hc, "Opportunity", id(doc, "opportunity")).await? {
             inherit(doc, &o, "lead");
             inherit(doc, &o, "customer");
+            if prospects {
+                inherit(doc, &o, "prospect");
+            }
         }
         if let Some(c) = lookup(hc, "Contact", id(doc, "contact")).await? {
             inherit(doc, &c, "customer");
+            if prospects {
+                inherit(doc, &c, "prospect");
+            }
         }
         if let Some(l) = lookup(hc, "Lead", id(doc, "lead")).await? {
             inherit(doc, &l, "customer");
+            if prospects {
+                inherit(doc, &l, "prospect");
+            }
         }
         if s(doc, "status") != Some("Done") {
             set(doc, "completed_at", Value::Null);
