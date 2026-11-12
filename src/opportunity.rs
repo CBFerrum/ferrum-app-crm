@@ -28,6 +28,7 @@ impl DocHook for OpportunityHook {
         }
         contacts(doc, old.as_ref())?;
         crate::accounts::follow_team(hc, doc, old.as_ref()).await?;
+        crate::record_type::apply(hc, doc, old.as_ref(), "Opportunity").await?;
         stage(hc, doc, old.as_ref()).await?;
         // Since when it stands where it stands.
         if old.as_ref().is_none_or(|o| o.get("sales_stage") != doc.get("sales_stage")) || s(doc, "stage_changed_at").is_none() {
@@ -53,7 +54,8 @@ impl DocHook for OpportunityHook {
 
     /// On saving only: a form's live preview is not refused while a person fills in what a stage asks.
     async fn validate_change(&self, hc: &mut HookCtx<'_>, old: Option<&Doc>, doc: &Doc) -> Result<()> {
-        requirements(hc, doc, old).await
+        requirements(hc, doc, old).await?;
+        crate::record_type::check(hc, doc, old, "Opportunity").await
     }
 
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {

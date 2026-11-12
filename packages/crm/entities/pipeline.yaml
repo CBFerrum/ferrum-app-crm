@@ -73,9 +73,10 @@
     - {name: mobile_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The mobile's national part, by which the same person is found"}
     - {name: duplicate_of, type: link, to: Lead, read_only: true, no_copy: true, in_filter: true, description: "An earlier lead with the same email or phone, to merge with or keep apart"}
     - {name: conversion, type: json, read_only: true, hidden: true, no_copy: true, description: "What converting it made and changed, so that it can be undone"}
+    - {name: record_type, type: link, to: RecordType, in_filter: true, link_filters: {applies_to: Lead}, description: "Its kind: what it fills in when it is made and asks for before a status"}
     - {name: notes, type: text}
   form:
-    - {label: Lead, fields: [first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, sales_team, assignment_rule, score, score_why, next_follow_up, last_contacted_on, last_touched_at]}
+    - {label: Lead, fields: [record_type, first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, sales_team, assignment_rule, score, score_why, next_follow_up, last_contacted_on, last_touched_at]}
     - {label: Contact Details, fields: [email, phone, mobile, website, do_not_call, call_consent_on, call_consent_how, unsubscribed, email_consent_on, email_consent_how, allow_duplicate, duplicate_of]}
     - {label: Source and Segment, fields: [source, campaign, prospect, territory, industry, company_size, annual_revenue, company]}
     - {label: Qualification, collapsible: true, fields: [budget, is_decision_maker, need, timeline, qualified_on, qualified_by]}
@@ -101,6 +102,12 @@
       condition: "doc.status == 'Converted'"
       confirm: "Give the lead back its deals, quotations and activities, and remove the customer, contact and address the conversion made?"
     - {name: make_opportunity, label: Create Opportunity, permission: read, condition: "doc.status != 'Lost' && doc.status != 'Junk'"}
+    - name: enrol_in_sequence
+      label: Enrol in Sequence
+      permission: write
+      condition: "doc.status == 'New' || doc.status == 'Contacted' || doc.status == 'Qualified'"
+      params:
+        - {name: sequence, type: link, to: Sequence, required: true, label: Sequence}
     - name: assign_by_rules
       label: Assign by Rules
       permission: write
@@ -157,6 +164,7 @@
     - {name: contact, type: link, to: Contact, label: Primary Contact, description: "The primary of its contacts"}
     - {name: contacts, type: table, of: OpportunityContact, description: "The people in the decision, with their buying roles; one is the primary"}
     - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", in_filter: true}
+    - {name: record_type, type: link, to: RecordType, in_filter: true, link_filters: {applies_to: Opportunity}, description: "Its kind: its pipeline, what it fills in when it is made and what it asks for before a stage"}
     - {name: pipeline, type: link, to: SalesPipeline, in_list: true, in_filter: true, description: "Empty: the sales stage's, else the default pipeline. Another pipeline puts the deal at its first open stage unless a stage of it is chosen"}
     - {name: sales_stage, type: link, to: SalesStage, required: true, in_list: true, in_filter: true, description: Defaults to the first open stage of its pipeline}
     - {name: open_stage, type: link, to: SalesStage, read_only: true, hidden: true, no_copy: true, label: Last Open Stage, description: Where it stood while open; reopening takes it back there}
@@ -196,7 +204,7 @@
     - {name: no_step_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its owner was told it had no next step"}
     - {name: notes, type: text}
   form:
-    - {label: Opportunity, fields: [title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to, sales_team]}
+    - {label: Opportunity, fields: [record_type, title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to, sales_team]}
     - {label: Contacts, fields: [contacts]}
     - {label: Pipeline, fields: [pipeline, sales_stage, probability, forecast_category, status, lost_reason, lost_detail, expected_close_date, next_step, next_follow_up, stage_changed_at, last_activity_at, closed_on]}
     - {label: Value, fields: [currency, conversion_rate, price_list, items, amount, weighted_amount, base_amount, base_weighted_amount]}
@@ -244,6 +252,7 @@
     - {name: details, type: text}
     - {name: completed_at, type: datetime, read_only: true, no_copy: true}
     - {name: overdue_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its assignee was told it is overdue"}
+    - {name: calendar_event, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The calendar event a meeting was made from: it follows the event when it moves or is cancelled"}
   actions:
     - name: complete
       label: Mark as Done

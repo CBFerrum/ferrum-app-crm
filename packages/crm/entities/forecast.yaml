@@ -1,0 +1,76 @@
+- name: ForecastLine
+  label: Forecast Line
+  kind: child
+  fields:
+    - {name: category, type: data, read_only: true, in_list: true}
+    - {name: calculated, type: currency, read_only: true, in_list: true, label: From the Deals, description: "What the owner's open deals expected in the period come to under this category, in the company's currency, as of the last save"}
+    - {name: amount, type: currency, min: "0", in_list: true, label: Owner's Call, description: "What the owner commits to under this category"}
+    - {name: adjusted, type: currency, read_only: true, in_list: true, label: Manager's Call, description: "What the owner's manager sets instead; the owner's call is kept beside it"}
+    - {name: adjusted_by, type: email, read_only: true}
+    - {name: note, type: data, description: "Why, in the owner's or the manager's words"}
+
+- name: ForecastSubmission
+  label: Forecast
+  label_plural: Forecasts
+  kind: master
+  module: crm
+  title_field: title
+  company_scoped: true
+  owner_fields: [assigned_to]
+  description: "What a person calls for a period, by forecast category: they submit it, their manager may set another figure beside it (both are kept), and the figures can be compared with what was won (the Forecast against Closed report) and week by week (Forecast History)."
+  fields:
+    - {name: title, type: data, read_only: true, in_list: true}
+    - {name: assigned_to, type: email, default_expr: "user.email", in_list: true, in_filter: true, label: Forecast Owner, description: "A user's email: whose forecast it is"}
+    - {name: sales_team, type: link, to: SalesTeam, in_filter: true, description: "Empty: its owner's first team. Its manager adjusts it"}
+    - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", in_filter: true}
+    - {name: period, type: select, options: [Month, Quarter, Year], required: true, default: Month, in_list: true, in_filter: true, description: "Quarters and years follow the fiscal year"}
+    - {name: start_date, type: date, required: true, in_list: true, in_filter: true, label: Starting, description: "Any day of it: the period it falls in is taken"}
+    - {name: end_date, type: date, read_only: true, label: Ending}
+    - {name: status, type: select, options: [Open, Submitted], default: Open, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: submitted_at, type: datetime, read_only: true, no_copy: true}
+    - {name: closed, type: currency, read_only: true, no_copy: true, description: "What the owner won in the period, in the company's currency, as of the last save"}
+    - {name: lines, type: table, of: ForecastLine}
+    - {name: comment, type: text}
+  form:
+    - {label: Forecast, fields: [title, assigned_to, sales_team, company, period, start_date, end_date, status, submitted_at, closed]}
+    - {label: By Category, fields: [lines]}
+    - {label: Comment, collapsible: true, fields: [comment]}
+  unique: [[assigned_to, company, period, start_date]]
+  actions:
+    - {name: submit_forecast, label: Submit, permission: write, condition: "doc.status == 'Open'", confirm: "Submit this forecast? Its owner's calls are then fixed until it is reopened."}
+    - name: adjust_forecast
+      label: Adjust
+      permission: write
+      condition: "doc.status == 'Submitted'"
+      params:
+        - {name: category, type: data, label: Category, required: true, description: "Commit, Best Case or Pipeline"}
+        - {name: amount, type: decimal, label: Manager's Call, required: true}
+        - {name: note, type: data, label: Note}
+    - name: reopen_forecast
+      label: Reopen
+      permission: write
+      condition: "doc.status == 'Submitted'"
+      confirm: "Open it for its owner to change? The manager's calls are cleared."
+  list: {columns: [title, status, period, start_date, assigned_to], sort: start_date desc}
+
+- name: ForecastSnapshot
+  label: Forecast Snapshot
+  kind: master
+  module: crm
+  title_field: title
+  company_scoped: true
+  owner_fields: [assigned_to]
+  description: "A person's forecast for a period as it stood on a day, taken by CRM every few days (CRM Settings): the figures from their deals, their submitted call and their manager's, by category. Written by CRM, never by hand."
+  fields:
+    - {name: title, type: data, read_only: true, in_list: true}
+    - {name: assigned_to, type: email, read_only: true, in_list: true, in_filter: true}
+    - {name: sales_team, type: link, to: SalesTeam, read_only: true, in_filter: true}
+    - {name: company, type: link, to: Company, read_only: true, in_filter: true}
+    - {name: period, type: select, options: [Month, Quarter, Year], read_only: true, in_filter: true}
+    - {name: start_date, type: date, read_only: true, in_filter: true}
+    - {name: end_date, type: date, read_only: true}
+    - {name: taken_on, type: date, read_only: true, in_list: true, in_filter: true}
+    - {name: closed, type: currency, read_only: true, in_list: true}
+    - {name: figures, type: json, read_only: true, description: "{category: {calculated, submitted, adjusted}}"}
+  unique: [[assigned_to, company, period, start_date, taken_on]]
+  list: {columns: [title, taken_on, closed], sort: taken_on desc}

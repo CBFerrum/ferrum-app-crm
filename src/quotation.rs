@@ -30,12 +30,28 @@ const DEFAULT_VALIDITY_DAYS: i64 = 30;
 /// sent and the validity. Ordering wins over a loss, an answer or expiry (the customer ordered after
 /// all); only cancellation wins over ordering. An answer stands past the validity; expiry applies to
 /// an open or a sent one.
+#[cfg(test)]
 pub(crate) fn status(
     docstatus: i64,
     per_ordered: Decimal,
     lost: bool,
     answer: Option<&str>,
     sent: bool,
+    valid_till: Option<NaiveDate>,
+    today: NaiveDate,
+) -> &'static str {
+    status_with(docstatus, per_ordered, lost, answer, sent, false, valid_till, today)
+}
+
+/// [`status`] with whether the customer has opened what was sent: Viewed, between Sent and an answer.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn status_with(
+    docstatus: i64,
+    per_ordered: Decimal,
+    lost: bool,
+    answer: Option<&str>,
+    sent: bool,
+    viewed: bool,
     valid_till: Option<NaiveDate>,
     today: NaiveDate,
 ) -> &'static str {
@@ -48,6 +64,7 @@ pub(crate) fn status(
         _ if answer == Some("Rejected") => "Rejected",
         _ if answer == Some("Accepted") => "Accepted",
         _ if valid_till.is_some_and(|v| v < today) => "Expired",
+        _ if sent && viewed => "Viewed",
         _ if sent => "Sent",
         _ => "Open",
     }
@@ -65,7 +82,16 @@ pub(crate) async fn refresh(k: &Kernel, ctx: &Ctx, tx: &mut Tx, quotation: Uuid)
     let docstatus = q.get("docstatus").and_then(Value::as_i64).unwrap_or(0);
     let mut v = Doc::new();
     v.insert("per_ordered".into(), money(pct));
-    let st = status(docstatus, pct, id(&q, "lost_reason").is_some(), s(&q, "answer"), s(&q, "sent_on").is_some(), valid_till, ctx.today());
+    let st = status_with(
+        docstatus,
+        pct,
+        id(&q, "lost_reason").is_some(),
+        s(&q, "answer"),
+        s(&q, "sent_on").is_some(),
+        s(&q, "viewed_at").is_some(),
+        valid_till,
+        ctx.today(),
+    );
     v.insert("status".into(), json!(st));
     k.set_values_tx(&sctx, tx, "Quotation", quotation, v).await?;
     Ok(q)
@@ -167,14 +193,19 @@ impl DocHook for QuotationHook {
     }
 
     async fn on_cancel(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
-        refresh(hc.kernel, hc.ctx, hc.tx, id(doc, "id").ok_or_else(|| Error::internal("quotation without id"))?).await.map(|_| ())
+        let qid = id(doc, "id").ok_or_else(|| Error::internal("quotation without id"))?;
+        // A revision (cancel, then amend) replaces what the customer was sent: the old link stops working.
+        revoke_links(hc.tx, hc.ctx, qid, "cancelled").await?;
+        refresh(hc.kernel, hc.ctx, hc.tx, qid).await.map(|_| ())
     }
 
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
         match name {
             "make_sales_order" => make_sales_order(hc, doc).await.map(Some),
             "mark_lost" => mark_lost(hc, doc, params).await.map(Some),
-            "mark_sent" | "mark_accepted" | "mark_rejected" => answer(hc, name, doc, params).await.map(Some),
+            "mark_sent" | "mark_accepted" | "mark_rejected" | "mark_viewed" | "customer_accept" | "customer_decline" => {
+                answer(hc, name, doc, params).await.map(Some)
+            }
             "add_rule_needs" => add_rule_needs(hc, doc).await.map(Some),
             "approve_quotation" => approve(hc, doc).await.map(Some),
             _ => Ok(None),
@@ -430,33 +461,120 @@ async fn mark_lost(hc: &mut HookCtx<'_>, q: &Doc, params: &Value) -> Result<Valu
     Ok(json!({"status": "Lost"}))
 }
 
-/// Records that the quotation was sent to the customer, or the customer's answer: accepted, or
-/// rejected with a reason, by whom it was recorded and when. A rejection leaves its deal open:
-/// another revision may follow.
+/// Records that the quotation was sent to the customer, that they opened it, or their answer: accepted,
+/// or rejected with a reason, by whom it was recorded (a person of the workspace, or the customer by their
+/// link, with the name they typed) and when. A rejection leaves its deal open: another revision may follow.
+/// A new send ends the links sent before; an answer ends them all; a setting (CRM Settings, Order an
+/// Accepted Quotation) makes the order of one the customer accepted.
 async fn answer(hc: &mut HookCtx<'_>, name: &str, q: &Doc, params: &Value) -> Result<Value> {
     let qid = id(q, "id").ok_or_else(|| Error::internal("quotation without id"))?;
     let today = json!(hc.ctx.today().to_string());
+    let now = json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true));
+    let text = |k: &str| params.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty()).map(String::from);
     let mut v = Doc::new();
+    let by_customer = name.starts_with("customer_");
     match name {
         "mark_sent" => {
             v.insert("sent_on".into(), today);
+            v.insert("sent_at".into(), now);
+            v.insert("viewed_at".into(), Value::Null);
+            revoke_links(hc.tx, hc.ctx, qid, "sent again").await?;
+        }
+        "mark_viewed" => {
+            if s(q, "viewed_at").is_none() {
+                v.insert("viewed_at".into(), now);
+            }
         }
         _ => {
-            let rejected = name == "mark_rejected";
-            if rejected {
+            let rejected = matches!(name, "mark_rejected" | "customer_decline");
+            if name == "mark_rejected" {
                 let reason = lost_reason(hc, params).await?.ok_or_else(|| Error::field("lost_reason", "Reason is required"))?;
                 v.insert("answer_reason".into(), json!(reason.to_string()));
                 v.insert("answer_detail".into(), params.get("lost_detail").cloned().filter(Value::is_string).unwrap_or(Value::Null));
             }
+            if by_customer {
+                // Typed by the customer: their name, and for a decline their reason in their words.
+                let signed = text("signed_name");
+                if !rejected && signed.is_none() {
+                    return Err(Error::field("signed_name", "Your name is required"));
+                }
+                v.insert("answer_name".into(), json!(signed));
+                if rejected {
+                    v.insert("answer_detail".into(), json!(text("reason").ok_or_else(|| Error::field("reason", "Your reason is required"))?));
+                }
+                if s(q, "viewed_at").is_none() {
+                    v.insert("viewed_at".into(), now);
+                }
+            }
             v.insert("answer".into(), json!(if rejected { "Rejected" } else { "Accepted" }));
             v.insert("answered_on".into(), today);
-            v.insert("answered_by".into(), json!(hc.ctx.email));
+            v.insert("answered_at".into(), json!(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)));
+            v.insert("answered_by".into(), if by_customer { Value::Null } else { json!(hc.ctx.email) });
         }
     }
     hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Quotation", qid, v).await?;
     refresh(hc.kernel, hc.ctx, hc.tx, qid).await?;
+    let accepted = matches!(name, "mark_accepted" | "customer_accept");
+    if accepted || matches!(name, "mark_rejected" | "customer_decline") {
+        revoke_links(hc.tx, hc.ctx, qid, "answered").await?;
+    }
+    let mut out = json!({});
+    if accepted {
+        out["ordered"] = auto_order(hc, q).await?;
+    }
     let now = hc.kernel.get_tx(&sys(hc.ctx), hc.tx, "Quotation", qid, false).await?;
-    Ok(json!({"status": now.get("status")}))
+    out["status"] = now.get("status").cloned().unwrap_or(Value::Null);
+    Ok(out)
+}
+
+/// Ends the signed links of a quotation (the platform keeps them in `action_link` and has no call that does
+/// this inside the caller's transaction). Says so in the quotation's history when any was working.
+pub(crate) async fn revoke_links(tx: &mut Tx, ctx: &Ctx, quotation: Uuid, why: &str) -> Result<()> {
+    let n = sqlx::query("update action_link set revoked_at = now() where tenant_id = $1 and entity = 'Quotation' and record_id = $2 and revoked_at is null")
+        .bind(ctx.tenant)
+        .bind(quotation)
+        .execute(&mut **tx)
+        .await?
+        .rows_affected();
+    if n > 0 {
+        ferrum_kernel::audit::record(tx, ctx, "Quotation", quotation, "revoke_link", None, json!({"links": n, "why": why})).await?;
+    }
+    Ok(())
+}
+
+/// The sales order of a quotation the customer has accepted, when CRM Settings say to make it: a draft one, as
+/// Create Sales Order makes it, for a customer's quotation where ERP's connector is installed. What the order
+/// refuses (an expired quotation, a lead's) does not undo the answer: the quotation stays accepted and a person
+/// makes the order. `null` when none was made, else the order.
+async fn auto_order(hc: &mut HookCtx<'_>, q: &Doc) -> Result<Value> {
+    let qid = id(q, "id").ok_or_else(|| Error::internal("quotation without id"))?;
+    let on = crate::setting(hc.kernel, hc.ctx, hc.tx, "order_on_accept").await?.and_then(|v| v.as_bool());
+    let can = hc
+        .ctx
+        .schema
+        .entity("SalesOrder")
+        .is_some_and(|_| hc.ctx.schema.entity("Quotation").is_some_and(|e| e.def.actions.iter().any(|a| a.name == "make_sales_order")));
+    if on != Some(true) || !can || s(q, "party_type") != Some("Customer") {
+        return Ok(Value::Null);
+    }
+    let sctx = sys(hc.ctx);
+    let fresh = hc.kernel.get_tx(&sctx, hc.tx, "Quotation", qid, false).await?;
+    sqlx::query("savepoint crm_auto_order").execute(&mut **hc.tx).await?;
+    let made = {
+        let mut h = HookCtx { kernel: hc.kernel, ctx: &sctx, tx: &mut *hc.tx, entity: hc.entity };
+        make_sales_order(&mut h, &fresh).await
+    };
+    match made {
+        Ok(order) => {
+            sqlx::query("release savepoint crm_auto_order").execute(&mut **hc.tx).await?;
+            Ok(order)
+        }
+        Err(e) => {
+            sqlx::query("rollback to savepoint crm_auto_order").execute(&mut **hc.tx).await?;
+            tracing::info!(quotation = %qid, "an accepted quotation was not ordered: {e}");
+            Ok(Value::Null)
+        }
+    }
 }
 
 /// Keeps quotations' ordered quantities in step with the sales orders made from them, and an order
@@ -586,7 +704,7 @@ async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
     let ctx = Ctx::system(tenant, schema);
     let filters = [
         Filter::eq("docstatus", 1),
-        Filter { field: "status".into(), op: Op::In, value: json!(["Open", "Sent"]) },
+        Filter { field: "status".into(), op: Op::In, value: json!(["Open", "Sent", "Viewed"]) },
         Filter { field: "valid_till".into(), op: Op::Lt, value: json!(ctx.today().to_string()) },
     ];
     let mut tx = k.db.tenant_tx(tenant).await?;
@@ -601,12 +719,14 @@ async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
         let Some(qid) = id(q, "id") else { continue };
         // Re-read under the row lock: an order submitted meanwhile wins over expiry.
         let current = k.get_tx(&ctx, &mut tx, "Quotation", qid, true).await?;
-        let Some(was @ ("Open" | "Sent")) = s(&current, "status") else { continue };
+        let Some(was @ ("Open" | "Sent" | "Viewed")) = s(&current, "status") else { continue };
         let was = was.to_string();
         let mut v = Doc::new();
         v.insert("status".into(), json!("Expired"));
         k.set_values_tx(&ctx, &mut tx, "Quotation", qid, v).await?;
         ferrum_kernel::audit::record(&mut tx, &ctx, "Quotation", qid, "expire", None, json!({"status": [was, "Expired"]})).await?;
+        // What the customer was sent stops working with its validity.
+        revoke_links(&mut tx, &ctx, qid, "expired").await?;
         expired += 1;
     }
     tx.commit().await?;

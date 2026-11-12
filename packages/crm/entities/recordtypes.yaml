@@ -1,0 +1,28 @@
+- name: RecordTypeDefault
+  label: Record Type Default
+  kind: child
+  fields:
+    - {name: field, type: data, required: true, in_list: true, description: "A field of the deal or lead, by its name: source, industry, territory, next_step…"}
+    - {name: value, type: data, required: true, in_list: true, description: "As the field takes it: an option, a number, a date; for a link, the record's id"}
+
+- name: RecordTypeRequirement
+  label: Record Type Requirement
+  kind: child
+  fields:
+    - {name: stage_name, type: data, in_list: true, label: When Entering, description: "The name of a stage (deals) or a status (leads). Empty: whenever it is saved at all"}
+    - {name: field, type: data, required: true, in_list: true, description: "A field of the deal or lead, by its name, that must have a value then"}
+
+- name: RecordType
+  label: Record Type
+  kind: master
+  module: crm
+  title_field: type_name
+  description: "A kind of deal or lead: it picks the deal's pipeline, fills in what is left empty when one is made, and asks for fields before it enters a stage (a deal) or a status (a lead). Choose it on the deal or the lead."
+  fields:
+    - {name: type_name, type: data, required: true, unique: true, in_list: true, label: Name}
+    - {name: applies_to, type: select, options: [Opportunity, Lead], required: true, default: Opportunity, in_list: true, in_filter: true, label: For}
+    - {name: pipeline, type: link, to: SalesPipeline, in_list: true, visible_if: "doc.applies_to == 'Opportunity'", description: "A deal of this type goes in this pipeline, at its first open stage, unless one is chosen"}
+    - {name: disabled, type: check, in_list: true, in_filter: true}
+    - {name: defaults, type: table, of: RecordTypeDefault}
+    - {name: requirements, type: table, of: RecordTypeRequirement}
+  list: {columns: [type_name, applies_to, pipeline, disabled], sort: type_name asc}

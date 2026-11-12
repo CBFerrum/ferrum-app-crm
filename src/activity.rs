@@ -106,7 +106,7 @@ fn moment(doc: &Doc, now: DateTime<Utc>) -> DateTime<Utc> {
 }
 
 /// Whether `at` is later than the stored datetime `was` (or there is none).
-fn later(was: Option<&str>, at: DateTime<Utc>) -> bool {
+pub(crate) fn later(was: Option<&str>, at: DateTime<Utc>) -> bool {
     was.and_then(|w| parse_datetime(w).ok()).is_none_or(|w| w < at)
 }
 
