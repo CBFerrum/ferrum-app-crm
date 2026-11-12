@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.13.2
+
+Sequence mail and opt-outs, and what the 0.13.1 screens could not do. Needs a platform with `messages::render_for` (App API 0.3.4); `app.yaml` says `>=0.3.4, <0.4`. One migration (`011_filed_mail_open.sql`) is applied at startup; an administrator updates the app for the new fields and action, and nothing breaks before they do.
+
+- A sequence's message is rendered by the platform for the person (`messages::render_for`) and sent through Mail. A promotional template carries the platform's opt-out link wherever it writes `{{ opt_out }}`, and the mail carries `List-Unsubscribe` and `List-Unsubscribe-Post` as Mail's typed headers (Mail sends them through an email account of the workspace; through the server's own mailer Mail keeps them on the message but cannot send them). The platform decides who may be mailed: an address that opted out, one whose opt-out was kept as a digest when its person was erased, or whose processing is restricted, is refused, and the enrolment stops with the reason Opted Out. CRM no longer reads the opt-outs itself. Whether a step is held up follows its template: a sequence has no kind of its own, a promotional template is stopped by an opt-out and an operational one is not (before, every message step was). Following the link ends the sequence at its next step, before anything is sent.
+- Resume (action on an enrolment): goes on from the step it stopped at, its wait counted again from now (working days on the sequence's calendar). Refused, saying why, when they opted out or their address bounced, when the lead is converted or closed or they asked not to be mailed, and when the sequence was changed so that the step is no longer there.
+- Record types list the stages a deal of the type may enter (Allowed Stages; empty: all, so nothing changes). A stage that closes the deal is never held up, and neither is what the engine does.
+- An Activity has a Prospect: set directly or taken from its lead, contact or deal, and on the prospect's timeline.
+- The timeline row of a filed hosted message carries `details.mailbox` and `details.email`, which open it in Mail at `/mail/{mailbox}/{email}`. Messages filed before this have neither.
+
 ## 0.13.1
 
 The interface for what 0.8.0 to 0.13.0 added on the server. Nothing in the server, the package or the connector changes.
