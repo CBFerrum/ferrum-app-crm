@@ -10,6 +10,7 @@ export function Tabs() {
         {t("Pipeline")}
       </NavLink>
       <NavLink to="/today">{t("Today")}</NavLink>
+      <NavLink to="/forecast">{t("Forecast")}</NavLink>
     </nav>
   );
 }
