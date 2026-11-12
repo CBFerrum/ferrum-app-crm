@@ -51,3 +51,6 @@ export const ACTIVITY_STATUS: Record<string, Tone> = { Open: "blue", Done: "gree
 export const INVOICE_STATUS: Record<string, Tone> = { Draft: "neutral", Unpaid: "amber", "Partly Paid": "amber", Paid: "green", Credit: "blue", Return: "blue", Cancelled: "red" };
 export const ORDER_STATUS: Record<string, Tone> = { Draft: "neutral", "To Deliver and Bill": "blue", "To Bill": "blue", "To Deliver": "blue", Completed: "green", Closed: "neutral", Cancelled: "red" };
 export const TICKET_STATUS: Record<string, Tone> = { Open: "blue", Replied: "blue", "On Hold": "amber", Resolved: "green", Closed: "neutral" };
+/** A person in a sequence, and a forecast, by the stored ids of CRM's entities. */
+export const ENROLMENT_STATUS: Record<string, Tone> = { Active: "blue", Stopped: "amber", Completed: "green" };
+export const FORECAST_STATUS: Record<string, Tone> = { Open: "blue", Submitted: "green" };
