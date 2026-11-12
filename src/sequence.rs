@@ -248,10 +248,15 @@ async fn step(k: &Kernel, ctx: &Ctx, tx: &mut Tx, e: Uuid) -> Result<bool> {
     };
     let person = k.get_tx(&sctx, tx, entity, person_id, false).await?;
     let who = Person { entity: if entity == "Lead" { "Lead" } else { "Contact" }, id: person_id };
+    let kind_is_message = rows(&seq, "steps")
+        .get(en.get("next_step").and_then(Value::as_u64).unwrap_or(1).max(1) as usize - 1)
+        .is_some_and(|st| s(st, "step_type").unwrap_or("Message") == "Message");
     let ended = if entity == "Lead" && !s(&person, "status").is_some_and(|st| OPEN.contains(&st)) {
         Some(if s(&person, "status") == Some("Converted") { "Converted" } else { "Lead Closed" })
-    } else if b(&person, "unsubscribed") {
+    } else if b(&person, "unsubscribed") || (kind_is_message && opted_out(tx, ctx.tenant, s(&person, "email")).await?) {
         Some("Opted Out")
+    } else if s(&person, "email_bounced_on").is_some() && kind_is_message {
+        Some("Bounced")
     } else {
         None
     };
@@ -283,6 +288,18 @@ async fn step(k: &Kernel, ctx: &Ctx, tx: &mut Tx, e: Uuid) -> Result<bool> {
         "Message" => {
             let address = s(&person, "email").map(str::to_string);
             match (s(this, "message"), address) {
+                (Some(template), Some(address)) if through_mail(ctx) => {
+                    let reply_to = owner.as_deref().filter(|o| !o.is_empty());
+                    via_mail(k, ctx, tx, e, (entity, person_id), template, &address, reply_to).await?;
+                    said += &format!("{template} sent through Mail");
+                    let mut a = Doc::new();
+                    a.insert("activity_type".into(), json!("Email"));
+                    a.insert("status".into(), json!("Done"));
+                    a.insert("subject".into(), json!(template));
+                    a.insert("details".into(), json!(s(&seq, "sequence_name")));
+                    link(&mut a, who, owner.as_deref());
+                    k.insert_tx(&sctx, tx, "Activity", a).await?;
+                }
                 (Some(template), Some(address)) => {
                     let sent = messages::send(
                         k,
@@ -357,4 +374,76 @@ fn link(a: &mut Doc, who: Person, owner: Option<&str>) {
     if let Some(o) = owner {
         a.insert("assigned_to".into(), json!(o));
     }
+}
+
+/// Whether the workspace has Mail as 0.20 made it (the typed reply and threading headers): then a sequence's mail goes
+/// through it; without Mail it goes as it did, through the platform's message channels.
+fn through_mail(ctx: &Ctx) -> bool {
+    ctx.schema.entity("Communication").is_some_and(|c| c.field("reply_to_address").is_some())
+}
+
+/// Whether `address` withdrew its consent to marketing e-mail in the platform's opt-outs (Settings, Messages; the
+/// link in a promotional message; a person's own choice). An opt-out whose address was erased is no longer found here.
+async fn opted_out(tx: &mut Tx, tenant: Uuid, address: Option<&str>) -> Result<bool> {
+    let Some(address) = address else { return Ok(false) };
+    Ok(sqlx::query_scalar(
+        "select exists (select 1 from contact_consent where tenant_id = $1 and purpose = 'marketing' and channel = 'email' and not granted and lower(email::text) = lower($2))",
+    )
+    .bind(tenant)
+    .bind(address)
+    .fetch_one(&mut **tx)
+    .await?)
+}
+
+/// One step's message sent through Mail (`outbound::send`): the template rendered for the person's record, Reply-To
+/// their owner (so an answer reaches the person who is working them), threaded under what the sequence sent them
+/// before (In-Reply-To the last, References all), and its Message-ID kept with the enrolment so that an answer or a
+/// bounce finds it (`crm_sequence_mail`, `filing.rs`).
+#[allow(clippy::too_many_arguments)]
+async fn via_mail(
+    k: &Kernel,
+    ctx: &Ctx,
+    tx: &mut Tx,
+    enrolment: Uuid,
+    record: (&str, Uuid),
+    template: &str,
+    address: &str,
+    reply_to: Option<&str>,
+) -> Result<()> {
+    let sctx = sys(ctx);
+    let shown = k.preview_message(&sctx, &json!(template), "email", None, Some(record.1)).await?;
+    let (subject, html) =
+        (s(shown["message"].as_object().unwrap_or(&Doc::new()), "subject").map(str::to_string), shown["message"]["html"].as_str().map(str::to_string));
+    let (Some(subject), Some(html)) = (subject, html) else { return Err(Error::invalid(format!("{template} has no e-mail wording"))) };
+    let before: Vec<String> =
+        sqlx::query_scalar("select message_id from crm_sequence_mail where tenant_id = $1 and enrolment = $2 order by sent_at desc limit 50")
+            .bind(ctx.tenant)
+            .bind(enrolment)
+            .fetch_all(&mut **tx)
+            .await?;
+    let sent = ferrum_app_comms::outbound::send(
+        k,
+        &sctx,
+        tx,
+        &ferrum_app_comms::outbound::Message {
+            to: vec![address.to_string()],
+            subject,
+            html,
+            reference: Some((record.0.to_string(), record.1)),
+            reply_to: reply_to.map(str::to_string),
+            in_reply_to: before.first().cloned(),
+            references: before.iter().rev().cloned().collect(),
+            ..Default::default()
+        },
+    )
+    .await?;
+    sqlx::query("insert into crm_sequence_mail (tenant_id, message_id, enrolment, communication, address) values ($1, $2, $3, $4, $5) on conflict do nothing")
+        .bind(ctx.tenant)
+        .bind(&sent.message_id)
+        .bind(enrolment)
+        .bind(sent.communication)
+        .bind(address.to_lowercase())
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
 }

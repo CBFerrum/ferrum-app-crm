@@ -259,6 +259,12 @@ async fn communication(k: &Kernel, tenant: Uuid, comm: Uuid) -> Result<()> {
     };
     let received = s(&doc, "direction") == Some("Received");
     let at = s(&doc, "communication_date").and_then(|t| parse_datetime(t).ok()).unwrap_or_else(Utc::now);
+    let arrival = if received && s(&doc, "channel") == Some("Email") { arrival(doc.get("headers"), s(&doc, "sender")) } else { Arrival::Ordinary };
+    if arrival == Arrival::Bounce {
+        bounced(k, &ctx, &mut tx, doc.get("headers")).await?;
+        tx.commit().await?;
+        return Ok(());
+    }
     let mut people: Vec<Person> = Vec::new();
     match s(&doc, "channel") {
         Some("Email") => {
@@ -297,7 +303,8 @@ async fn communication(k: &Kernel, tenant: Uuid, comm: Uuid) -> Result<()> {
             file(&mut tx, tenant, comm, "Opportunity", d, "deal").await?;
         }
         touch(k, &ctx, &mut tx, p, deal, at).await?;
-        if received && s(&doc, "channel") == Some("Email") {
+        // Their reply ends their sequences; an automatic answer (out of office, a list) is not them replying.
+        if received && s(&doc, "channel") == Some("Email") && arrival == Arrival::Ordinary {
             crate::sequence::stop_for(&mut tx, tenant, p, "Replied", "stop_on_reply").await?;
         }
     }
@@ -428,9 +435,15 @@ impl ferrum_kernel::privacy::PersonalHeld for FiledMailHeld {
         .bind(&lower)
         .fetch_all(&mut **tx)
         .await?;
-        Ok(found
-            .into_iter()
-            .map(|(m, kind, at)| json!({"entity": "MailMessage", "id": m, "what": format!("A message {kind} in a hosted mailbox ({at}) filed on their record: its subject and their address")}))
+        let sent: Vec<(Uuid, String)> =
+            sqlx::query_as("select enrolment, sent_at::text from crm_sequence_mail where tenant_id = $1 and lower(address) = any($2) order by sent_at")
+                .bind(tenant)
+                .bind(&lower)
+                .fetch_all(&mut **tx)
+                .await?;
+        let sequence = sent.into_iter().map(|(e, at)| json!({"entity": "SequenceEnrolment", "id": e, "what": format!("A message a sequence sent them through Mail ({at}): their address, to find their answer by")}));
+        Ok(sequence
+            .chain(found.into_iter().map(|(m, kind, at)| json!({"entity": "MailMessage", "id": m, "what": format!("A message {kind} in a hosted mailbox ({at}) filed on their record: its subject and their address")})))
             .collect())
     }
 
@@ -439,17 +452,85 @@ impl ferrum_kernel::privacy::PersonalHeld for FiledMailHeld {
             return Ok(0);
         }
         let lower: Vec<String> = emails.iter().map(|e| e.trim().to_lowercase()).collect();
-        Ok(sqlx::query("delete from crm_filed_mail where tenant_id = $1 and lower(party) = any($2)")
+        let filed = sqlx::query("delete from crm_filed_mail where tenant_id = $1 and lower(party) = any($2)")
             .bind(tenant)
             .bind(&lower)
             .execute(&mut **tx)
             .await?
-            .rows_affected())
+            .rows_affected();
+        let sent = sqlx::query("delete from crm_sequence_mail where tenant_id = $1 and lower(address) = any($2)")
+            .bind(tenant)
+            .bind(&lower)
+            .execute(&mut **tx)
+            .await?
+            .rows_affected();
+        Ok(filed + sent)
     }
 }
 
 async fn table_here(tx: &mut Tx) -> Result<bool> {
     Ok(sqlx::query_scalar("select to_regclass('crm_filed_mail') is not null").fetch_one(&mut **tx).await?)
+}
+
+/// What a received mail is, from the headers Mail keeps (`Communication.headers`, lower-case names): an automatic answer
+/// (Auto-Submitted other than `no`, an auto-response marker, bulk, list or junk precedence, a List-Id), a bounce (an
+/// X-Failed-Recipients header, a delivery report, an empty Return-Path, or the mail system's own sender), or ordinary
+/// mail. Mail without headers (kept before Mail 0.20) is ordinary unless its sender is an automatic one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Arrival {
+    Ordinary,
+    Auto,
+    Bounce,
+}
+
+pub(crate) fn arrival(headers: Option<&Value>, sender: Option<&str>) -> Arrival {
+    let h = headers.and_then(Value::as_object);
+    let get = |n: &str| h.and_then(|h| h.get(n)).and_then(Value::as_str).map(|v| v.trim().to_lowercase());
+    let local = sender.map(|a| a.split('@').next().unwrap_or_default().to_lowercase()).unwrap_or_default();
+    if h.is_some_and(|h| h.contains_key("x-failed-recipients"))
+        || get("content-type").is_some_and(|c| c.starts_with("multipart/report"))
+        || get("return-path").is_some_and(|r| r == "<>")
+        || ["mailer-daemon", "postmaster"].contains(&local.as_str())
+    {
+        return Arrival::Bounce;
+    }
+    let marked = get("auto-submitted").is_some_and(|v| v != "no")
+        || ["x-autoreply", "x-autorespond", "x-auto-response-suppress", "list-id"].iter().any(|n| h.is_some_and(|h| h.contains_key(*n)))
+        || get("precedence").is_some_and(|p| ["bulk", "junk", "list", "auto_reply"].contains(&p.as_str()))
+        || (h.is_none() && automatic(sender.unwrap_or_default()));
+    if marked { Arrival::Auto } else { Arrival::Ordinary }
+}
+
+/// A bounce: the address it names as failed (X-Failed-Recipients), else the person a sequence's message it answers
+/// (In-Reply-To, References) was sent to, has their address marked bounced and their sequences stopped. A bounce that
+/// names neither does nothing.
+async fn bounced(k: &Kernel, ctx: &Ctx, tx: &mut Tx, headers: Option<&Value>) -> Result<()> {
+    let h = headers.and_then(Value::as_object);
+    let text = |n: &str| h.and_then(|h| h.get(n)).and_then(Value::as_str).unwrap_or_default().to_string();
+    let mut failed = addresses(Some(&text("x-failed-recipients")));
+    if failed.is_empty() {
+        let ids: Vec<String> = format!("{} {}", text("in-reply-to"), text("references"))
+            .split_whitespace()
+            .map(|i| i.trim_matches(['<', '>', ',']).to_string())
+            .filter(|i| !i.is_empty())
+            .collect();
+        failed = sqlx::query_scalar("select distinct address from crm_sequence_mail where tenant_id = $1 and message_id = any($2)")
+            .bind(ctx.tenant)
+            .bind(&ids)
+            .fetch_all(&mut **tx)
+            .await?;
+    }
+    let today = ctx.today().to_string();
+    for address in failed {
+        let Some(p) = person_by_email(tx, ctx.tenant, &address).await? else { continue };
+        if ctx.schema.entity(p.entity).is_some_and(|e| e.field("email_bounced_on").is_some()) {
+            let mut v = Doc::new();
+            v.insert("email_bounced_on".into(), json!(today));
+            k.set_values_tx(ctx, tx, p.entity, p.id, v).await?;
+        }
+        crate::sequence::stop_for(tx, ctx.tenant, p, "Bounced", "true").await?;
+    }
+    Ok(())
 }
 
 /// The people the addresses of a mail are: for each, the first of contact, lead, customer and prospect that has it.

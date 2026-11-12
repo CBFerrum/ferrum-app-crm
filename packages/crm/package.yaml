@@ -19,6 +19,7 @@ overlays:
       - {op: add_field, column: true, after: call_consent_on, field: {name: call_consent_how, type: data, description: "A web form, in person, a phone call, a request by mail or letter…", label: Calls Given or Withdrawn By}}
       - {op: add_field, column: true, after: call_consent_how, field: {name: email_consent_on, type: date, label: Email Since, description: "Since when marketing email is allowed or refused; set when it changes"}}
       - {op: add_field, column: true, after: email_consent_on, field: {name: email_consent_how, type: data, description: "A web form, in person, a phone call, a request by mail or letter…", label: Email Given or Withdrawn By}}
+      - {op: add_field, column: true, after: email_consent_how, field: {name: email_bounced_on, type: date, read_only: true, no_copy: true, in_filter: true, label: Email Bounced On, description: "The day a mail to this address came back undelivered: sequences send nothing more to it"}}
       - op: add_action
         action:
           name: move_to_account
