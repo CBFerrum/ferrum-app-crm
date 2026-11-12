@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { adjustRequest, callIssue, callOf, callsBody, createBody, type Forecast, fromMicro, isMine, micro, periodFilters, rollup, snapshotsQuery, sparkline, trend } from "./forecast";
+import { adjustRequest, callIssue, callOf, callsBody, createBody, type Forecast, fromMicro, isMine, micro, pickCompany, periodFilters, rollup, snapshotsQuery, sparkline, trend } from "./forecast";
 
 // A forecast as src/forecast.rs keeps it: one line for each category the deals can have, less Omitted.
 const lines = (commit: [string, string | null, string | null], best: [string, string | null, string | null]) => [
@@ -30,7 +30,7 @@ describe("amounts", () => {
 describe("a forecast's period and calls", () => {
   it("asks for the forecasts of the period that holds a day, and starts one with any day of it", () => {
     expect(periodFilters("Quarter", "2026-11-12")).toEqual([["period", "=", "Quarter"], ["start_date", "<=", "2026-11-12"], ["end_date", ">=", "2026-11-12"]]);
-    expect(createBody("Month", "2026-11-12")).toEqual({ period: "Month", start_date: "2026-11-12" });
+    expect(createBody("Month", "2026-11-12", "c1")).toEqual({ period: "Month", start_date: "2026-11-12", company: "c1" });
   });
 
   it("saves the owner's calls by category, an empty one as the deals' own figure", () => {
@@ -80,5 +80,17 @@ describe("how a call moved", () => {
 
   it("asks for that owner's snapshots of the same period, oldest first", () => {
     expect(snapshotsQuery(asha)).toMatchObject({ sort: "taken_on asc", filters: JSON.stringify([["assigned_to", "=", "asha@acme.test"], ["period", "=", "Month"], ["start_date", "=", "2026-11-01"]]) });
+  });
+});
+
+describe("the company a forecast starts in", () => {
+  const rows = [{ id: "c1", company_name: "Walk Co" }, { id: "c2", company_name: "Second Co" }];
+  it("is the person's default where they have one, without asking", () => {
+    expect(pickCompany("c2", rows)).toEqual({ kind: "use", id: "c2" });
+  });
+  it("is the workspace's only company, else a choice, else none", () => {
+    expect(pickCompany(null, [rows[0]])).toEqual({ kind: "use", id: "c1" });
+    expect(pickCompany(null, rows)).toEqual({ kind: "choose", options: rows });
+    expect(pickCompany(null, [])).toEqual({ kind: "none" });
   });
 });

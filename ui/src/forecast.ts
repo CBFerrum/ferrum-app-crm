@@ -76,8 +76,22 @@ export const periodFilters = (period: Period, day: string) => [
   ["end_date", ">=", day],
 ];
 
-/** Starting a forecast: the day is any day of the period; the server takes the period it falls in. */
-export const createBody = (period: Period, day: string) => ({ period, start_date: day });
+/** Starting a forecast: the day is any day of the period; the server takes the period it falls in; a forecast is for one company. */
+export const createBody = (period: Period, day: string, company: string) => ({ period, start_date: day, company });
+
+export interface CompanyRow {
+  id: string;
+  company_name?: string | null;
+}
+
+/** Which company a forecast starts in: the person's default where they have one, the only one the workspace has, else they choose. */
+export type CompanyPick = { kind: "use"; id: string } | { kind: "choose"; options: CompanyRow[] } | { kind: "none" };
+
+export function pickCompany(defaultCompany: string | null | undefined, companies: CompanyRow[]): CompanyPick {
+  if (defaultCompany) return { kind: "use", id: defaultCompany };
+  if (companies.length === 1) return { kind: "use", id: companies[0].id };
+  return companies.length === 0 ? { kind: "none" } : { kind: "choose", options: companies };
+}
 
 /** What a person's forecast counts for a category once it is submitted: the manager's call where there is one, else the owner's. */
 export function callOf(line: Line): string | null {
