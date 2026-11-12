@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.13.5
+
+* **The call composer's Minutes field is no longer cut off** at narrow widths: the composer's foot wraps. Found by the first browser walk.
+
 ## 0.13.4
 
 Two faults from the first browser walk. Nothing is changed on the server.
