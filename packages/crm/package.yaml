@@ -1,5 +1,5 @@
 package: crm
-version: 0.5.0
+version: 0.6.0
 label: CRM
 description: Leads, opportunities and the sales pipeline, prospects, contacts and addresses, campaigns, activities and quotations.
 # Contacts, customers and items are shared with other apps; ERP's sales orders and taxes come with
