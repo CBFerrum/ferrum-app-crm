@@ -4,19 +4,21 @@
 
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
-import { api, docPath, errorMessage, formatMoment, isolate, newKey, t } from "@ferrum/client";
+import { api, ApiError, docPath, errorMessage, formatMoment, isolate, newKey, refusal, t } from "@ferrum/client";
 import { Alert, Badge, Button, confirmDialog, Dialog, Field, ReaderSkeleton, ScrollRegion, StatePanel, StatusBadge, toast, useShellTitle } from "@ferrum/kit";
 import { can, useEntityMeta, useMe } from "@ferrum/records";
 import {
   adjustRequest,
   callIssue,
   callsBody,
+  type CompanyRow,
   createBody,
   type Forecast,
   isMine,
   type Line,
   type Period,
   PERIODS,
+  pickCompany,
   periodFilters,
   periodLabel,
   rollup,
@@ -269,9 +271,50 @@ export function Rollup({ forecasts }: { forecasts: Forecast[] }) {
   );
 }
 
+/** A refusal as a sentence: the server's own reason, and for the company a person can fix, what to do. */
+export function startRefusal(e: unknown): string {
+  if (e instanceof ApiError && e.fields.some((f) => f.field === "company")) return t("Choose the company this forecast is for.");
+  return refusal(e);
+}
+
+/** Asked when the person has no default company and the workspace has several. */
+function CompanyDialog({ options, busy, onPick, onClose }: { options: CompanyRow[]; busy: boolean; onPick: (id: string) => void; onClose: () => void }) {
+  const [id, setId] = useState("");
+  return (
+    <Dialog open onClose={onClose} title={t("Which company is this forecast for?")} description={t("A forecast counts one company's deals, in its currency.")}>
+      <form
+        className="stack"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (id && !busy) onPick(id);
+        }}
+      >
+        <Field label={t("Company")} htmlFor="forecast-company" required>
+          <select id="forecast-company" className="input" value={id} onChange={(e) => setId(e.target.value)}>
+            <option value="">{t("Choose…")}</option>
+            {options.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.company_name ?? c.id}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <div className="row" style={{ justifyContent: "flex-end" }}>
+          <Button onClick={onClose}>{t("Cancel")}</Button>
+          <Button type="submit" variant="primary" loading={busy} disabled={!id}>
+            {t("Start my forecast")}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
 export function ForecastPage() {
   const qc = useQueryClient();
-  const me = useMe().data?.user.email;
+  const meQ = useMe();
+  const me = meQ.data?.user.email;
+  const [choosing, setChoosing] = useState<CompanyRow[] | null>(null);
   const meta = useEntityMeta("ForecastSubmission");
   const [period, setPeriod] = useState<Period>("Month");
   const [on, setOn] = useState(today());
@@ -284,13 +327,26 @@ export function ForecastPage() {
   const docs = useQueries({ queries: (list.data ?? []).map((r) => ({ queryKey: ["crm", "forecast", r.id], queryFn: () => api.get<Forecast>(docPath("ForecastSubmission", r.id)) })) });
   const [key] = useState(newKey);
   const start = useMutation({
-    mutationFn: () => api.post(docPath("ForecastSubmission"), createBody(period, on), { idempotencyKey: `${key}:${period}:${on}` }),
+    mutationFn: (company: string) => api.post(docPath("ForecastSubmission"), createBody(period, on, company), { idempotencyKey: `${key}:${period}:${on}:${company}` }),
     onSuccess: async () => {
+      setChoosing(null);
       toast(t("Forecast started"));
       await qc.invalidateQueries({ queryKey: ["crm", "forecasts"] });
     },
-    onError: (e) => toast(errorMessage(e), "error"),
+    onError: (e) => toast(startRefusal(e), "error"),
   });
+  // The person's default company, else the workspace's only one, else they choose.
+  const begin = async () => {
+    try {
+      const rows = meQ.data?.default_company ? [] : (await api.get<{ rows: CompanyRow[] }>("/api/v1/Company", { fields: "company_name", limit: 50 })).rows;
+      const pick = pickCompany(meQ.data?.default_company, rows);
+      if (pick.kind === "use") start.mutate(pick.id);
+      else if (pick.kind === "choose") setChoosing(pick.options);
+      else toast(t("This workspace has no company yet. Add one under Accounting, then start the forecast."), "error");
+    } catch (e) {
+      toast(startRefusal(e), "error");
+    }
+  };
   if (meta.error) return <Problem error={meta.error} onRetry={() => void meta.refetch()} />;
   if (!meta.data) return <ReaderSkeleton />;
   const writable = can(meta.data.permissions, "write");
@@ -315,12 +371,13 @@ export function ForecastPage() {
           </select>
           <input className="input" type="date" aria-label={t("A day of the period")} value={on} onChange={(e) => e.target.value && setOn(e.target.value)} />
           {can(meta.data.permissions, "create") && !mineExists && list.data && (
-            <Button variant="primary" loading={start.isPending} onClick={() => start.mutate()}>
+            <Button variant="primary" loading={start.isPending} onClick={() => void begin()}>
               {t("Start my forecast")}
             </Button>
           )}
         </div>
       </header>
+      {choosing && <CompanyDialog options={choosing} busy={start.isPending} onPick={(id) => start.mutate(id)} onClose={() => setChoosing(null)} />}
       {list.error ? (
         <Problem error={list.error} onRetry={() => void list.refetch()} />
       ) : !list.data ? (

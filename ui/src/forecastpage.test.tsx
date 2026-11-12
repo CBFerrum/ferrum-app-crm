@@ -6,7 +6,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { Forecast } from "./forecast";
-import { ForecastCard, Rollup } from "./ForecastPage";
+import { parseApiError } from "@ferrum/client";
+import { ForecastCard, Rollup, startRefusal } from "./ForecastPage";
 
 const lines = [
   { id: "r1", category: "Commit", calculated: "1000.00", amount: "900.00", adjusted: null as string | null, note: "signed soon" },
@@ -97,5 +98,16 @@ describe("the team", () => {
     expect(html).toContain("1 of 2 submitted");
     expect(html).toContain("1,200.00");
     expect(html).toContain("<strong>1,100.00</strong>");
+  });
+});
+
+describe("a refused start", () => {
+  it("says what to do, not the server's validation wording", () => {
+    const e = parseApiError(422, { error: "invalid", message: "Please correct the highlighted fields", fields: [{ field: "company", message: "Company is required" }] });
+    expect(startRefusal(e)).toBe("Choose the company this forecast is for.");
+  });
+  it("shows any other refusal as its reason alone", () => {
+    const e = parseApiError(422, { error: "invalid", message: "Please correct the highlighted fields", fields: [{ field: "start_date", message: "that period has ended" }] });
+    expect(startRefusal(e)).toBe("that period has ended");
   });
 });

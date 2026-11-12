@@ -28,7 +28,7 @@ teams and territories see their people's records, and targets say how far along 
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.13.3` |
+| 📦 Version | `0.13.4` |
 | 🧱 Platform | Ferrum `>=0.3.4, <0.4` |
 | 🔗 Requires | nothing else |
 | 🖥️ Interface | its own, at `/crm/` |
@@ -360,6 +360,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.13.4** | Fixes from the first browser walk: the new-record forms (Lead, Customer, Prospect, Contact, Quotation) and a draft quotation's page no longer stay on "Loading…", and Start my forecast uses the person's default company, asks which one where there are several, and shows a refusal as a sentence. |
 | **0.13.3** | The screens for 0.13.2: Resume on a stopped person in a sequence (never offered after an opt-out or a bounce, and the server's refusal shown as it words it), a record type's Allowed Stages ticked from the deal's own, quick actions on a prospect's page, a hosted message on the timeline opening in Mail (and not linking when it has no mailbox), and a warning in the sequence's message picker when a promotional template has no opt-out link in its body. |
 | **0.13.2** | Sequence mail carries the platform's opt-out link and headers and honours every opt-out, an erased one included; a stopped enrolment can be resumed; record types list the stages a deal may enter; an activity can be about a prospect; a filed hosted message says what opens it in Mail. |
 | **0.13.1** | Screens for what 0.8 to 0.13 added: a workspace page for a lead, a contact, a deal and an account (quick actions, the timeline by kind in pages, related records); a sent quotation's page with the message and the customer's page previewed, where it stands and what the customer answered; sequences with their steps and the people in them; the forecast by owner and category with the team's roll-up and the snapshot trend; record types with fields and stages chosen from the entity's own. |
