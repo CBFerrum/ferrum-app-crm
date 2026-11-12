@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.4
+
+Two faults from the first browser walk. Nothing is changed on the server.
+
+- **Forms that never rendered.** `/e/Lead/new`, `/e/Contact/new`, `/e/Customer/new`, `/e/Prospect/new`, `/e/Quotation/new`, and the page of a quotation not yet submitted stayed on "Loading…" for good. CRM's own screens were routes of their own (`e/Lead/:id`), and when they handed over to the platform's generic form, that form read the entity from the address and found none, so it never asked for its metadata. Every record is now one route, `e/:entity/:id`, that picks CRM's screen for the entity or else the generic form (so an entity with no screen of its own opens it). The route table is in `routes.tsx`, and a test mounts it.
+- **Start my forecast.** A forecast is for a company: the button sends the person's default company, the workspace's only company, or asks which one in a dialog where there are several (and says so plainly where there is none). A refusal is shown as its reason, never as the validation wording.
+
 ## 0.13.3
 
 The screens that 0.13.2 listed, built with Ferrum-Frontend (its checkout at `gapui/ferrum/web`). Nothing is changed on the server.
