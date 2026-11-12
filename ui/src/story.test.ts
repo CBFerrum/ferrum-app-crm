@@ -35,6 +35,16 @@ describe("a page of a timeline", () => {
   });
 });
 
+describe("a hosted message", () => {
+  const filed = (details: Record<string, unknown> | null): TimelineEvent => ({ ...mail, id: "MailMessage:m1", entity: "MailMessage", record: "m1", details });
+  it("opens in Mail by its mailbox and address, and does not link when the mailbox is not there", () => {
+    expect(linkOf(filed({ mailbox: "m9", email: "e7" }))).toEqual({ href: "/mail/m9/e7" });
+    expect(linkOf(filed({ mailbox: null, email: null }))).toBeNull();
+    expect(linkOf(filed({ mailbox: null, email: "e7" }))).toBeNull();
+    expect(linkOf(filed(null))).toBeNull();
+  });
+});
+
 describe("an event in words", () => {
   it("tells each quotation event, with the name the customer typed", () => {
     const q = (event: string, by: string | null = null): TimelineEvent => ({ id: `Quotation:q1:${event}`, at: "2026-11-10T09:00:00Z", kind: "quotation", entity: "Quotation", record: "q1", title: "QTN-1", status: "Accepted", details: { event, party: "Acme", grand_total: "1200.00", currency: "INR", by } });
@@ -56,6 +66,7 @@ describe("an event in words", () => {
     expect(linkOf({ ...mail, entity: "Opportunity", record: "d1" })).toEqual({ to: "/d/d1" });
     expect(linkOf({ ...mail, entity: "SalesOrder", record: "o1" })).toEqual({ href: "/open/SalesOrder/o1" });
     expect(linkOf({ ...mail, entity: "Somewhere" })).toBeNull();
+    expect(linkOf({ ...mail, entity: "MailMessage", record: "m1", details: { mailbox: "box 1", email: "e@x" } })).toEqual({ href: "/mail/box%201/e%40x" });
     expect(isOpenTask({ ...mail, entity: "Activity", status: "Open" })).toBe(true);
     expect(isOpenTask({ ...mail, entity: "Activity", status: "Done" })).toBe(false);
     expect(isOpenTask({ ...mail, entity: "Quotation", status: "Open" })).toBe(false);

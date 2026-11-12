@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { ApiError, parseApiError } from "@ferrum/client";
 import { Problem } from "./states";
 import type { TimelinePage } from "./story";
+import { CustomerRoute, ProspectRoute } from "./Account";
 import { LeadRoute } from "./Workspace";
 
 const lead = { id: "l1", version: 3, lead_name: "Ravi Menon", organization_name: "Acme", status: "Qualified", assigned_to: "asha@acme.test", score: 40, email_bounced_on: "2026-11-09", do_not_call: false, unsubscribed: false };
@@ -101,5 +102,39 @@ describe("when the server refuses", () => {
     const refused = parseApiError(404, { error: "not_found", message: "a timeline for Quotation was not found" });
     expect(refused).toBeInstanceOf(ApiError);
     expect(renderToStaticMarkup(<Problem error={refused} />)).toContain("a timeline for Quotation was not found");
+  });
+});
+
+describe("a prospect's page", () => {
+  function page(entity: "Prospect" | "Customer", write = true) {
+    const qc = new QueryClient();
+    const p = { read: "all", write: write ? "all" : "none", create: "all" };
+    const doc = entity === "Prospect" ? { id: "p1", version: 1, prospect_name: "Acme Ltd" } : { id: "p1", version: 1, customer_name: "Acme Ltd" };
+    qc.setQueryData(["me"], { tenant: "t", user: { id: "u1", email: "asha@acme.test", full_name: "Asha", is_admin: false, roles: [] } });
+    qc.setQueryData(["meta"], { entities: [{ name: entity, permissions: p }, { name: "Activity", permissions: p }] });
+    qc.setQueryData(["meta", entity], { name: entity, label: entity, permissions: p, actions: [], linked_from: [], fields: [], form: [], children: {} });
+    qc.setQueryData(["peek", entity, "p1"], doc);
+    qc.setQueryData(["crm", "timeline", entity, "p1", ""], { pages: [{ subject: { entity, id: "p1", title: "Acme Ltd" }, events: [], next: null, kinds: [], sources: [] }], pageParams: [null] });
+    return renderToStaticMarkup(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={[`/e/${entity}/p1`]}>
+          <Routes>
+            <Route path={`/e/${entity}/:id`} element={entity === "Prospect" ? <ProspectRoute /> : <CustomerRoute />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+
+  it("gets the quick actions to log a note, a call or a task", () => {
+    const html = page("Prospect");
+    expect(html).toContain("What should the team know?");
+    for (const kind of ["Note", "Call", "Task"]) expect(html).toContain(`>${kind}<`);
+    expect(html).not.toContain(">Email<");
+  });
+
+  it("gets none without the right to write, and a customer keeps its own way to log a call", () => {
+    expect(page("Prospect", false)).not.toContain("What should the team know?");
+    expect(page("Customer")).not.toContain("What should the team know?");
   });
 });

@@ -188,7 +188,30 @@ export interface TemplateRow {
   key: string;
   label?: string | null;
   entity?: string | null;
+  /** `promotional` respects opt-outs and quiet hours, and needs the opt-out link in its body; `operational` is always sent. */
+  category?: string | null;
   channels: string[];
 }
 
 export const templatesFor = (rows: TemplateRow[], appliesTo: string): TemplateRow[] => rows.filter((r) => r.channels.includes("email") && (!r.entity || r.entity === appliesTo)).sort((a, b) => (a.label ?? a.key).localeCompare(b.label ?? b.key));
+
+export const isPromotional = (row: Pick<TemplateRow, "category"> | undefined | null) => row?.category === "promotional";
+
+/** What a template needs for a person to be able to opt out: the platform's link, written `{{ opt_out }}` in the body. */
+const OPT_OUT = /\{\{-?\s*opt_out\b/;
+
+/** `GET /api/admin/messages/templates/{key}`, as far as the check reads it. */
+export interface TemplateRead {
+  template: { category?: string | null; languages: Record<string, { email?: { body?: string | null } }> };
+}
+
+/** The languages in which a promotional template's e-mail body has no `{{ opt_out }}`; nothing for an operational template or when every body has it. */
+export function lacksOptOut(read: TemplateRead | null | undefined): string[] {
+  if (!read || read.template.category !== "promotional") return [];
+  return Object.entries(read.template.languages)
+    .filter(([, b]) => b.email && !OPT_OUT.test(b.email.body ?? ""))
+    .map(([lang]) => lang);
+}
+
+/** Whether a stopped enrolment may be resumed: not when they opted out or their address bounced (the server refuses it in words as well). */
+export const canResume = (e: Pick<Enrolment, "status" | "stopped_reason">) => e.status === "Stopped" && e.stopped_reason !== "Opted Out" && e.stopped_reason !== "Bounced";
