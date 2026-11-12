@@ -360,6 +360,8 @@ async fn mailbox_message(k: &Kernel, ev: &Event, received: bool) -> Result<()> {
             subject: text("subject"),
             thread: text("thread"),
             message_id: text("message_id"),
+            mailbox: text("mailbox"),
+            email: text("email"),
             at,
         };
         if !file_mail(&mut tx, tenant, &row, person.entity, person.id, "address").await? {
@@ -387,14 +389,17 @@ struct Filed {
     subject: Option<String>,
     thread: Option<String>,
     message_id: Option<String>,
+    /// Mail's hosted mailbox and the message's id in it: what opens it in Mail (`/mail/{mailbox}/{email}`).
+    mailbox: Option<String>,
+    email: Option<String>,
     at: DateTime<Utc>,
 }
 
 /// Files a hosted message on `record`; whether it was not there already.
 async fn file_mail(tx: &mut Tx, tenant: Uuid, m: &Filed, entity: &str, record: Uuid, via: &str) -> Result<bool> {
     let n = sqlx::query(
-        "insert into crm_filed_mail (tenant_id, message, entity, record_id, via, kind, party, subject, thread, message_id, at) \
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict do nothing",
+        "insert into crm_filed_mail (tenant_id, message, entity, record_id, via, kind, party, subject, thread, message_id, at, mailbox, email) \
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) on conflict do nothing",
     )
     .bind(tenant)
     .bind(m.message)
@@ -407,6 +412,8 @@ async fn file_mail(tx: &mut Tx, tenant: Uuid, m: &Filed, entity: &str, record: U
     .bind(&m.thread)
     .bind(&m.message_id)
     .bind(m.at)
+    .bind(&m.mailbox)
+    .bind(&m.email)
     .execute(&mut **tx)
     .await?
     .rows_affected();

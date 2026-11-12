@@ -218,7 +218,12 @@ pub(crate) async fn timeline(k: &Kernel, user: &Ctx, entity: &str, record: Uuid,
         let by: Vec<(&str, Vec<String>)> = if deal_subject {
             vec![("opportunity", set.deal.clone())]
         } else {
-            vec![("lead", set.lead.clone()), ("contact", set.contact.clone()), ("customer", set.customer.clone())]
+            let mut by = vec![("lead", set.lead.clone()), ("contact", set.contact.clone()), ("customer", set.customer.clone())];
+            // Before the package is updated to 0.13.2 an activity has no prospect.
+            if user.schema.entity("Activity").is_some_and(|a| a.field("prospect").is_some()) {
+                by.push(("prospect", set.prospect.clone()));
+            }
+            by
         };
         for (field, ids) in by.into_iter().filter(|(_, ids)| !ids.is_empty()) {
             let (found, c) = read(k, user, "Activity", vec![is(field, &ids)], "subject,activity_type,status,due_at,completed_at,assigned_to,call_outcome,duration_minutes,details,created_at,lead,contact,customer,opportunity").await?;
@@ -329,15 +334,15 @@ pub(crate) async fn timeline(k: &Kernel, user: &Ctx, entity: &str, record: Uuid,
             if rec.is_empty() {
                 continue;
             }
-            let filed: Vec<(Uuid, String, Option<String>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
-                "select message, kind, party, subject, thread, at from crm_filed_mail where tenant_id = $1 and entity = $2 and record_id = any($3) order by at desc limit 500",
+            let filed: Vec<(Uuid, String, Option<String>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>, Option<String>, Option<String>)> = sqlx::query_as(
+                "select message, kind, party, subject, thread, at, mailbox, email from crm_filed_mail where tenant_id = $1 and entity = $2 and record_id = any($3) order by at desc limit 500",
             )
             .bind(user.tenant)
             .bind(e)
             .bind(&rec)
             .fetch_all(&mut *tx)
             .await?;
-            for (message, kind, party, subject, thread, at) in filed {
+            for (message, kind, party, subject, thread, at, mailbox, email) in filed {
                 if !seen.insert(message) {
                     continue;
                 }
@@ -349,7 +354,7 @@ pub(crate) async fn timeline(k: &Kernel, user: &Ctx, entity: &str, record: Uuid,
                     kind: "email",
                     body: json!({"entity": "MailMessage", "record": message, "title": subject, "summary": null, "actor": if received { party.clone() } else { None },
                                  "direction": if received { "Received" } else { "Sent" }, "status": null,
-                                 "details": {"sender": if received { party.clone() } else { None }, "recipients": if received { None } else { party }, "thread": thread}}),
+                                 "details": {"sender": if received { party.clone() } else { None }, "recipients": if received { None } else { party }, "thread": thread, "mailbox": mailbox, "email": email}}),
                 });
             }
         }
