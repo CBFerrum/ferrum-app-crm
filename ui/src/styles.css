@@ -869,3 +869,47 @@
   gap: 0.375rem;
   margin-bottom: 0.5rem;
 }
+
+/* ── the forecast ── */
+
+.crm-forecasts {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.crm-forecast {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.crm-forecast > .row {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.crm-forecast-owner {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+
+.crm-forecast .num {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.crm-call {
+  width: 8rem;
+  text-align: end;
+}
+
+.crm-trend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
