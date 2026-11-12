@@ -57,8 +57,9 @@ pub fn register(hooks: &mut HookRegistry) {
     hooks.add_site("crm", Arc::new(remind::CrmSite));
     hooks.add_personal_held(Arc::new(consent::ConsentHeld));
     hooks.add_event_sink(Arc::new(accounts::Departures));
-    // Mail's communications and calendar events, filed on the people they are with (filing.rs).
+    // Mail's communications, hosted-mailbox messages and calendar events, filed on the people they are with (filing.rs).
     hooks.add_event_sink(Arc::new(filing::Filing));
+    hooks.add_personal_held(Arc::new(filing::FiledMailHeld));
     hooks.scoped(&[CONNECTOR_PACKAGE.to_string()], |h| {
         h.register("SalesOrder", Arc::new(quotation::SalesOrderHook)).register("SalesInvoice", Arc::new(quotation::SalesInvoiceHook));
     });

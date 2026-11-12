@@ -318,6 +318,45 @@ pub(crate) async fn timeline(k: &Kernel, user: &Ctx, entity: &str, record: Uuid,
         note(&mut sources, "Communication", n, capped);
     }
 
+    // ───── messages of hosted mailboxes, filed by address (no Communication: what Mail said of them) ─────
+    // Whoever may read the record sees them: its owner chose to let apps file their mail, and what is kept is the
+    // subject, the other party and the time.
+    if q.wants(&["email", "message"]) && user.schema.entity("SequenceEnrolment").is_some() {
+        let (mut n, mut seen) = (0, BTreeSet::new());
+        let mut tx = k.db.tenant_tx(user.tenant).await?;
+        for e in ["Lead", "Contact", "Prospect", "Customer", "Opportunity"] {
+            let rec: Vec<Uuid> = set.of(e).iter().filter_map(|x| x.parse().ok()).collect();
+            if rec.is_empty() {
+                continue;
+            }
+            let filed: Vec<(Uuid, String, Option<String>, Option<String>, Option<String>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+                "select message, kind, party, subject, thread, at from crm_filed_mail where tenant_id = $1 and entity = $2 and record_id = any($3) order by at desc limit 500",
+            )
+            .bind(user.tenant)
+            .bind(e)
+            .bind(&rec)
+            .fetch_all(&mut *tx)
+            .await?;
+            for (message, kind, party, subject, thread, at) in filed {
+                if !seen.insert(message) {
+                    continue;
+                }
+                n += 1;
+                let received = kind == "received";
+                events.push(Ev {
+                    at,
+                    id: format!("MailMessage:{message}"),
+                    kind: "email",
+                    body: json!({"entity": "MailMessage", "record": message, "title": subject, "summary": null, "actor": if received { party.clone() } else { None },
+                                 "direction": if received { "Received" } else { "Sent" }, "status": null,
+                                 "details": {"sender": if received { party.clone() } else { None }, "recipients": if received { None } else { party }, "thread": thread}}),
+                });
+            }
+        }
+        tx.commit().await?;
+        note(&mut sources, "MailMessage", n, false);
+    }
+
     // ───── quotations, and the orders made from them ─────
     let mut quotations: Vec<String> = Vec::new();
     if q.wants(&["quotation", "order"]) {

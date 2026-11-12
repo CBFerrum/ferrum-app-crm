@@ -3,7 +3,7 @@
 # Offered where both apps are installed; ships with CRM.
 id: crm-erp
 name: CRM and ERP
-version: 0.1.2
+version: 0.1.3
 publisher: cbferrum
 summary: Quotations with ERP's taxes, and sales orders made from them
 categories: [crm, sales]

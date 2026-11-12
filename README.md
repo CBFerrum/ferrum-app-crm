@@ -5,7 +5,7 @@
   <img alt="Ferrum CRM" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.12.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.13.0-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -28,7 +28,7 @@ teams and territories see their people's records, and targets say how far along 
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.12.0` |
+| 📦 Version | `0.13.0` |
 | 🧱 Platform | Ferrum `>=0.3.2, <0.4` |
 | 🔗 Requires | nothing else |
 | 🖥️ Interface | its own, at `/crm/` |
@@ -360,6 +360,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.13.0** | Quotation links on the platform's own calls (they last as long as the quotation is valid, show the lines by columns and are Viewed when the page is first acted on); hosted mailboxes filed on their people by themselves; two connections for a mailbox and a calendar at an outside provider, turned off; sequences sent through Mail, with a reply, an automatic answer, a bounce and an opt-out told apart. |
 | **0.12.0** | A quotation the customer reads and answers on a signed link (Viewed, Accepted, Rejected, a question for the owner, an order made at once if you choose); one timeline for leads, contacts, prospects, customers and deals; Mail's communications and calendar events filed on the people they are with; sequences; forecasts a person submits and a manager adjusts, with weekly snapshots and a report against what was won; record types. |
 | **0.11.2** | Rebuilt on the tuned design system: better menu icons, a lighter first page, a visible scroll cue, cleaner print. |
 | **0.11.1** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |
