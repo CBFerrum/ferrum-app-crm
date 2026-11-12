@@ -736,3 +736,83 @@
   gap: 0.375rem;
   margin-top: 0.375rem;
 }
+
+/* ── a quotation sent to its customer ── */
+
+.crm-quotation-panel {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.crm-preview {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.crm-frame {
+  width: 100%;
+  min-height: 12rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.crm-customer-page {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.crm-customer-page h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.crm-totals {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.25rem 1rem;
+  margin: 0.5rem 0;
+}
+
+.crm-totals dd {
+  margin: 0;
+  text-align: end;
+}
+
+/* Sent, Viewed, the answer: where a quotation stands, a step lit once it has happened. */
+.crm-track {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0 0 0.5rem;
+  padding: 0;
+  list-style: none;
+}
+
+.crm-track li {
+  flex: 1 1 8rem;
+  padding: 0.375rem 0.625rem;
+  background: var(--surface-2);
+  color: var(--muted-foreground);
+  font-size: var(--text-sm);
+}
+
+.crm-track li[data-state="past"] {
+  background: var(--success-soft);
+  color: var(--success);
+}
+
+.crm-track li[data-state="declined"] {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .crm-preview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

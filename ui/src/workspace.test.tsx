@@ -11,8 +11,6 @@ import { Problem } from "./states";
 import type { TimelinePage } from "./story";
 import { LeadRoute } from "./Workspace";
 
-const perms = { read: "all", write: "all", create: "all" };
-
 const lead = { id: "l1", version: 3, lead_name: "Ravi Menon", organization_name: "Acme", status: "Qualified", assigned_to: "asha@acme.test", score: 40, email_bounced_on: "2026-11-09", do_not_call: false, unsubscribed: false };
 
 const timeline: TimelinePage = {

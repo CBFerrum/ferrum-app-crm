@@ -68,6 +68,8 @@ const router = createBrowserRouter(
         { path: "d/:id", lazy: () => import("./Deal").then((m) => ({ Component: m.DealRoute })) },
         { path: "e/:entity", lazy: page("ListView") },
         // A lead's and a contact's page: the workspace (their full form, with its actions, at /f/).
+        // A submitted quotation: what was sent, where it stands and what the customer answered (its form on the other tab).
+        { path: "e/Quotation/:id", lazy: () => import("./Quotation").then((m) => ({ Component: m.QuotationRoute })) },
         { path: "e/Lead/:id", lazy: () => import("./Workspace").then((m) => ({ Component: m.LeadRoute })) },
         { path: "e/Contact/:id", lazy: () => import("./Workspace").then((m) => ({ Component: m.ContactRoute })) },
         // A customer's and a prospect's page: CRM's account page (their full form at /f/).
