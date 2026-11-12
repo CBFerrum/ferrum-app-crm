@@ -5,7 +5,7 @@
   <img alt="Ferrum CRM" src="docs/assets/banner-light.svg" width="100%">
 </picture>
 
-[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.13.1-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.2%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
+[![CI](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml/badge.svg)](https://github.com/CBFerrum/ferrum-app-crm/actions/workflows/ci.yml) ![Version](https://img.shields.io/badge/version-0.13.2-0f766e?style=flat-square) ![Ferrum](https://img.shields.io/badge/Ferrum-%3E%3D0.3.4%2C%20%3C0.4-2f5bea?style=flat-square) ![License](https://img.shields.io/badge/license-AGPL--3.0-3b82f6?style=flat-square) ![Rust](https://img.shields.io/badge/Rust-native%20app-b7410e?style=flat-square&logo=rust&logoColor=white) ![Interface](https://img.shields.io/badge/interface-React%20%2B%20Vite-0ea5e9?style=flat-square&logo=react&logoColor=white) ![MCP](https://img.shields.io/badge/AI%20agents-MCP-8b5cf6?style=flat-square)
 
 **A native app for [Ferrum](https://github.com/CBFerrum/Ferrum), the open-source, AI-first business platform.**
 
@@ -28,8 +28,8 @@ teams and territories see their people's records, and targets say how far along 
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.13.1` |
-| 🧱 Platform | Ferrum `>=0.3.2, <0.4` |
+| 📦 Version | `0.13.2` |
+| 🧱 Platform | Ferrum `>=0.3.4, <0.4` |
 | 🔗 Requires | nothing else |
 | 🖥️ Interface | its own, at `/crm/` |
 | 🗃️ Records | 26 entities in 2 packages |
@@ -360,6 +360,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.13.2** | Sequence mail carries the platform's opt-out link and headers and honours every opt-out, an erased one included; a stopped enrolment can be resumed; record types list the stages a deal may enter; an activity can be about a prospect; a filed hosted message says what opens it in Mail. |
 | **0.13.1** | Screens for what 0.8 to 0.13 added: a workspace page for a lead, a contact, a deal and an account (quick actions, the timeline by kind in pages, related records); a sent quotation's page with the message and the customer's page previewed, where it stands and what the customer answered; sequences with their steps and the people in them; the forecast by owner and category with the team's roll-up and the snapshot trend; record types with fields and stages chosen from the entity's own. |
 | **0.13.0** | Quotation links on the platform's own calls (they last as long as the quotation is valid, show the lines by columns and are Viewed when the page is first acted on); hosted mailboxes filed on their people by themselves; two connections for a mailbox and a calendar at an outside provider, turned off; sequences sent through Mail, with a reply, an automatic answer, a bounce and an opt-out told apart. |
 | **0.12.0** | A quotation the customer reads and answers on a signed link (Viewed, Accepted, Rejected, a question for the owner, an order made at once if you choose); one timeline for leads, contacts, prospects, customers and deals; Mail's communications and calendar events filed on the people they are with; sequences; forecasts a person submits and a manager adjusts, with weekly snapshots and a report against what was won; record types. |
