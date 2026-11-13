@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.13.6
+
+Two faults from the second browser walk, in the package only (no new interface build).
+
+* **The company is on screen where it is needed.** Lead and Opportunity kept their required Company far down (Opportunity's in a collapsed section), so the first Create was refused for a field nobody could see. It is now in the first section of both (Quotation and Forecast already had it there; Campaign and Sales Target have no layout). It still fills itself from the person's default company, else the workspace's only company, so a one-company workspace never meets the refusal. A test walks every CRM entity: a required field in a collapsed section, or a company outside the first section, fails it.
+* **A contact is made from the top of its form.** The first section now holds the name, then Emails and Phones, whose first row is the primary one (the primary email and phone are filled from it, as before, and an erasure reaches them). Primary Email and Primary Phone, read-only and shown as "-" on a new record, are no longer on the form (the list still shows them).
+
 ## 0.13.5
 
 * **The call composer's Minutes field is no longer cut off** at narrow widths: the composer's foot wraps. Found by the first browser walk.

@@ -40,6 +40,20 @@ overlays:
           condition: "!doc.unsubscribed"
           params:
             - {name: sequence, type: link, to: Sequence, required: true, label: Sequence}
+  # A new contact is made from the top of the form: a name, then its emails and phones (the first row of each is
+  # the primary one unless another is ticked, and the primary email and phone are filled from them). Primary Email
+  # and Primary Phone are not on the form: they are read-only, and showed "-" where a person looked for an input.
+  - entity: Contact
+    ops:
+      - {op: set_property, field: emails, property: label, value: "Emails (the first is the primary one)"}
+      - {op: set_property, field: phones, property: label, value: "Phones (the first is the primary one)"}
+      - op: set_entity_property
+        property: form
+        value:
+          - {label: Contact, fields: [first_name, last_name, full_name, designation, department, emails, phones]}
+          - {label: Links, fields: [customer, supplier, lead, prospect]}
+          - {label: Consent, fields: [unsubscribed, do_not_call, call_consent_on, call_consent_how, email_consent_on, email_consent_how, email_bounced_on]}
+          - {label: Notes, collapsible: true, fields: [notes]}
   # An account's owner, territory and parent (who may read a customer stays as it was).
   - entity: Customer
     ops:

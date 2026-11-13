@@ -77,9 +77,9 @@
     - {name: record_type, type: link, to: RecordType, in_filter: true, link_filters: {applies_to: Lead}, description: "Its kind: what it fills in when it is made and asks for before a status"}
     - {name: notes, type: text}
   form:
-    - {label: Lead, fields: [record_type, first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, sales_team, assignment_rule, score, score_why, next_follow_up, last_contacted_on, last_touched_at]}
+    - {label: Lead, fields: [company, record_type, first_name, last_name, lead_name, organization_name, job_title, status, lost_reason, assigned_to, sales_team, assignment_rule, score, score_why, next_follow_up, last_contacted_on, last_touched_at]}
     - {label: Contact Details, fields: [email, phone, mobile, website, do_not_call, call_consent_on, call_consent_how, unsubscribed, email_consent_on, email_consent_how, email_bounced_on, allow_duplicate, duplicate_of]}
-    - {label: Source and Segment, fields: [source, campaign, prospect, territory, industry, company_size, annual_revenue, company]}
+    - {label: Source and Segment, fields: [source, campaign, prospect, territory, industry, company_size, annual_revenue]}
     - {label: Qualification, collapsible: true, fields: [budget, is_decision_maker, need, timeline, qualified_on, qualified_by]}
     - {label: Address, collapsible: true, fields: [address_line1, address_line2, city, state, postal_code, country]}
     - {label: Conversion, collapsible: true, fields: [customer, contact, converted_on]}
@@ -205,12 +205,12 @@
     - {name: no_step_told, type: check, read_only: true, hidden: true, no_copy: true, description: "Its owner was told it had no next step"}
     - {name: notes, type: text}
   form:
-    - {label: Opportunity, fields: [record_type, title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to, sales_team]}
+    - {label: Opportunity, fields: [company, record_type, title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to, sales_team]}
     - {label: Contacts, fields: [contacts]}
     - {label: Pipeline, fields: [pipeline, sales_stage, probability, forecast_category, status, lost_reason, lost_detail, expected_close_date, next_step, next_follow_up, stage_changed_at, last_activity_at, closed_on]}
     - {label: Value, fields: [currency, conversion_rate, price_list, items, amount, weighted_amount, base_amount, base_weighted_amount]}
     - {label: Competition, collapsible: true, fields: [competitors]}
-    - {label: Source, collapsible: true, fields: [source, campaign, territory, company]}
+    - {label: Source, collapsible: true, fields: [source, campaign, territory]}
     - {label: Notes, collapsible: true, fields: [notes]}
   actions:
     - {name: make_quotation, label: Create Quotation, permission: read, condition: "doc.status == 'Open'"}
