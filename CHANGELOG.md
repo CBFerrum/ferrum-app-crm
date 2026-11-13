@@ -51,7 +51,7 @@ The interface for what 0.8.0 to 0.13.0 added on the server. Nothing in the serve
 - Record types (`/e/RecordType`): listed by what they are for, edited with the type's fields and stages chosen from the deal's or the lead's own, each default typed in as its field takes it.
 - CRM Settings and Email Bounced On are unchanged: the settings form already groups the 0.12 and 0.13 settings, and the lead's and the contact's forms show the day a mail came back, now also at the top of their pages.
 - Not here, for lack of a route: resuming a stopped enrolment (the server only stops one), and a preview of the customer's page as the platform draws it (the page is drawn from the same settings).
-- Rebuilt with Ferrum-Frontend 6d4c321. The words of the new screens are in the Arabic and Hindi catalogs in English until someone writes them.
+- Rebuilt with Ferrum-Frontend 593b162. The words of the new screens are in the Arabic and Hindi catalogs in English until someone writes them.
 
 ## 0.13.0
 
@@ -102,11 +102,11 @@ Upgrading: nothing to do. Quotations sent before keep their status; new fields a
 
 ## 0.11.2
 
-Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.
+Rebuilt with Ferrum-Frontend 9e7190c, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.
 
 ## 0.11.1
 
-The interface follows the upgraded design system, rebuilt with Ferrum-Frontend 0a47157. Text uses the kit's type roles (nothing under 12px) and controls its height tokens; loading shows skeletons shaped like what is coming; empty, no matches, denied, offline and failed are told apart; status colours come from stored state ids. The interface check now runs the UI lint against an empty baseline. The board loads behind a board-shaped placeholder and offers to clear a search or owner filter that hides every deal.
+The interface follows the upgraded design system, rebuilt with Ferrum-Frontend 76c4fad. Text uses the kit's type roles (nothing under 12px) and controls its height tokens; loading shows skeletons shaped like what is coming; empty, no matches, denied, offline and failed are told apart; status colours come from stored state ids. The interface check now runs the UI lint against an empty baseline. The board loads behind a board-shaped placeholder and offers to clear a search or owner filter that hides every deal.
 
 ## 0.11.0
 
@@ -149,7 +149,7 @@ For data already there:
 - Nobody is on do-not-call, and no consent has a date, until someone says so.
 - Open leads are scored by the maintenance run, a batch at a time, and again whenever a rule changes; until then they have no score.
 
-Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (101 names and 26 words each), translated by the model, to be reviewed by native speakers.
+Rebuilt with Ferrum-Frontend 56e3e0b, its new names and words in Arabic and Hindi (101 names and 26 words each), translated by the model, to be reviewed by native speakers.
 
 ## 0.10.0
 
@@ -186,7 +186,7 @@ For data already there:
 - Quotations already there are numbered from the amendments the platform recorded: revision 1, then one more for each amendment, each linked to the one it revises and the one that replaced it (sql/005_quotation_revisions.sql). Their statuses stay as they are.
 - The Sales Forecast report is by owner unless asked by month; it counts won deals by the day they were won, not their expected close date.
 
-Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (64 names and 5 words each), translated by the model, to be reviewed by native speakers.
+Rebuilt with Ferrum-Frontend 56e3e0b, its new names and words in Arabic and Hindi (64 names and 5 words each), translated by the model, to be reviewed by native speakers.
 
 ## 0.9.0
 
@@ -219,7 +219,7 @@ For data already there:
 - What is already overdue, untouched, quiet or without a next step when the release arrives (by the default times) counts as told, so nobody is flooded on the first run; each is told when it happens again.
 - Leads already there keep their owners; rules apply to leads that arrive from now on, or through Assign by Rules. Lead Owner no longer shows the person entering a lead before saving: left empty, it is filled with them on save, unless a rule takes leads people enter.
 
-Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (426 names and 82 words each), translated by the model, to be reviewed by native speakers.
+Rebuilt with Ferrum-Frontend 56e3e0b, its new names and words in Arabic and Hindi (426 names and 82 words each), translated by the model, to be reviewed by native speakers.
 
 ## 0.8.0
 
@@ -252,7 +252,7 @@ For data already there:
 - A lead keeps its phone's and mobile's national part (indexed, so the check stays quick for an import of many leads); leads already there get theirs from sql/002_lead_keys.sql.
 - Leads that already share an email or phone are left as they are; the check runs when a lead is created or its email or phone changes.
 
-Rebuilt with Ferrum-Frontend e065883, its new names and words in Arabic and Hindi (345 names and 71 words each), translated by the model, to be reviewed by native speakers.
+Rebuilt with Ferrum-Frontend 56e3e0b, its new names and words in Arabic and Hindi (345 names and 71 words each), translated by the model, to be reviewed by native speakers.
 
 ## 0.7.0
 
@@ -268,7 +268,7 @@ What is made from a quotation keeps what it quoted:
 - An invoice line made from such an order keeps the quoted price too.
 - A credit note gives back what was billed.
 
-Rebuilt with Ferrum-Frontend 9f5a466, with Approved As named in Arabic and Hindi.
+Rebuilt with Ferrum-Frontend 69de8aa, with Approved As named in Arabic and Hindi.
 
 ## 0.6.17
 
@@ -276,11 +276,11 @@ The reports it defines in code (their titles and parameters) have names in Arabi
 
 ## 0.6.16
 
-Rebuilt with Ferrum-Frontend c59c9a2: the names of its models, fields and manifest in Arabic and Hindi (315 each in ui/src/locales/names, which the platform serves to every page of the workspace, so a record's labels, the launcher and the bar read in the person's language), and the sentences its pages still showed in English (split around a link or a figure, built in code from a template or word by word) whole and translated (67 words each in ui/src/locales). Translated by the model, to be reviewed by native speakers.
+Rebuilt with Ferrum-Frontend 43d7779: the names of its models, fields and manifest in Arabic and Hindi (315 each in ui/src/locales/names, which the platform serves to every page of the workspace, so a record's labels, the launcher and the bar read in the person's language), and the sentences its pages still showed in English (split around a link or a figure, built in code from a template or word by word) whole and translated (67 words each in ui/src/locales). Translated by the model, to be reviewed by native speakers.
 
 ## 0.6.15
 
-Rebuilt with Ferrum-Frontend 155518c: the sentences its pages built in code (counts, dates, what a toast or a screen reader says) go through t() too, as whole sentences where code chose a word, and carry built-in Arabic and Hindi (62 words each in ui/src/locales, translated by the model and to be reviewed by native speakers).
+Rebuilt with Ferrum-Frontend 046a3a2: the sentences its pages built in code (counts, dates, what a toast or a screen reader says) go through t() too, as whole sentences where code chose a word, and carry built-in Arabic and Hindi (62 words each in ui/src/locales, translated by the model and to be reviewed by native speakers).
 
 ## 0.6.14
 
@@ -288,39 +288,39 @@ The assistant knows what its records mean in its pages (contributes.shell.assist
 
 ## 0.6.13
 
-Rebuilt with Ferrum-Frontend 5b22e7b: its own words carry built-in Arabic and Hindi (61 words each, ui/src/locales, translated by the model and to be reviewed by native speakers), fetched for the page's language only. The labels it keeps in objects, its dialogs, its page titles and the words it keeps in variables go through t() as well, and the names and sizes it shows as they are keep their order right to left. Its pages are drawn once their words are in, and its entry carries only the parts of the kit it uses.
+Rebuilt with Ferrum-Frontend 389b2af: its own words carry built-in Arabic and Hindi (61 words each, ui/src/locales, translated by the model and to be reviewed by native speakers), fetched for the page's language only. The labels it keeps in objects, its dialogs, its page titles and the words it keeps in variables go through t() as well, and the names and sizes it shows as they are keep their order right to left. Its pages are drawn once their words are in, and its entry carries only the parts of the kit it uses.
 
 ## 0.6.12
 
-Rebuilt with Ferrum-Frontend 6537d65: an action's link, code or token shown once is kept in a dialog to copy, and on a page that reads right to left, English left untranslated keeps its own order. Its own words go through the kit's t() (61 places), so a workspace's own words for its language reach them, and Admin, Interface words lists them under it (dist/words.json).
+Rebuilt with Ferrum-Frontend 1f5981d: an action's link, code or token shown once is kept in a dialog to copy, and on a page that reads right to left, English left untranslated keeps its own order. Its own words go through the kit's t() (61 places), so a workspace's own words for its language reach them, and Admin, Interface words lists them under it (dist/words.json).
 
 ## 0.6.11
 
-Rebuilt with Ferrum-Frontend d5d98f2: a workspace's own words for its interface (Admin, Interface words) reach its pages as they load; an attachment field that holds a picture shows it; and a value another record already has is said so, where the form said the record had been changed by someone else. Its own screens' margins, paddings, borders, alignment and insets go by the line's start and end, so they mirror right to left as the kit's do; what it places by coordinates (boards, timelines, charts, handles) stays as it was.
+Rebuilt with Ferrum-Frontend 8a1c2e7: a workspace's own words for its interface (Admin, Interface words) reach its pages as they load; an attachment field that holds a picture shows it; and a value another record already has is said so, where the form said the record had been changed by someone else. Its own screens' margins, paddings, borders, alignment and insets go by the line's start and end, so they mirror right to left as the kit's do; what it places by coordinates (boards, timelines, charts, handles) stays as it was.
 
 ## 0.6.10
 
-Rebuilt with Ferrum-Frontend 63280d3: right to left, its pages mirror as they read (icons that point along the line, margins and alignment by the line's start and end, arrow keys along it), and the records pages' words are in Arabic and Hindi.
+Rebuilt with Ferrum-Frontend 9d80f4f: right to left, its pages mirror as they read (icons that point along the line, margins and alignment by the line's start and end, arrow keys along it), and the records pages' words are in Arabic and Hindi.
 
 ## 0.6.9
 
-Rebuilt with Ferrum-Frontend a64416a: a new record's box whose default is 1 shows ticked, as it is saved.
+Rebuilt with Ferrum-Frontend 204b713: a new record's box whose default is 1 shows ticked, as it is saved.
 
 ## 0.6.8
 
-Rebuilt with Ferrum-Frontend 922fcfb: an action's dialog says every refusal, the errors on what the action made (another record's rows) among them, and an action with parameters and a confirmation asks once.
+Rebuilt with Ferrum-Frontend 6cfda39: an action's dialog says every refusal, the errors on what the action made (another record's rows) among them, and an action with parameters and a confirmation asks once.
 
 ## 0.6.7
 
-Rebuilt with Ferrum-Frontend a76295e: its pages show times on a person's own clock when they chose one on their Account page, while today and due dates stay on the workspace's day.
+Rebuilt with Ferrum-Frontend b39fffb: its pages show times on a person's own clock when they chose one on their Account page, while today and due dates stay on the workspace's day.
 
 ## 0.6.6
 
-Today's follow-ups, a deal's activity and the day at the top of Today are on the workspace's clock, naming its zone when the browser's is another. Rebuilt with Ferrum-Frontend 24c3951, so its records' pages show times on the workspace's clock too, a draft numbered on submit is headed as a draft, and a record of an app that is not installed says so.
+Today's follow-ups, a deal's activity and the day at the top of Today are on the workspace's clock, naming its zone when the browser's is another. Rebuilt with Ferrum-Frontend d350579, so its records' pages show times on the workspace's clock too, a draft numbered on submit is headed as a draft, and a record of an app that is not installed says so.
 
 ## 0.6.5
 
-Rebuilt with Ferrum-Frontend bb60115: a record page reads an empty number or check as the server does, so an action whose condition needs one shows, and a workspace's settings open as their one record.
+Rebuilt with Ferrum-Frontend 20d08e5: a record page reads an empty number or check as the server does, so an action whose condition needs one shows, and a workspace's settings open as their one record.
 
 ## 0.6.4
 
@@ -332,11 +332,11 @@ The actions ask for what they read: a quotation's Mark as Lost needs a lost reas
 
 ## 0.6.2
 
-A quotation's status says how it becomes an order: a submitted quotation offers Create Sales Order where ERP and the CRM and ERP connector are installed, and nothing said so where they are not. Rebuilt with Ferrum-Frontend 0f1a544: a settings page is headed by what it is.
+A quotation's status says how it becomes an order: a submitted quotation offers Create Sales Order where ERP and the CRM and ERP connector are installed, and nothing said so where they are not. Rebuilt with Ferrum-Frontend 22d49b9: a settings page is headed by what it is.
 
 ## 0.6.1
 
-Rebuilt with Ferrum-Frontend 00dea07: in a workflow state that names what may change, the other fields show read-only, and the fields the state needs show required.
+Rebuilt with Ferrum-Frontend ae13c69: in a workflow state that names what may change, the other fields show read-only, and the fields the state needs show required.
 
 ## 0.6.0: email clicks as attribution touches
 
@@ -375,7 +375,7 @@ Rebuilt with Ferrum-Frontend daeadda: after an action runs, a record page shows 
 
 ## 0.4.1
 
-Rebuilt with Ferrum-Frontend 80ff179: a field's label names its control for assistive technology, and a record whose title is a link shows that record's title, not its id.
+Rebuilt with Ferrum-Frontend 89b7cc7: a field's label names its control for assistive technology, and a record whose title is a link shows that record's title, not its id.
 
 ## 0.4.0
 
@@ -399,7 +399,7 @@ Rebuilt with Ferrum-Frontend 80ff179: a field's label names its control for assi
 
 ## 0.3.3
 
-- Rebuilt with Ferrum-Frontend a8d4dda: under the platform's bar the records frame no longer shows
+- Rebuilt with Ferrum-Frontend db924b9: under the platform's bar the records frame no longer shows
   a second bell (the bar has notifications). CRM's own colours follow the theme's (borders, surfaces, the accent on hover).
 
 ## 0.3.1
