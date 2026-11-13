@@ -28,7 +28,7 @@ teams and territories see their people's records, and targets say how far along 
 
 | At a glance | |
 |---|---|
-| 📦 Version | `0.13.5` |
+| 📦 Version | `0.13.6` |
 | 🧱 Platform | Ferrum `>=0.3.4, <0.4` |
 | 🔗 Requires | nothing else |
 | 🖥️ Interface | its own, at `/crm/` |
@@ -360,6 +360,7 @@ CHANGELOG.md  what changed in each version
 
 | Version | Highlights |
 |---|---|
+| **0.13.6** | The company of a lead or opportunity is in its first section; a contact's emails and phones are at the top of its form. |
 | **0.13.5** | The call composer's Minutes field is no longer cut off at narrow widths. |
 | **0.13.4** | Fixes from the first browser walk: the new-record forms (Lead, Customer, Prospect, Contact, Quotation) and a draft quotation's page no longer stay on "Loading…", and Start my forecast uses the person's default company, asks which one where there are several, and shows a refusal as a sentence. |
 | **0.13.3** | The screens for 0.13.2: Resume on a stopped person in a sequence (never offered after an opt-out or a bounce, and the server's refusal shown as it words it), a record type's Allowed Stages ticked from the deal's own, quick actions on a prospect's page, a hosted message on the timeline opening in Mail (and not linking when it has no mailbox), and a warning in the sequence's message picker when a promotional template has no opt-out link in its body. |

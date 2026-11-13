@@ -220,7 +220,8 @@ async fn connections(admin: &U, tenant: Uuid, company: &Value) {
         "{invited:?}"
     );
 
-    // ── what the platform's pulls cannot do: a pull is run by the system, so a person's own account is not theirs to give
+    // ── a person's own mailbox: its pulls run as each person who connected it (BD-50), so with nobody connected there is
+    // nothing to pull, and an administrator's "pull now" finds no pull rather than pulling as no one
     let mut personal = shipped("crm_personal_mailbox")["description"].clone();
     personal["pulls"] = shared["pulls"].clone();
     let input: ConnectionInput =
@@ -228,11 +229,8 @@ async fn connections(admin: &U, tenant: Uuid, company: &Value) {
     let listed = k.connection_defs(&admin.ctx).await.unwrap();
     let existing = listed.iter().find(|c| c["name"] == "crm_personal_mailbox").unwrap()["id"].as_str().unwrap().parse().unwrap();
     k.save_connection_def(&admin.ctx, Some(existing), &input).await.unwrap();
-    k.pull_now(&admin.ctx, existing, "messages").await.unwrap();
-    drain(k).await;
-    let pulls = k.connection_pulls(&admin.ctx, existing).await.unwrap();
-    let err = pulls.iter().find(|p| p["name"] == "messages").unwrap()["last_error"].as_str().unwrap_or_default().to_string();
-    assert!(err.contains("each person's own"), "a pull is no person: {err}");
+    assert!(matches!(k.pull_now(&admin.ctx, existing, "messages").await, Err(ferrum_kernel::Error::NotFound(_))));
+    assert!(k.connection_pulls(&admin.ctx, existing).await.unwrap().is_empty(), "no pull until someone connects their account");
     let _ = tenant;
 }
 
