@@ -831,6 +831,7 @@ async fn scenario() {
     assign_and_remind(&k).await;
     pipelines_and_quotes(&k).await;
     accounts_and_teams(&k).await;
+    open_forms(&k).await;
 }
 
 /// CRM in a workspace without ERP (docs/plan/apps-ui.md §13): contacts, customers and items are the
@@ -2361,4 +2362,82 @@ async fn accounts_and_teams(k: &Arc<Kernel>) {
     assert!(lead["call_consent_on"].is_null() && lead["call_consent_how"].is_null() && lead["do_not_call"] == json!(true), "{lead:?}");
     let ct = admin.get("Contact", uid(&lia_ct)).await;
     assert!(ct["call_consent_on"].is_null() && ct["email_consent_on"].is_null() && ct["do_not_call"] == json!(true), "{ct:?}");
+}
+
+/// What a person meets on a new record (browser walk 2, faults 2 and 6): a required field is never in a collapsed
+/// section, the company is in the first one and fills itself from the person's default company or the workspace's
+/// only company, and a contact is made from the top of its form with an email and a phone.
+async fn open_forms(k: &Arc<Kernel>) {
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: "openforms".into(),
+            name: "Open Forms".into(),
+            admin_email: "admin@forms.test".into(),
+            admin_password: PASSWORD.into(),
+            admin_name: None,
+            packages: vec!["crm".into()],
+            settings: None,
+        })
+        .await
+        .expect("tenant");
+    let session = k.login("openforms", "admin@forms.test", PASSWORD).await.expect("login");
+    let load = || async {
+        k.invalidate_user(tenant, session.user); // a new company changes the default the context carries
+        k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx")
+    };
+    let admin = U { k: k.clone(), ctx: load().await };
+
+    // Every required field of every CRM entity with a form is in a section that is open on a new record, and
+    // a company (whose default is nothing in a workspace of several) is in the first.
+    let mut with_company = Vec::new();
+    for (name, e) in admin.ctx.schema.entities.iter().filter(|(_, e)| e.def.module.as_deref() == Some("crm")) {
+        if e.def.fields.iter().any(|f| f.name == "company" && f.required) {
+            with_company.push(name.as_str());
+        }
+        if e.def.form.is_empty() {
+            continue; // no layout: every field in one open list
+        }
+        for f in e.def.fields.iter().filter(|f| f.required && !f.read_only && !f.hidden) {
+            let at = e.def.form.iter().position(|s| s.fields.contains(&f.name)).unwrap_or_else(|| panic!("{name}.{} is required and on no section", f.name));
+            assert!(!e.def.form[at].collapsible, "{name}.{} is required and in the collapsed section {:?}", f.name, e.def.form[at].label);
+            assert!(
+                f.name != "company" || at == 0,
+                "{name}.company is in section {at}, not the first: {:?}",
+                e.def.form.iter().map(|s| (&s.label, s.fields.len())).collect::<Vec<_>>()
+            );
+        }
+    }
+    with_company.sort();
+    assert_eq!(with_company, ["Campaign", "ForecastSubmission", "Lead", "Opportunity", "Quotation", "SalesTarget"]);
+
+    // One company: nobody is refused for it. Several and no default: the refusal names the field (now on screen).
+    let inr = admin.one("Currency", json!({"code": "INR"})).await;
+    let first = admin.insert("Company", json!({"company_name": "Forms One", "abbr": "F1", "default_currency": inr["id"]})).await;
+    let admin = U { k: k.clone(), ctx: load().await };
+    assert_eq!(admin.insert("Lead", json!({"first_name": "Solo"})).await["company"], first["id"], "the only company");
+    let second = admin.insert("Company", json!({"company_name": "Forms Two", "abbr": "F2", "default_currency": inr["id"]})).await;
+    let admin = U { k: k.clone(), ctx: load().await };
+    refused(k.insert(&admin.ctx, "Lead", obj(json!({"first_name": "Nobody"}))).await, "company");
+    k.set_user_scopes(&admin.ctx, session.user, "Company", &[uid(&first), uid(&second)], Some(uid(&second))).await.expect("scopes");
+    let admin = U { k: k.clone(), ctx: load().await };
+    assert_eq!(admin.insert("Lead", json!({"first_name": "Mine"})).await["company"], second["id"], "the person's default company");
+
+    // A contact: name, one email, one phone, as the form sends them (a new row's check unticked).
+    let form = admin.ctx.schema.entity("Contact").unwrap().def.form.clone();
+    assert!(form[0].fields.iter().any(|f| f == "emails") && form[0].fields.iter().any(|f| f == "phones") && !form[0].collapsible, "{form:?}");
+    assert!(form.iter().all(|s| !s.fields.iter().any(|f| f == "email" || f == "phone")), "no read-only primary shown as an input");
+    let cara = admin
+        .insert(
+            "Contact",
+            json!({"first_name": "Cara", "last_name": "Newcomer",
+                   "emails": [{"email": "cara@new.test", "is_primary": false}],
+                   "phones": [{"phone": "+1 555 0142", "phone_type": "Mobile", "is_primary": false}]}),
+        )
+        .await;
+    assert_eq!((cara["email"].as_str(), cara["phone"].as_str()), (Some("cara@new.test"), Some("+1 555 0142")), "{cara:?}");
+    assert_eq!((&cara["emails"][0]["is_primary"], &cara["phones"][0]["is_primary"]), (&json!(true), &json!(true)));
+    k.erase_personal_data(&admin.ctx, "cara@new.test", "Request 12").await.expect("erased");
+    let cara = admin.get("Contact", uid(&cara)).await;
+    assert!(cara["email"].is_null() && cara["phone"].is_null() && cara["last_name"].is_null(), "{cara:?}");
+    assert!(cara["emails"].as_array().unwrap().is_empty() && cara["phones"].as_array().unwrap().is_empty(), "{cara:?}");
 }
