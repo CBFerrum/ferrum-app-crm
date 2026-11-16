@@ -54,9 +54,9 @@ async fn fresh_kernel() -> Arc<Kernel> {
     packages.extend(ferrum_app_comms::packages().expect("Mail's packages"));
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
-    ferrum_app_erp::register(&mut hooks);
+    hooks.app("erp", &[], ferrum_app_erp::register);
     ferrum_app_crm::register(&mut hooks);
-    ferrum_app_comms::register(&mut hooks);
+    hooks.app("comms", &[], ferrum_app_comms::register);
     for source in ferrum_app_erp::reports().into_iter().chain(ferrum_app_crm::reports()) {
         ferrum_domain::reports::add_source(source);
     }
