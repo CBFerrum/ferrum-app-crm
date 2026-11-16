@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.15.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.15.1-0f766e?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -39,7 +39,7 @@ priced and taxed by the same engine that invoices it.
 
 | | |
 |---|---|
-| **Version** | 0.15.0 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
+| **Version** | 0.15.1 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
 | **Kind** | Its own interface at `/crm/` (pipeline board, Today, deal, account, quotation, sequence and forecast pages) plus Ferrum's standard lists and forms for every record |
 | **What it adds** | 36 entities (24 records and 12 line tables), 4 roles, 13 reports, 2 print and document formats, 2 messages, 2 connections, 1 menu with 41 entries, 5 create shortcuts, 5 notification kinds |
 | **Depends on** | Ferrum platform `>=0.3.4, <0.4`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
@@ -407,6 +407,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ### ✅ Recently shipped
 
+- [x] **0.15.1** — Rebuilt on Ferrum-Frontend 06bd1a2: its start through `mountApp`, and no routes to the screens apps no longer have.
 - [x] **0.15.0** — An approval is held to the digest of its terms alone: the total and discount kept beside it are gone.
 - [x] **0.14.0** — The package's SQL is its final schema: the backfills for earlier releases are gone.
 - [x] **0.13.6** — The company is in the first section of a lead and a deal; a contact is made from the top of its form with emails and phones.
@@ -541,7 +542,7 @@ docs/             connection notes and screenshots
 
 ## 📜 Changelog
 
-Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.15.0**.
+Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.15.1**.
 
 ## 🤝 Contributing
 
