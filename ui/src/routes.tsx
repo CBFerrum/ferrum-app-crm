@@ -9,7 +9,7 @@ import { Board } from "./Board";
 import { Problem } from "./states";
 
 /** A page of the records frame, loaded when first opened. */
-const page = (name: "FormView" | "ListView" | "ReportView" | "AppSettingsPage" | "ScreenPage") => () =>
+const page = (name: "FormView" | "ListView" | "ReportView") => () =>
   import("./records").then((m) => ({ Component: m[name] }));
 
 /** CRM's packages: the sidebar shows their modules (its menu lists the customers and items it
@@ -81,8 +81,6 @@ export const routes: RouteObject[] = [
         { path: "e/:entity/:id", Component: EntityRoute },
         { path: "f/:entity/:id", lazy: page("FormView") },
         { path: "r/:name", lazy: page("ReportView") },
-        { path: "apps/:app/settings", lazy: page("AppSettingsPage") },
-        { path: "x/:app/:page", lazy: page("ScreenPage") },
         { path: "*", element: <NotFound /> },
       ],
     },
