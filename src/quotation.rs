@@ -203,9 +203,7 @@ impl DocHook for QuotationHook {
         match name {
             "make_sales_order" => make_sales_order(hc, doc).await.map(Some),
             "mark_lost" => mark_lost(hc, doc, params).await.map(Some),
-            "mark_sent" | "mark_accepted" | "mark_rejected" | "mark_viewed" | "customer_accept" | "customer_decline" => {
-                answer(hc, name, doc, params).await.map(Some)
-            }
+            "mark_sent" | "mark_accepted" | "mark_rejected" | "customer_accept" | "customer_decline" => answer(hc, name, doc, params).await.map(Some),
             "add_rule_needs" => add_rule_needs(hc, doc).await.map(Some),
             "approve_quotation" => approve(hc, doc).await.map(Some),
             _ => Ok(None),
@@ -480,13 +478,6 @@ async fn answer(hc: &mut HookCtx<'_>, name: &str, q: &Doc, params: &Value) -> Re
             v.insert("viewed_at".into(), Value::Null);
             revoke_links(hc.kernel, hc.tx, hc.ctx, qid).await?;
         }
-        // Only a workspace still on 0.12.0's package asks for this (its Ask a Question invokes it); from 0.13.0 the
-        // platform's `opened` event does it (`Opened` below).
-        "mark_viewed" => {
-            if s(q, "viewed_at").is_none() {
-                v.insert("viewed_at".into(), now);
-            }
-        }
         _ => {
             let rejected = matches!(name, "mark_rejected" | "customer_decline");
             if name == "mark_rejected" {
@@ -750,8 +741,8 @@ async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
         v.insert("status".into(), json!("Expired"));
         k.set_values_tx(&ctx, &mut tx, "Quotation", qid, v).await?;
         ferrum_kernel::audit::record(&mut tx, &ctx, "Quotation", qid, "expire", None, json!({"status": [was, "Expired"]})).await?;
-        // What the customer was sent stops working with its validity. Links sent from 0.13.0 end by themselves on
-        // the quotation's valid-until (`until`); those sent before had 90 days, and this is what ends them.
+        // What the customer was sent stops working with its validity. Links Send Quotation makes end by themselves on
+        // the quotation's valid-until (`until`); this ends any other, such as one issued through the platform's API.
         revoke_links(k, &mut tx, &ctx, qid).await?;
         expired += 1;
     }
