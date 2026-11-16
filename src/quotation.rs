@@ -144,14 +144,9 @@ impl DocHook for QuotationHook {
         // A draft may be incomplete; it says what it breaks, and submitting waits until nothing.
         let broken = product_rule_issues(hc, doc).await?;
         set(doc, "rule_issues", if broken.is_empty() { Value::Null } else { json!(broken.join("\n")) });
-        // What was approved is these terms: other terms have not been. One approved before the terms
-        // were kept is held to its total and discount, as it was then.
-        let moved = match s(doc, "approved_digest") {
-            Some(approved) => approved != approval_digest(doc),
-            None => d(doc, "approved_total") != d(doc, "grand_total") || d(doc, "approved_discount") != d(doc, "discount_percent"),
-        };
-        if s(doc, "approved_by").is_some() && moved {
-            for f in ["approved_by", "approved_at", "approved_total", "approved_discount", "approved_digest"] {
+        // What was approved is these terms: other terms have not been.
+        if s(doc, "approved_by").is_some() && s(doc, "approved_digest") != Some(approval_digest(doc).as_str()) {
+            for f in ["approved_by", "approved_at", "approved_digest"] {
                 set(doc, f, Value::Null);
             }
         }
@@ -378,8 +373,6 @@ async fn approve(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     let mut v = Doc::new();
     v.insert("approved_by".into(), json!(hc.ctx.email));
     v.insert("approved_at".into(), json!(chrono::Utc::now().to_rfc3339()));
-    v.insert("approved_total".into(), doc.get("grand_total").cloned().unwrap_or(Value::Null));
-    v.insert("approved_discount".into(), doc.get("discount_percent").cloned().unwrap_or(Value::Null));
     v.insert("approved_digest".into(), json!(approval_digest(doc)));
     let quotation = id(doc, "id").ok_or_else(|| Error::internal("quotation without id"))?;
     hc.kernel.set_values_tx(&sys(hc.ctx), hc.tx, "Quotation", quotation, v).await?;
