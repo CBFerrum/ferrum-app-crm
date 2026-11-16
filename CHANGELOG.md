@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.15.2
+
+Needs the same platform as 0.15.1. Interface unchanged. Database change: the package's SQL is one file, `007_filed.sql`
+(`crm_filed`, `crm_filed_mail` and `crm_sequence_mail`; no more `009_filed_mail.sql` and `010_sequence_mail.sql`). No
+installation was ever made from them: a development database that applied the old files needs resetting. The suites run
+on today's platform, ERP and Comms.
+
 ## 0.15.1
 
 Needs the same platform as 0.15.0. No database change. Interface only, `ui/dist` rebuilt with Ferrum-Frontend `06bd1a2`.
