@@ -104,7 +104,7 @@ pub(crate) async fn follow_team(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option
 const TEAM_TABLES: [&str; 4] = ["e_lead", "e_opportunity", "e_quotation", "e_activity"];
 
 /// Its members stored lowercased, so that records find them by a plain comparison; records of its
-/// people that have no team yet (made before it, or before 0.11.0) become its.
+/// people that have no team yet (made before it) become its.
 pub struct SalesTeamHook;
 
 #[async_trait]

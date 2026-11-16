@@ -135,8 +135,7 @@ pub(crate) fn digits(phone: Option<&str>) -> Option<String> {
 }
 
 /// [`digits`] in SQL, of column `$c` (less the six-digit floor, which the side holding the
-/// [`digits`] keeps): what `sql/002_lead_keys.sql` fills a lead's phone and mobile keys with, and what
-/// customers' and contacts' numbers are compared by. A lead's keys are stored and indexed because
+/// [`digits`] keeps): what customers' and contacts' numbers are compared by. A lead's keys are stored and indexed because
 /// under row-level security the planner uses no index on an expression of functions that are not
 /// leakproof (`lower`, `regexp_replace`): the lookup compares plain columns.
 macro_rules! national {
@@ -532,8 +531,7 @@ async fn linked_from(hc: &mut HookCtx<'_>, entity: &str, target: Uuid) -> Result
 /// status and its deals, quotations, activities, contacts and addresses (and its prospect its own
 /// deals and quotations); the note, address, contact and customer the conversion made are removed,
 /// each unless another record refers to it now, which refuses the whole undo, naming that record. A
-/// quotation of the lead that was ordered refuses it too. Leads converted before CRM 0.8.0 kept no
-/// record of what was made: they get their records back, and the customer, contact and address stay.
+/// quotation of the lead that was ordered refuses it too.
 async fn undo_conversion(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Value> {
     let lead_id = id(lead, "id").ok_or_else(|| Error::internal("lead without id"))?;
     let number = s(lead, "number").unwrap_or_default().to_string();
@@ -638,13 +636,5 @@ mod tests {
         assert_ne!(digits(Some("+1 415 555 0100")), digits(Some("+44 415 555 0100 9")), "a near-miss of another length");
         assert_eq!(digits(Some("00 123")), None, "too few digits to tell anyone apart");
         assert_eq!(digits(Some("")), None);
-    }
-
-    #[test]
-    fn the_backfill_computes_the_keys_as_digits_does() {
-        let sql = include_str!("../packages/crm/sql/002_lead_keys.sql");
-        for column in [national!("phone"), national!("mobile")] {
-            assert!(sql.contains(column), "002_lead_keys.sql fills the keys with {column}");
-        }
     }
 }

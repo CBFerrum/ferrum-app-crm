@@ -309,7 +309,7 @@ documents:
           {{ doc.terms }}</div>{% endif %}
           </body></html>
 seed:
-  # One pipeline (sql/004_pipelines.sql gives a workspace already there the same one, holding its stages).
+  # One pipeline, holding its stages.
   - entity: SalesPipeline
     key: [pipeline_name]
     records:

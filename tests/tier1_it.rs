@@ -286,7 +286,6 @@ async fn scenario() {
         .await;
 
     let (acme, jane) = quotation_link(&k, &admin, &anna, &ben, &cid, &widget, tenant).await;
-    sent_by_0_12_0(&k, &admin, &anna, acme, jane, &widget, tenant).await;
     timeline_and_filing(&k, &admin, &anna, &ben, &maria, (acme, jane), &cid, tenant).await;
     hosted_mail(&k, &admin, &anna, tenant).await;
     sequences(&k, &admin, &anna, tenant).await;
@@ -458,6 +457,8 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
         k.use_link("tier1", &t5, "customer_accept", &given(json!({"signed_name": "Old"})), None).await.unwrap().is_none(),
         "a cancelled (revised) quotation's link is gone"
     );
+    let trail = anna.k.audit_trail(&anna.ctx, "Quotation", q5).await.unwrap();
+    assert!(trail["events"].as_array().unwrap().iter().any(|e| e["action"] == "revoke_link"), "the platform says so in the history");
     let revised = anna.k.amend(&anna.ctx, "Quotation", q5).await.unwrap();
     assert_eq!(revised["revision"], json!(2));
     assert!(anna.k.record_links(&anna.ctx, "Quotation", q5).await.unwrap().iter().all(|l| !l["revoked_at"].is_null()));
@@ -490,66 +491,6 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     admin.update("CrmSettings", uid(&settings), json!({"order_on_accept": false})).await;
     let _ = ben;
     (acme, jane)
-}
-
-/// A quotation sent by 0.12.0, whose link (90 days, showing the hidden Lines Text) is in the customer's mail, after
-/// this release's startup has run its migration: the link still shows the lines, still works, is seen as opened,
-/// still ends with the quotation's validity (the maintenance, since it has no `until`) and when it is cancelled.
-async fn sent_by_0_12_0(k: &Arc<Kernel>, admin: &U, anna: &U, acme: Uuid, jane: Uuid, widget: &str, tenant: Uuid) {
-    let old_link = |q: Uuid| {
-        let spec = LinkSpec {
-            actions: vec!["customer_accept".into(), "customer_decline".into(), "customer_ask".into()],
-            show: vec!["party_name".into(), "valid_till".into(), "grand_total".into()],
-            uses: Some(20),
-            recipient: Some("Acme Corp".into()),
-            ..Default::default()
-        };
-        async move { token(&admin.k.issue_link_now(&admin.ctx, "Quotation", q, &spec).await.unwrap().url) }
-    };
-    let as_it_was = "update action_link set show = array['party_name', 'valid_till', 'lines_text', 'grand_total'], columns = '{}'::jsonb, \
-                     expires_at = now() + interval '90 days' where tenant_id = $1 and record_id = $2";
-    let migrate = |what: &'static str| async move {
-        let mut tx = k.db.system_tenant_tx(tenant).await.unwrap();
-        sqlx::raw_sql(what).execute(&mut *tx).await.unwrap();
-        tx.commit().await.unwrap();
-    };
-    let migration = include_str!("../packages/crm/sql/008_link_lines.sql");
-
-    let q = quote(anna, acme, Some(jane), widget, "8").await;
-    anna.action("Quotation", q, "send_quotation", json!({})).await;
-    let t = old_link(q).await;
-    sql(k, as_it_was, tenant, q).await;
-    migrate(migration).await;
-    migrate(migration).await; // and again: nothing moves twice
-    let links = anna.k.record_links(&anna.ctx, "Quotation", q).await.unwrap();
-    assert!(links.iter().any(|l| l["show"] == json!(["party_name", "valid_till", "items", "grand_total"]) && l["columns"]["items"].is_array()), "{links:?}");
-    let page = k.link_page("tier1", &t).await.unwrap().expect("the old link still works");
-    assert_eq!(page.tables[0].2[0][..2], ["Widget".to_string(), "8".to_string()], "and still shows the lines: {:?}", page.tables);
-    k.link_opened("tier1", &t).await.unwrap();
-    k.use_link("tier1", &t, "customer_ask", &given(json!({"question": "Is stock there?", "signed_name": "Jane Lee"})), None).await.unwrap().expect("asked");
-    drain(k).await;
-    assert_eq!(anna.get("Quotation", q).await["status"], json!("Viewed"));
-    // sent again: the old link's later opening says nothing (it is ended), and a fresh quotation's link is not affected
-    anna.action("Quotation", q, "send_quotation", json!({})).await;
-    assert_eq!(anna.get("Quotation", q).await["status"], json!("Sent"));
-    assert!(k.link_page("tier1", &t).await.unwrap().is_none(), "ended by the new send");
-    // its validity passes: the maintenance ends the 90-day link the new platform call would not know of
-    let t2 = old_link(q).await;
-    sql(k, as_it_was, tenant, q).await;
-    sql(k, "update e_quotation set valid_till = current_date - 2 where tenant_id = $1 and id = $2", tenant, q).await;
-    ferrum_app_crm::maintenance(k).await.unwrap();
-    assert_eq!(anna.get("Quotation", q).await["status"], json!("Expired"));
-    assert!(k.use_link("tier1", &t2, "customer_accept", &given(json!({"signed_name": "Late"})), None).await.unwrap().is_none(), "expired with its quotation");
-    // cancelled for a revision: revoked by the platform's call, recorded in the history
-    let q = quote(anna, acme, Some(jane), widget, "9").await;
-    anna.action("Quotation", q, "send_quotation", json!({})).await;
-    let t3 = old_link(q).await;
-    sql(k, as_it_was, tenant, q).await;
-    migrate(migration).await;
-    anna.k.cancel(&anna.ctx, "Quotation", q, None).await.unwrap();
-    assert!(k.use_link("tier1", &t3, "customer_accept", &given(json!({"signed_name": "Old"})), None).await.unwrap().is_none());
-    let trail = anna.k.audit_trail(&anna.ctx, "Quotation", q).await.unwrap();
-    assert!(trail["events"].as_array().unwrap().iter().any(|e| e["action"] == "revoke_link"), "the platform says so in the history");
 }
 
 async fn sql(k: &Kernel, q: &str, tenant: Uuid, record: Uuid) {

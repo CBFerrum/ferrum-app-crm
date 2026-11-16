@@ -1,8 +1,9 @@
 -- CRM 0.13.0: where a message of a hosted mailbox was filed (src/filing.rs, from Mail's `MailMessage.received` and
 -- `.sent`, which carry no body): one row for each record it is shown on, the person it is with and the newest open
 -- deal of theirs. Unlike `crm_filed` it keeps what the timeline shows, because there is no Communication to read:
--- the subject, the other party's address, the thread and the time. Those are personal data: the party's address
--- is what an erasure of that person finds them by (`FiledMailHeld`).
+-- the subject, the other party's address, the thread and the time, and what opens it in Mail
+-- (`/mail/{mailbox}/{email}`: Mail's hosted mailbox and the message's id in it, neither an address). Those are
+-- personal data: the party's address is what an erasure of that person finds them by (`FiledMailHeld`).
 create table crm_filed_mail (
   tenant_id uuid not null,
   message uuid not null,
@@ -16,6 +17,8 @@ create table crm_filed_mail (
   message_id text,
   at timestamptz not null,
   filed_at timestamptz not null default now(),
+  mailbox text,
+  email text,
   primary key (tenant_id, message, entity, record_id)
 );
 create index crm_filed_mail_record on crm_filed_mail (tenant_id, entity, record_id, at desc);

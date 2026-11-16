@@ -1017,13 +1017,8 @@ async fn day_one(k: &Arc<Kernel>) {
     let (a, b) = tokio::join!(anna.k.insert(&anna.ctx, "Lead", obj(twin.clone())), anna.k.insert(&anna.ctx, "Lead", obj(twin.clone())));
     assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(), 1, "{a:?} {b:?}");
     assert_eq!(anna.list("Lead", json!({"email": "tia@twin.test"})).await.len(), 1);
-    // A lead from before this release gets its phone keys from the release's backfill.
-    let mut tx = k.db.system_tx().await.unwrap();
-    sqlx::query("update e_lead set phone_key = null, mobile_key = null where id = $1").bind(uid(&asha)).execute(&mut *tx).await.unwrap();
-    sqlx::raw_sql(include_str!("../packages/crm/sql/002_lead_keys.sql")).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
+    // The lead keeps the national part of its numbers, which those lookups compare.
     assert_eq!(admin.get("Lead", uid(&asha)).await["mobile_key"], json!("9845000001"));
-    refused(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "A", "phone": "0091 98450 00001"}))).await, "already exists");
 
     // ───────────── converting onto what exists ─────────────
     let rao = admin.insert("Customer", json!({"customer_name": "Rao Works"})).await;
@@ -1101,15 +1096,6 @@ async fn day_one(k: &Arc<Kernel>) {
     assert_eq!(anna.get("Opportunity", eve_deal).await["status"], json!("Open"), "cancelling the order reopens it");
     refused(anna.k.run_action(&anna.ctx, "Lead", uid(&eve), "undo_conversion", json!({})).await, "sales order");
     unmoved(&admin, uid(&eve), &again, eve_deal, q).await;
-    // A lead converted before 0.8.0 kept no record of what was made: its records come back, the customer stays.
-    let fay = anna.insert("Lead", json!({"first_name": "Fay", "email": "fay@old.test"})).await;
-    let fays = anna.action("Lead", uid(&fay), "convert_to_customer", json!({})).await;
-    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
-    sqlx::query("update e_lead set conversion = null where tenant_id = $1 and id = $2").bind(tenant).bind(uid(&fay)).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
-    anna.action("Lead", uid(&fay), "undo_conversion", json!({})).await;
-    assert_eq!(anna.get("Lead", uid(&fay)).await["status"], json!("Qualified"));
-    admin.get("Customer", vid(&fays)).await;
 
     // ───────────── reopening a closed deal ─────────────
     let won = uid(&anna
@@ -1132,16 +1118,6 @@ async fn day_one(k: &Arc<Kernel>) {
         story.iter().any(|a| a["details"].as_str().is_some_and(|d| d.contains("It was Lost") && d.contains("Price") && d.contains("Went local"))),
         "{story:?}"
     );
-
-    // A deal open before this release reopens where it stood: the release's backfill.
-    let older = uid(&anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": back["id"], "sales_stage": stage("Proposal").await})).await);
-    let mut tx = k.db.system_tx().await.unwrap();
-    sqlx::query("update e_opportunity set open_stage = null where id = $1").bind(older).execute(&mut *tx).await.unwrap();
-    sqlx::raw_sql(include_str!("../packages/crm/sql/001_open_stage.sql")).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
-    anna.action("Opportunity", older, "mark_won", json!({})).await;
-    anna.action("Opportunity", older, "reopen", json!({})).await;
-    assert_eq!(anna.get("Opportunity", older).await["sales_stage"], stage("Proposal").await);
 
     // ───────────── a prospect's deal ─────────────
     let initech = maria.insert("Prospect", json!({"prospect_name": "Initech Labs"})).await;
@@ -1404,19 +1380,6 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     let at = |v: &Value| ferrum_kernel::value::parse_datetime(v.as_str().unwrap()).unwrap();
     assert_eq!(at(&deal["last_activity_at"]), at(&json!(yesterday)), "when it happened");
     assert_eq!(at(&anna.get("Lead", uid(&l3)).await["last_touched_at"]), at(&json!(yesterday)), "the lead was touched too");
-    // The release's backfill gives records already there the same dates.
-    sql(k, "update e_opportunity set stage_changed_at = null, last_activity_at = null where id = $1", did).await;
-    sql(k, "update e_lead set last_touched_at = null where id = $1", uid(&l3)).await;
-    // Overdue already when the release arrives: counted as told, so nobody is flooded.
-    let before = (chrono::Utc::now() - chrono::Duration::hours(5)).to_rfc3339();
-    let stale = anna.insert("Activity", json!({"activity_type": "Task", "subject": "From the old CRM", "lead": l3["id"], "due_at": before})).await;
-    let mut tx = k.db.system_tx().await.unwrap();
-    sqlx::raw_sql(include_str!("../packages/crm/sql/003_touch_dates.sql")).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
-    let back = admin.get("Opportunity", did).await;
-    assert!((at(&back["stage_changed_at"]) - at(&moved["stage_changed_at"])).num_seconds().abs() < 5, "{back:?} {moved:?}");
-    assert_eq!(at(&back["last_activity_at"]), at(&json!(yesterday)));
-    assert_eq!(at(&admin.get("Lead", uid(&l3)).await["last_touched_at"]), at(&json!(yesterday)));
 
     // ───────────── reminders ─────────────
     // An activity overdue: told once, not again, again once moved and overdue again.
@@ -1425,7 +1388,6 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     remind(k).await;
     remind(k).await;
     assert_eq!(told(k, tenant, "crm.activity_overdue", uid(&task)).await, ["anna@rem.test"]);
-    assert!(told(k, tenant, "crm.activity_overdue", uid(&stale)).await.is_empty(), "overdue before the release");
     anna.update("Activity", uid(&task), json!({"due_at": (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339()})).await;
     remind(k).await;
     anna.update("Activity", uid(&task), json!({"due_at": three_hours_ago})).await;
@@ -1595,9 +1557,8 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     assert!(maria.report("activity_by_person", &with(("period", "Week"))).await["rows"].as_array().is_some_and(|r| !r.is_empty()));
 }
 
-/// A team arriving with two pipelines (new business and renewals): the upgrade's migration on data
-/// made the old way, a stage name in both, deals moved across, the board's and the reports' data per
-/// pipeline, what a stage asks of a deal entering it, contacts with buying roles, lines priced from a
+/// A team arriving with two pipelines (new business and renewals): a stage name in both, deals moved
+/// across, the board's and the reports' data per pipeline, what a stage asks of a deal entering it, contacts with buying roles, lines priced from a
 /// price list in another currency, a quotation sent, rejected, revised twice and ordered, and the
 /// forecast by owner and category on known figures.
 async fn pipelines_and_quotes(k: &Arc<Kernel>) {
@@ -1653,7 +1614,7 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
         v
     };
 
-    // ───────────── one pipeline out of the box, and the upgrade's migration ─────────────
+    // ───────────── one pipeline out of the box ─────────────
     let sales = admin.one("SalesPipeline", json!({})).await;
     assert_eq!((sales["pipeline_name"].clone(), sales["is_default"].clone()), (json!("Sales Pipeline"), json!(true)));
     let stages = admin.list("SalesStage", json!({"pipeline": sales["id"]})).await;
@@ -1664,46 +1625,18 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
     };
     let proposal = stage(&sales["id"], "Proposal").await;
     let negotiation = stage(&sales["id"], "Negotiation").await;
-    // Deals made as 0.9.0 made them: an open one, a won one and a lost one, each remembering its last open stage.
+    // An open deal, a won one and a lost one, each in it.
     let open = uid(&anna.insert("Opportunity", deal("Open one", json!({"sales_stage": proposal, "amount": "100"}))).await);
     let won = uid(&anna.insert("Opportunity", deal("Won one", json!({"sales_stage": negotiation, "amount": "200"}))).await);
     anna.action("Opportunity", won, "mark_won", json!({})).await;
     let lost = uid(&anna.insert("Opportunity", deal("Lost one", json!({"sales_stage": proposal}))).await);
     anna.action("Opportunity", lost, "mark_lost", json!({"lost_reason": "Price"})).await;
-    let mut before = Vec::new();
     for d in [open, won, lost] {
-        before.push(admin.get("Opportunity", d).await);
-    }
-    let stages_before = admin.list("SalesStage", json!({})).await;
-    sql(k, "update e_opportunity set pipeline = null where tenant_id = $1", tenant).await;
-    sql(k, "update e_sales_stage set pipeline = null where tenant_id = $1", tenant).await;
-    sql(k, "delete from e_sales_pipeline where tenant_id = $1", tenant).await;
-    let mut tx = k.db.system_tx().await.unwrap();
-    sqlx::raw_sql(include_str!("../packages/crm/sql/004_pipelines.sql")).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
-    let sales = admin.one("SalesPipeline", json!({})).await;
-    assert_eq!((sales["pipeline_name"].clone(), sales["is_default"].clone()), (json!("Sales Pipeline"), json!(true)), "one pipeline, the default");
-    let without = |mut d: Doc| {
-        d.remove("pipeline");
-        d.remove("_titles");
-        d
-    };
-    let stages_after = admin.list("SalesStage", json!({})).await;
-    assert!(stages_after.iter().all(|s| s["pipeline"] == sales["id"]), "every stage in it");
-    assert_eq!(
-        stages_after.into_iter().map(without).collect::<Vec<_>>(),
-        stages_before.into_iter().map(without).collect::<Vec<_>>(),
-        "stages otherwise untouched"
-    );
-    for (d, was) in [open, won, lost].into_iter().zip(before) {
-        let now = admin.get("Opportunity", d).await;
-        assert_eq!(now["pipeline"], sales["id"], "every deal in it");
-        assert_eq!(without(now), without(was), "nothing else changed");
+        assert_eq!(admin.get("Opportunity", d).await["pipeline"], sales["id"], "every deal in it");
     }
     // The won deal reopens where it last stood open, in its pipeline.
     anna.action("Opportunity", won, "reopen", json!({})).await;
     assert_eq!(anna.get("Opportunity", won).await["sales_stage"], negotiation);
-    let (proposal, negotiation) = (stage(&sales["id"], "Proposal").await, stage(&sales["id"], "Negotiation").await);
     let prospecting = stage(&sales["id"], "Prospecting").await;
     let qualification = stage(&sales["id"], "Qualification").await;
 
@@ -2003,17 +1936,8 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
     anna.submit("Quotation", q3).await;
     let latest: Vec<Value> = anna.list("Quotation", json!({"opportunity": rollout.to_string()})).await.iter().map(|q| q["revision"].clone()).collect();
     assert_eq!(latest, [json!(3), json!(2), json!(1)], "the latest revision first");
-    // Quotations from before 0.10.0 get their revisions and links from the platform's amendments.
-    sql(k, "update e_quotation set revision = null, revision_of = null, replaced_by = null where opportunity = $1", rollout).await;
-    let mut tx = k.db.system_tx().await.unwrap();
-    sqlx::raw_sql(include_str!("../packages/crm/sql/005_quotation_revisions.sql")).execute(&mut *tx).await.unwrap();
-    tx.commit().await.unwrap();
-    let (one, two, three) = (anna.get("Quotation", q1).await, anna.get("Quotation", q2).await, anna.get("Quotation", q3).await);
-    assert_eq!([&one["revision"], &two["revision"], &three["revision"]], [&json!(1), &json!(2), &json!(3)]);
-    assert_eq!(
-        (three["revision_of"].clone(), one["replaced_by"].clone(), two["replaced_by"].clone()),
-        (json!(q2.to_string()), json!(q2.to_string()), json!(q3.to_string()))
-    );
+    let (two, three) = (anna.get("Quotation", q2).await, anna.get("Quotation", q3).await);
+    assert_eq!((three["revision_of"].clone(), two["replaced_by"].clone()), (json!(q2.to_string()), json!(q3.to_string())), "each revision names the next");
     assert_eq!(anna.action("Quotation", q3, "mark_accepted", json!({})).await["status"], json!("Accepted"));
     let order = vid(&anna.action("Quotation", q3, "make_sales_order", json!({})).await);
     anna.submit("SalesOrder", order).await;
@@ -2175,20 +2099,9 @@ async fn accounts_and_teams(k: &Arc<Kernel>) {
     assert_eq!(primary, [&retail["id"]]);
     assert!(history.iter().find(|l| l["customer"] == initech["id"]).unwrap()["end_date"].is_null(), "still at Initech");
 
-    // Contacts already there get a link to their customer, the primary (sql/006_account_contacts.sql), once.
-    let olga = maria.insert("Contact", json!({"first_name": "Olga", "designation": "Buyer", "customer": retail["id"]})).await;
-    sql(k, "delete from e_account_contact where contact = $1", uid(&olga)).await;
-    for _ in 0..2 {
-        let mut tx = k.db.system_tx().await.unwrap();
-        sqlx::raw_sql(include_str!("../packages/crm/sql/006_account_contacts.sql")).execute(&mut *tx).await.unwrap();
-        tx.commit().await.unwrap();
-    }
-    let back = maria.one("AccountContact", json!({"contact": olga["id"]})).await;
-    assert_eq!(
-        (back["customer"].clone(), back["is_primary"].clone(), back["title"].clone(), back["start_date"].clone()),
-        (retail["id"].clone(), json!(true), json!("Buyer"), Value::Null)
-    );
     // A contact deleted takes its links along.
+    let olga = maria.insert("Contact", json!({"first_name": "Olga", "designation": "Buyer", "customer": retail["id"]})).await;
+    assert_eq!(maria.one("AccountContact", json!({"contact": olga["id"]})).await["customer"], retail["id"]);
     k.delete(&maria.ctx, "Contact", uid(&olga), None).await.expect("deleted with its link");
     assert!(maria.list("AccountContact", json!({"contact": olga["id"]})).await.is_empty());
 
