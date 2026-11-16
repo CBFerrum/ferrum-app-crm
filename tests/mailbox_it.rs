@@ -46,8 +46,15 @@ impl U {
 
 async fn fresh_kernel() -> Arc<Kernel> {
     let url = std::env::var("FERRUM_CRM_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_crm_test".into());
-    let db = Db::connect(DbConfig { url, max_connections: 10, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 10, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let opener = ferrum_kernel::vault::Opener {
+        database_url: url.clone(),
+        file: "/nonexistent/root.key".into(),
+        kdf: ferrum_kernel::vault::Kdf { m_kib: 64, t: 1, p: 1 },
+        ..Default::default()
+    };
+    ferrum_kernel::vault::open(&db, opener, false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_erp::packages().expect("ERP's packages"));
     packages.extend(ferrum_app_crm::packages().expect("CRM's packages"));
@@ -60,11 +67,7 @@ async fn fresh_kernel() -> Arc<Kernel> {
     for source in ferrum_app_erp::reports().into_iter().chain(ferrum_app_crm::reports()) {
         ferrum_domain::reports::add_source(source);
     }
-    let settings = KernelSettings {
-        secret_key: Some(ferrum_kernel::secret::SecretKey::new([7u8; 32])),
-        public_url: Some("https://ferrum.test".into()),
-        ..Default::default()
-    };
+    let settings = KernelSettings { public_url: Some("https://ferrum.test".into()), ..Default::default() };
     let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("maintenance");
     ferrum_app_erp::maintenance(&k).await.expect("maintenance");
