@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.14.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.15.0-0f766e?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -39,7 +39,7 @@ priced and taxed by the same engine that invoices it.
 
 | | |
 |---|---|
-| **Version** | 0.14.0 (packages: `crm` 0.7.0, `crm_erp` 0.1.2) |
+| **Version** | 0.15.0 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
 | **Kind** | Its own interface at `/crm/` (pipeline board, Today, deal, account, quotation, sequence and forecast pages) plus Ferrum's standard lists and forms for every record |
 | **What it adds** | 36 entities (24 records and 12 line tables), 4 roles, 13 reports, 2 print and document formats, 2 messages, 2 connections, 1 menu with 41 entries, 5 create shortcuts, 5 notification kinds |
 | **Depends on** | Ferrum platform `>=0.3.4, <0.4`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
@@ -194,7 +194,7 @@ On a phone:
 - **Viewed is honest.** It is set when the customer first acts on the page, not when a mail scanner fetches it. The link lasts through the quotation's valid-till date, and ends when the quotation expires, is cancelled, or is answered.
 - **Order on accept.** A setting (off by default) makes the draft sales order the moment a quotation is accepted.
 - **Revisions.** A quotation is revised by cancelling and amending; Revision, Revises and Replaced By keep the chain.
-- **Approval.** Approval rules set a discount percentage or a total above which someone with a chosen role must approve before submitting. What was approved (total and discount) is kept, and a later change needs approval again. The orders and invoices made from it keep the approved terms.
+- **Approval.** Approval rules set a discount percentage or a total above which someone with a chosen role must approve before submitting. What was approved is kept as a digest of its terms (party, lines, discount, taxes, currency, terms and validity), and a later change needs approval again. The orders and invoices made from it keep the approved terms.
 - **Product rules.** An item can require another, exclude another, or need so many of another per unit. A draft that breaks a rule says so, and Add What the Rules Need adds the missing lines.
 - **Print format.** A printable quotation, and a customer document (`crm.quotation_document`) that a workspace edits in Settings.
 - **What the customer typed is personal data.** It is exported and erased with the person.
@@ -407,6 +407,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ### ✅ Recently shipped
 
+- [x] **0.15.0** — An approval is held to the digest of its terms alone: the total and discount kept beside it are gone.
 - [x] **0.14.0** — The package's SQL is its final schema: the backfills for earlier releases are gone.
 - [x] **0.13.6** — The company is in the first section of a lead and a deal; a contact is made from the top of its form with emails and phones.
 - [x] **0.13.4** — New-record forms for lead, contact, customer, prospect and quotation render; Start my forecast asks which company where there are several.
@@ -540,7 +541,7 @@ docs/             connection notes and screenshots
 
 ## 📜 Changelog
 
-Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.14.0**.
+Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.15.0**.
 
 ## 🤝 Contributing
 

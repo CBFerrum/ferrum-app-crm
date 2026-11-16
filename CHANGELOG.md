@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.15.0
+
+Package `crm` 0.8.0. Needs the same platform as 0.14.0. No interface change.
+
+* **An approval is held to the digest of what was approved, alone.** Approving a quotation has written Approved As (the
+  digest of its party, lines, additional discount, taxes, currency, terms and validity) since FEO-025. The hidden
+  Approved Total and Approved Discount, and the check against them for a quotation approved before the terms were kept,
+  served only approvals no installation holds: they are gone. Any change to the terms still needs approving again.
+
+Tests: nothing proved the fallback alone (every approval in the suites carries its digest); the suites pass unchanged.
+
 ## 0.14.0
 
 Package `crm` 0.7.0. Needs the same platform as 0.13.6. No interface change. The package's SQL reads as its final
