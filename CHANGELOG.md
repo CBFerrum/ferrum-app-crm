@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.14.0
+
+Package `crm` 0.7.0. Needs the same platform as 0.13.6. No interface change. The package's SQL reads as its final
+schema: a database is made afresh from it (nothing was ever installed from the files that went).
+
+* **No upgrade history in the package SQL.** `001_open_stage`, `002_lead_keys`, `003_touch_dates`, `004_pipelines`,
+  `005_quotation_revisions`, `006_account_contacts` and `008_link_lines` only brought records of earlier releases up to
+  date; they are gone. Everything they filled is kept by the engine for every record it makes, and a new workspace's
+  pipeline and stages come from the package's seed. The columns `011_filed_mail_open` added are in the table
+  `009_filed_mail` makes.
+* **Quotations no longer answer Mark Viewed**, which only 0.12.0's package invoked: the platform's opened event marks a
+  quotation viewed, as since 0.13.0.
+
+Tests: the suites' upgrade sections went with the files they ran; what they also proved stays (a lead's stored mobile
+key, each revision naming the next, a contact's link to its customer, the seeded pipeline holding every deal, a
+cancelled quotation's revoked link in its history).
+
 ## 0.13.6
 
 Two faults from the second browser walk, in the package only (no new interface build).
