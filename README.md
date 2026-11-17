@@ -13,7 +13,7 @@
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
 ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-data-336791?style=flat-square&logo=postgresql&logoColor=white)
 ![React](https://img.shields.io/badge/React%20%2B%20TypeScript-interface-0ea5e9?style=flat-square&logo=react&logoColor=white)
-![Tests](https://img.shields.io/badge/tests-28%20Rust%20%2B%2015%20UI%20files-16a34a?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-27%20Rust%20%2B%2015%20UI%20files-16a34a?style=flat-square)
 
 ### Take a lead from first contact to a priced, taxed quotation and a sales order, without leaving Ferrum.
 
@@ -45,7 +45,7 @@ priced and taxed by the same engine that invoices it.
 | **Depends on** | Ferrum platform `>=0.3.4, <0.4`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
 | **Works with** | ERP (orders, invoices), Mail (communications and calendar events), Helpdesk (tickets on the account page), Bookings, Forms |
 | **Languages** | English, Arabic, Hindi |
-| **Tests** | 28 Rust tests against a real PostgreSQL, 15 interface test files |
+| **Tests** | 27 Rust tests against a real PostgreSQL, 15 interface test files |
 | **Licence** | AGPL-3.0-only |
 
 ## 📸 Screenshots
@@ -475,7 +475,6 @@ After installing:
 3. Check the default **Sales Pipeline** and its seven stages (Prospecting to Lost), and add your own pipelines, lost reasons, territories and buying roles.
 4. Add **Sales Teams**, **Lead Assignment Rules** and **Lead Scoring Rules**.
 5. Edit the message and document templates in Settings, so quotation mail speaks as you do.
-6. Administrators updating from an older version run the app update so new fields and connections arrive; nothing breaks before they do.
 
 ## 🔧 Develop
 
@@ -531,7 +530,7 @@ CI (`.github/workflows/ci.yml`) runs `cargo fmt -- --check`, `cargo clippy --all
 ```text
 app.yaml          the manifest: id, version, platform range, what it adds to Ferrum
 packages/crm/     entities (pipeline, quotation, accounts, sequences, forecast, record types),
-                  roles, print format, messages, documents, connections, seed data, SQL migrations
+                  roles, print format, messages, documents, connections, seed data, SQL
 packages/crm_erp/ the connector: ERP taxes and Create Sales Order on a quotation
 connectors/erp/   the same connector as a separate manifest
 src/              Rust: hooks and actions for leads, deals, quotations, sequences, forecasts,

@@ -1,4 +1,4 @@
-# Connecting a mailbox and a calendar at an outside provider (CR-2)
+# Connecting a mailbox and a calendar at an outside provider
 
 CRM offers two connections, turned off (Administration, Connections): **Shared mailbox and calendar** (the
 workspace's account, signed in once by an administrator) and **A person's own mailbox and calendar** (each person
@@ -40,7 +40,7 @@ makes none twice; no body anywhere.
    own cannot be pulled: the pull is refused with "each person's own: it is used as a person" (tested). So nothing here
    pulls *per person*; the personal connection can be signed in to and its operations called as the person (by an effect on a
    button, or an app), but not scheduled. A pull that runs for each connected person, under their token and with their own
-   cursor, is what CR-2 needs.
+   cursor, is what a personal mailbox needs.
 2. **A mapping is one `find` by fields.** It cannot look a person up by an address, so a message cannot be put on a lead
    directly; CRM relies on Mail's Communication and its own event handler. One item cannot make two records.
 3. **A write onto another app's entity has all of that entity's effects.** Mapped onto Mail's CalendarEvent, an event
