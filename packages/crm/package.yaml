@@ -1,5 +1,5 @@
 package: crm
-version: 0.8.1
+version: 0.9.0
 label: CRM
 description: Leads, opportunities and the sales pipeline, prospects, contacts and addresses, campaigns, activities and quotations.
 # Contacts, customers and items are shared with other apps; ERP's sales orders and taxes come with
@@ -219,7 +219,7 @@ personal_data:
   # Where the person worked and as what.
   - {entity: AccountContact, match: contact, erase: [title]}
   # An organization's own email and phone can be a person's (a sole trader's); its name stays, as a company customer's does.
-  - {entity: Prospect, match: email, phone: phone, erase: [email, phone, notes]}
+  - {entity: Prospect, match: email, phone: phone, erase: [email, phone, phone_key, notes]}
   # What was written down about the person on their lead or contact: calls, meetings and notes.
   - {entity: Activity, match: lead, erase: [subject, details, call_reason]}
   - {entity: Activity, match: contact, erase: [subject, details, call_reason]}

@@ -69,7 +69,7 @@
     - {name: email_consent_on, type: date, label: Email Since, description: "Since when marketing email is allowed or refused; set when it changes"}
     - {name: email_consent_how, type: data, description: "A web form, in person, a phone call, a request by mail or letter…", label: Email Given or Withdrawn By}
     - {name: email_bounced_on, type: date, read_only: true, no_copy: true, in_filter: true, label: Email Bounced On, description: "The day a mail to this address came back undelivered: sequences send nothing more to it"}
-    - {name: allow_duplicate, type: check, no_copy: true, description: "Save it although an open lead has the same email or phone; it is linked to that lead, to merge later"}
+    - {name: allow_duplicate, type: check, no_copy: true, description: "Save it although an open lead, a customer, a contact or a prospect has the same email or phone; a lead it repeats is linked, to merge later"}
     - {name: phone_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The phone's national part, by which the same person is found"}
     - {name: mobile_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The mobile's national part, by which the same person is found"}
     - {name: duplicate_of, type: link, to: Lead, read_only: true, no_copy: true, in_filter: true, description: "An earlier lead with the same email or phone, to merge with or keep apart"}

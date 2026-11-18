@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.17.0
+
+Package `crm` 0.9.0. Needs the same platform as 0.16.0. No interface change (the prospect form shows Allow Duplicate).
+
+- **A lead is checked against customers, contacts and prospects.** A person entering a lead whose email or phone is
+  already an open lead's, a customer's, a contact's or a prospect's (not the lead's own prospect) is refused and told
+  which, unless they tick Allow Duplicate. A lead repeating a converted, lost or junk lead is still saved and linked
+  to it. Forms, mail and integrations (the engine) are never refused. A converted lead being edited is not checked
+  against its own customer.
+- **A prospect is checked.** Another prospect with the same email, phone (its last ten digits) or website domain, or
+  a customer with the same email or phone, refuses a prospect a person enters or whose email, phone or website they
+  change, unless they tick Allow Duplicate (decided save by save).
+- **A refusal names only what you may open.** It used to print another rep's lead number and name to anyone; now
+  someone who may not open the match is told that one exists and to ask their manager.
+- Database: `e_prospect` gains `phone_key`, `website_key` (both indexed) and `allow_duplicate`, and `email` is indexed.
+  Existing prospects are matched by email at once, and by phone and website once they are next saved.
+
 ## 0.16.2
 
 Package `crm` 0.8.1. Needs the same platform as 0.16.0. No database or interface change.

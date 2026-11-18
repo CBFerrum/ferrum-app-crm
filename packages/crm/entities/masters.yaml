@@ -136,8 +136,11 @@
     - {name: annual_revenue, type: currency, min: "0"}
     - {name: territory, type: link, to: Territory, in_filter: true}
     - {name: website, type: url}
-    - {name: email, type: email}
+    - {name: email, type: email, index: true}
     - {name: phone, type: phone}
+    - {name: phone_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The phone's national part, by which the same organization is found"}
+    - {name: website_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The website's domain, by which the same organization is found"}
+    - {name: allow_duplicate, type: check, no_copy: true, description: "Save it although another prospect or a customer has the same email, phone or website; decided save by save"}
     - {name: assigned_to, type: email, default_expr: "user.email", label: Account Owner, in_list: true, in_filter: true}
     - {name: parent_prospect, type: link, to: Prospect, label: Parent Account, in_filter: true, description: "The group or head office it belongs to"}
     - {name: customer, type: link, to: Customer, read_only: true, no_copy: true, in_filter: true, description: Set when one of its leads is converted}

@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.16.2-0f766e?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.17.0-0f766e?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -39,7 +39,7 @@ priced and taxed by the same engine that invoices it.
 
 | | |
 |---|---|
-| **Version** | 0.16.2 (packages: `crm` 0.8.1, `crm_erp` 0.1.2) |
+| **Version** | 0.17.0 (packages: `crm` 0.9.0, `crm_erp` 0.1.2) |
 | **Kind** | Its own interface at `/crm/` (pipeline board, Today, deal, account, quotation, sequence and forecast pages) plus Ferrum's standard lists and forms for every record |
 | **What it adds** | 36 entities (24 records and 12 line tables), 4 roles, 13 reports, 2 print and document formats, 2 messages, 2 connections, 1 menu with 41 entries, 5 create shortcuts, 5 notification kinds |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
@@ -372,7 +372,7 @@ Compared with Salesforce Sales Cloud, HubSpot Sales Hub, Microsoft Dynamics 365 
 
 Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of the feature; 🟡 for Ferrum is explained below.
 
-1. Open leads refuse a duplicate by email or phone; contacts, customers and prospects are merged afterwards, and a new lead does not look at existing customers.
+1. A lead a person enters is refused (unless they tick Allow Duplicate) when an open lead, a customer, a contact or a prospect has its email or phone; a prospect when another prospect has its email, phone or website domain, or a customer its email or phone. A refusal names the record only to someone who may open it. A lead repeating a converted, lost or junk lead is saved and linked. Matching is exact (whole email, a phone's last ten digits); contacts and customers themselves are checked only afterwards, by the platform's merge.
 2. Six fixed requirements per stage (amount, close date, primary contact, next step, lines, submitted quotation), plus any field through a record type.
 3. Two connections ship turned off and read message headers only; a workspace fills in its provider's addresses and client. Mail's own accounts are the route today.
 4. Mail's calendar events are filed on people as meetings; the outside-provider calendar connection ships off and its events are not pulled.
@@ -407,6 +407,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ### ✅ Recently shipped
 
+- [x] **0.17.0**: A lead is checked against customers, contacts and prospects, a prospect against prospects and customers; a refusal names only what you may open.
 - [x] **0.16.2**: Only the customer answers a quotation on their link; making a deal of a lead needs the right to change the lead.
 - [x] **0.16.1**: A marketing mail is shown on the person and touches no lead or deal.
 - [x] **0.16.0**: Upkeep runs one workspace at a time, on whichever replica is free.
@@ -545,7 +546,7 @@ docs/             connection notes and screenshots
 
 ## 📜 Changelog
 
-Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.16.2**.
+Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.17.0**.
 
 ## 🤝 Contributing
 
