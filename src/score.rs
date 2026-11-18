@@ -143,19 +143,7 @@ pub(crate) async fn again(k: &Kernel, ctx: &Ctx, tx: &mut Tx, lead: Uuid) -> Res
 const PER_RUN: i64 = 500;
 
 /// Open leads not scored for a day, or since a rule changed, scored again.
-pub(crate) async fn rescore_all(k: &Kernel) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active'").fetch_all(&mut *tx).await?;
-    tx.commit().await?;
-    for tenant in tenants {
-        if let Err(e) = rescore(k, tenant).await {
-            tracing::warn!(%tenant, "CRM lead scores failed: {e}");
-        }
-    }
-    Ok(())
-}
-
-async fn rescore(k: &Kernel, tenant: Uuid) -> Result<()> {
+pub(crate) async fn rescore(k: &Kernel, tenant: Uuid) -> Result<()> {
     let schema = k.registry.schema(tenant).await?;
     if schema.entity("LeadScoringRule").is_none() {
         return Ok(());

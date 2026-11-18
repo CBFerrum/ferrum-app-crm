@@ -190,24 +190,10 @@ async fn is_manager(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<bool> {
 
 // ───────────────────────────── snapshots ─────────────────────────────
 
-/// Takes the snapshots that are due, tenant by tenant. One replica takes a tenant a round; a snapshot is
-/// one row a person, company, period and day, so a second pass the same day changes nothing.
-pub(crate) async fn snapshot_all(k: &Kernel) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active'").fetch_all(&mut *tx).await?;
-    tx.commit().await?;
-    for tenant in tenants {
-        match snapshot(k, tenant).await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(%tenant, snapshots = n, "forecasts snapshotted"),
-            Err(e) => tracing::warn!(%tenant, "forecast snapshots failed: {e}"),
-        }
-    }
-    Ok(())
-}
-
+/// Takes one workspace's snapshots that are due. One replica takes a workspace a round; a snapshot is one row a person,
+/// company, period and day, so a second pass the same day changes nothing.
 // ponytail: 500 owners a tenant and pass; the next pass takes the rest.
-async fn snapshot(k: &Kernel, tenant: Uuid) -> Result<usize> {
+pub(crate) async fn snapshot(k: &Kernel, tenant: Uuid) -> Result<usize> {
     let schema = k.registry.schema(tenant).await?;
     if schema.entity("ForecastSnapshot").is_none() {
         return Ok(0);

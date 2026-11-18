@@ -688,24 +688,10 @@ pub(crate) async fn opened(k: &Kernel, ev: &ferrum_kernel::outbox::Event) -> Res
     Ok(())
 }
 
-/// Moves open and sent quotations past their validity to Expired, tenant by tenant. Idempotent, and safe on
-/// several replicas at once: one replica handles a tenant per round and only Open → Expired moves.
-pub(crate) async fn expire_all(k: &Kernel) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active'").fetch_all(&mut *tx).await?;
-    tx.commit().await?;
-    for tenant in tenants {
-        match expire(k, tenant).await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(%tenant, expired = n, "quotations expired"),
-            Err(e) => tracing::warn!(%tenant, "quotation expiry failed: {e}"),
-        }
-    }
-    Ok(())
-}
-
+/// Moves one workspace's open and sent quotations past their validity to Expired. Idempotent, and safe on several
+/// replicas at once: one replica handles a workspace per round and only Open → Expired moves.
 // ponytail: up to 10,000 quotations per tenant and pass; the next pass takes the rest.
-async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
+pub(crate) async fn expire(k: &Kernel, tenant: Uuid) -> Result<usize> {
     let schema = k.registry.schema(tenant).await?;
     if schema.entity("Quotation").is_none() {
         return Ok(0);

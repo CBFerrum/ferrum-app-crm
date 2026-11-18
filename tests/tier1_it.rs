@@ -174,7 +174,6 @@ async fn fresh_kernel() -> Arc<Kernel> {
     let k = Kernel::boot(db, catalog, hooks, settings, Some(Arc::new(Captured))).await.expect("boot");
     k.set_file_store(Arc::new(MemFiles::default()));
     ferrum_domain::maintenance(&k).await.expect("maintenance");
-    ferrum_app_erp::maintenance(&k).await.expect("maintenance");
     k
 }
 
@@ -449,7 +448,7 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     let t4 = token(&admin.k.issue_link_now(&admin.ctx, "Quotation", q4, &spec(5)).await.unwrap().url);
     sql(k, "update e_quotation set valid_till = current_date - 2 where tenant_id = $1 and id = $2", tenant, q4).await;
     assert!(k.use_link("tier1", &t4, "customer_accept", &given(json!({"signed_name": "Late"})), None).await.is_err(), "past its validity nothing is accepted");
-    ferrum_app_crm::maintenance(k).await.unwrap();
+    ferrum_app_crm::maintenance(k, tenant).await.unwrap();
     assert_eq!(anna.get("Quotation", q4).await["status"], json!("Expired"));
     assert!(anna.k.record_links(&anna.ctx, "Quotation", q4).await.unwrap().iter().all(|l| !l["revoked_at"].is_null()), "its links are revoked");
     let q5 = quote(anna, acme, Some(jane), widget, "5").await;
@@ -716,7 +715,7 @@ async fn timeline_and_filing(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, mari
         )
         .await);
     drain(k).await;
-    ferrum_app_crm::maintenance(k).await.unwrap();
+    ferrum_app_crm::maintenance(k, tenant).await.unwrap();
     assert_eq!(admin.one("Activity", json!({"calendar_event": ev2.to_string()})).await["status"], json!("Done"));
     assert_eq!(anna.get("Lead", pat).await["status"], json!("Contacted"));
     // nobody known on the guest list: no activity
@@ -816,8 +815,8 @@ async fn hosted_mail(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
     assert_eq!(left, 1, "only the stranger's, on the lead made of it: {left}");
 }
 
-async fn run_steps(k: &Kernel) {
-    ferrum_app_crm::maintenance(k).await.expect("maintenance");
+async fn run_steps(k: &Kernel, tenant: Uuid) {
+    ferrum_app_crm::maintenance(k, tenant).await.expect("maintenance");
 }
 
 async fn due_now(k: &Kernel, tenant: Uuid) {
@@ -869,7 +868,7 @@ async fn sequences(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
     let enrolled = |id: Uuid| async move { anna.get("SequenceEnrolment", id).await };
 
     // ── the first step is due at once: a task for the lead's owner; the next waits two working days
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     let task = anna.one("Activity", json!({"subject": "Prepare the intro call", "lead": amy.to_string()})).await;
     assert_eq!((task["activity_type"].clone(), task["assigned_to"].clone(), task["status"].clone()), (json!("Task"), json!("anna@tier1.test"), json!("Open")));
     let e = enrolled(en).await;
@@ -877,12 +876,12 @@ async fn sequences(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
     let due = chrono::DateTime::parse_from_rfc3339(e["next_run_at"].as_str().unwrap()).unwrap();
     let wait = due.signed_duration_since(chrono::Utc::now());
     assert!(wait > chrono::Duration::hours(47) && wait < chrono::Duration::days(5), "two working days on a calendar with weekends: {wait}");
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     assert_eq!(anna.list("Activity", json!({"lead": amy.to_string()})).await.len(), 1, "nothing runs before it is due: one step once");
 
     // ── the message step sends the template and puts the mail on the lead
     due_now(k, tenant).await;
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     let sent = anna.k.message_log(&anna.ctx, Some(("Lead", amy)), None, 10).await.unwrap();
     assert!(sent.iter().any(|m| m["template"] == "x_seq_hello" && m["recipient"] == "amy@seq.test"), "{sent:?}");
     assert_eq!(anna.list("Activity", json!({"lead": amy.to_string(), "activity_type": "Email", "status": "Done"})).await.len(), 1);
@@ -894,7 +893,7 @@ async fn sequences(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
     let e = enrolled(en).await;
     assert_eq!((e["status"].clone(), e["stopped_reason"].clone()), (json!("Stopped"), json!("Replied")));
     due_now(k, tenant).await;
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     assert!(anna.list("Activity", json!({"lead": amy.to_string(), "activity_type": "Call"})).await.is_empty());
 
     // ── booking a meeting, opting out, conversion and the owner's own stop, each with its reason
@@ -918,7 +917,7 @@ async fn sequences(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
     let ed_en = vid(&anna.action("Lead", ed, "enrol_in_sequence", json!({"sequence": seq})).await);
     anna.action("Lead", ed, "convert_to_customer", json!({})).await;
     due_now(k, tenant).await;
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     assert_eq!(by_mail(ed_en).await["stopped_reason"], json!("Converted"));
     assert!(anna.list("Activity", json!({"lead": ed.to_string()})).await.is_empty(), "no step ran for a converted lead");
 
@@ -931,10 +930,10 @@ async fn sequences(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
     drain(k).await;
     assert_eq!(by_mail(fay_en).await["status"], json!("Active"), "this sequence does not stop on a reply");
     admin.update("Sequence", quiet, json!({"enabled": false})).await;
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     assert!(anna.list("Activity", json!({"subject": "Ring"})).await.is_empty(), "switched off: nothing runs");
     admin.update("Sequence", quiet, json!({"enabled": true})).await;
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     assert_eq!(anna.list("Activity", json!({"subject": "Ring"})).await.len(), 1);
     assert_eq!(by_mail(fay_en).await["status"], json!("Completed"), "the last step done");
     let _ = seq_id;
@@ -942,7 +941,7 @@ async fn sequences(k: &Arc<Kernel>, admin: &U, anna: &U, tenant: Uuid) {
     // ── two replicas at once: one step, once
     let gus = lead("Gus").await;
     anna.action("Lead", gus, "enrol_in_sequence", json!({"sequence": quiet.to_string()})).await;
-    let _ = tokio::join!(ferrum_app_crm::maintenance(k), ferrum_app_crm::maintenance(k));
+    let _ = tokio::join!(ferrum_app_crm::maintenance(k, tenant), ferrum_app_crm::maintenance(k, tenant));
     assert_eq!(anna.list("Activity", json!({"lead": gus.to_string(), "subject": "Ring"})).await.len(), 1);
 }
 
@@ -1012,7 +1011,7 @@ async fn forecast(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, maria: &U, tena
     );
 
     // ── snapshots on a schedule: one for the owner today, not another until the days are up
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     let snaps = admin.list("ForecastSnapshot", json!({"assigned_to": "anna@tier1.test"})).await;
     assert_eq!(snaps.len(), 1);
     assert_eq!(dec(&snaps[0]["closed"]), n("700"));
@@ -1020,7 +1019,7 @@ async fn forecast(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, maria: &U, tena
         (dec(&snaps[0]["figures"]["Commit"]["calculated"]), dec(&snaps[0]["figures"]["Commit"]["submitted"]), dec(&snaps[0]["figures"]["Commit"]["adjusted"])),
         (n("1000"), n("900"), n("1100"))
     );
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     assert_eq!(admin.list("ForecastSnapshot", json!({"assigned_to": "anna@tier1.test"})).await.len(), 1, "once for the days between");
     assert_eq!(maria.list("ForecastSnapshot", json!({"assigned_to": "anna@tier1.test"})).await.len(), 1, "her manager sees it");
     assert!(ben.list("ForecastSnapshot", json!({"assigned_to": "anna@tier1.test"})).await.is_empty());
@@ -1032,7 +1031,7 @@ async fn forecast(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, maria: &U, tena
     }
     let bigger = uid(&admin.one("Opportunity", json!({"amount": "1000"})).await);
     anna.update("Opportunity", bigger, json!({"amount": "1500", "items": []})).await;
-    run_steps(k).await;
+    run_steps(k, tenant).await;
     assert_eq!(admin.list("ForecastSnapshot", json!({"assigned_to": "anna@tier1.test"})).await.len(), 2);
     let params = [("from_date", (today() - chrono::Duration::days(30)).to_string()), ("to_date", (today() + chrono::Duration::days(30)).to_string())];
     let report = |name: &'static str, who: &U| {
@@ -1065,7 +1064,7 @@ async fn forecast(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, maria: &U, tena
         sqlx::query("delete from e_forecast_snapshot where tenant_id = $1").bind(tenant).execute(&mut *tx).await.unwrap();
         tx.commit().await.unwrap();
     }
-    let _ = tokio::join!(ferrum_app_crm::maintenance(k), ferrum_app_crm::maintenance(k));
+    let _ = tokio::join!(ferrum_app_crm::maintenance(k, tenant), ferrum_app_crm::maintenance(k, tenant));
     assert_eq!(admin.list("ForecastSnapshot", json!({"assigned_to": "anna@tier1.test"})).await.len(), 1);
     // the fiscal year starts in April: a quarter is Oct to Dec
     let q = uid(&anna.insert("ForecastSubmission", json!({"period": "Quarter", "start_date": "2026-11-20"})).await);

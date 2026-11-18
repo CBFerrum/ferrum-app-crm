@@ -70,7 +70,6 @@ async fn fresh_kernel() -> Arc<Kernel> {
     let settings = KernelSettings { public_url: Some("https://ferrum.test".into()), ..Default::default() };
     let k = Kernel::boot(db, Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("maintenance");
-    ferrum_app_erp::maintenance(&k).await.expect("maintenance");
     k
 }
 
@@ -281,7 +280,7 @@ async fn sequence_mail(admin: &U, tenant: Uuid, company: &Value) {
         let seq = seq.clone();
         async move { uid(&admin.insert("SequenceEnrolment", json!({"sequence": seq, "lead": l.to_string()})).await) }
     };
-    let step = || async { ferrum_app_crm::maintenance(k).await.unwrap() };
+    let step = || async { ferrum_app_crm::maintenance(k, tenant).await.unwrap() };
     let sent_to = |address: &'static str| async move { admin.list("Communication", json!({"direction": "Sent", "recipients": address})).await };
 
     // ── sent through Mail: Reply-To the owner, the second threaded under the first, the Message-IDs kept
@@ -365,6 +364,7 @@ async fn sequence_mail(admin: &U, tenant: Uuid, company: &Value) {
 /// (A sequence has no kind of its own: each step's template is promotional or operational.)
 async fn sequence_opt_out(admin: &U, company: &Value) {
     let k = &admin.k;
+    let tenant = admin.ctx.tenant;
     for (key, category, body) in [
         ("x_opt_promo", "promotional", "<p>Sale for {{ doc.lead_name }} <a href=\"{{ opt_out }}\">Unsubscribe</a></p>"),
         ("x_opt_ops", "operational", "<p>Your account, {{ doc.lead_name }}</p>"),
@@ -392,7 +392,7 @@ async fn sequence_opt_out(admin: &U, company: &Value) {
         let seq = seq.to_string();
         async move { uid(&admin.insert("SequenceEnrolment", json!({"sequence": seq, "lead": l.to_string()})).await) }
     };
-    let step = || async { ferrum_app_crm::maintenance(k).await.unwrap() };
+    let step = || async { ferrum_app_crm::maintenance(k, tenant).await.unwrap() };
     let sent_to = |address: &'static str| async move { admin.list("Communication", json!({"direction": "Sent", "recipients": address})).await };
 
     // ── the mail holds the platform's link in its body and its headers; following it stops the sequence, nothing more goes
@@ -456,7 +456,7 @@ async fn resume(admin: &U, company: &Value) {
             .await)
     };
     let enrol = |l: Uuid| async move { uid(&admin.insert("SequenceEnrolment", json!({"sequence": seq.to_string(), "lead": l.to_string()})).await) };
-    let step = || async { ferrum_app_crm::maintenance(k).await.unwrap() };
+    let step = || async { ferrum_app_crm::maintenance(k, tenant).await.unwrap() };
     let refused = |r: ferrum_kernel::Result<Value>, words: &str| {
         let e = r.expect_err("refused").to_string();
         assert!(e.contains(words), "{e}");
