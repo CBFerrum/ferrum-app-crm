@@ -93,20 +93,6 @@ const KINDS: [Kind; 4] = [
 /// The most of one kind told per workspace and run; the next run tells the rest.
 const PER_RUN: i64 = 500;
 
-pub(crate) async fn remind_all(k: &Kernel) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active'").fetch_all(&mut *tx).await?;
-    tx.commit().await?;
-    for tenant in tenants {
-        match remind(k, tenant).await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(%tenant, told = n, "CRM reminders"),
-            Err(e) => tracing::warn!(%tenant, "CRM reminders failed: {e}"),
-        }
-    }
-    Ok(())
-}
-
 /// One workspace's reminders; how many were told.
 pub(crate) async fn remind(k: &Kernel, tenant: Uuid) -> Result<usize> {
     let schema = k.registry.schema(tenant).await?;

@@ -764,19 +764,7 @@ async fn meeting(k: &Kernel, tenant: Uuid, event: Uuid, gone: bool) -> Result<()
 }
 
 /// Meetings whose event has ended are done: the lead is touched as for any done activity. A batch a pass.
-pub(crate) async fn finish_meetings(k: &Kernel) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active'").fetch_all(&mut *tx).await?;
-    tx.commit().await?;
-    for tenant in tenants {
-        if let Err(e) = finish(k, tenant).await {
-            tracing::warn!(%tenant, "meetings were not finished: {e}");
-        }
-    }
-    Ok(())
-}
-
-async fn finish(k: &Kernel, tenant: Uuid) -> Result<()> {
+pub(crate) async fn finish(k: &Kernel, tenant: Uuid) -> Result<()> {
     let schema = k.registry.schema(tenant).await?;
     if schema.entity("Activity").is_none_or(|e| e.field("calendar_event").is_none()) {
         return Ok(());

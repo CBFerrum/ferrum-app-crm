@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.0
+
+Needs Ferrum 0.4.0 (apps' upkeep runs one workspace at a time, on whichever replica is free).
+
+- **Upkeep is one workspace's.** `maintenance(k, tenant)` expires quotations, tells reminders, scores leads again, finishes meetings, runs sequence steps and takes forecast snapshots for the workspace the platform hands it; the list of workspaces is the platform's. Each step still logs a failure and lets the others run, and the first failure is now returned, which the platform keeps on the workspace's row.
+
+No database or interface change.
+
 ## 0.15.2
 
 Needs the same platform as 0.15.1. Interface unchanged. Database change: the package's SQL is one file, `007_filed.sql`

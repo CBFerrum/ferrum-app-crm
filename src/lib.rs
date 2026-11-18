@@ -80,14 +80,52 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
     vec![Arc::new(reports::CrmReports)]
 }
 
-/// Periodic upkeep (every few minutes on every replica; must be idempotent and safe to run concurrently).
-pub async fn maintenance(k: &Kernel) -> Result<()> {
-    quotation::expire_all(k).await?;
-    remind::remind_all(k).await?;
-    score::rescore_all(k).await?;
-    filing::finish_meetings(k).await?;
-    sequence::run_due(k).await?;
-    forecast::snapshot_all(k).await
+/// Periodic upkeep of one workspace (the platform runs it about once a minute, on whichever replica is free; every step
+/// is idempotent and safe to run concurrently). A failing step is logged and does not stop the others; the first error
+/// is returned.
+pub async fn maintenance(k: &Kernel, tenant: uuid::Uuid) -> Result<()> {
+    let mut first_error: Option<Error> = None;
+    match quotation::expire(k, tenant).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(%tenant, expired = n, "quotations expired"),
+        Err(e) => {
+            tracing::warn!(%tenant, "quotation expiry failed: {e}");
+            first_error.get_or_insert(e);
+        }
+    }
+    match remind::remind(k, tenant).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(%tenant, told = n, "CRM reminders"),
+        Err(e) => {
+            tracing::warn!(%tenant, "CRM reminders failed: {e}");
+            first_error.get_or_insert(e);
+        }
+    }
+    if let Err(e) = score::rescore(k, tenant).await {
+        tracing::warn!(%tenant, "CRM lead scores failed: {e}");
+        first_error.get_or_insert(e);
+    }
+    if let Err(e) = filing::finish(k, tenant).await {
+        tracing::warn!(%tenant, "meetings were not finished: {e}");
+        first_error.get_or_insert(e);
+    }
+    match sequence::run_tenant(k, tenant).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(%tenant, steps = n, "sequence steps ran"),
+        Err(e) => {
+            tracing::warn!(%tenant, "sequence steps failed: {e}");
+            first_error.get_or_insert(e);
+        }
+    }
+    match forecast::snapshot(k, tenant).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(%tenant, snapshots = n, "forecasts snapshotted"),
+        Err(e) => {
+            tracing::warn!(%tenant, "forecast snapshots failed: {e}");
+            first_error.get_or_insert(e);
+        }
+    }
+    first_error.map_or(Ok(()), Err)
 }
 
 /// The notification kinds app.yaml declares (`shell.notification`), with the defaults it declares.

@@ -83,7 +83,6 @@ async fn fresh_kernel() -> Arc<Kernel> {
     }
     let k = Kernel::boot(db, catalog, hooks, KernelSettings::default(), None).await.expect("boot");
     ferrum_domain::maintenance(&k).await.expect("maintenance");
-    ferrum_app_erp::maintenance(&k).await.expect("maintenance");
     k
 }
 
@@ -464,7 +463,7 @@ async fn scenario() {
     );
     let q4 = uid(&anna.insert("Quotation", json!({"customer": acme, "items": line, "valid_till": today().to_string()})).await);
     anna.submit("Quotation", q4).await;
-    ferrum_app_crm::maintenance(&k).await.expect("maintenance");
+    ferrum_app_crm::maintenance(&k, tenant).await.expect("maintenance");
     assert_eq!(anna.get("Quotation", q4).await["status"], json!("Open"), "valid through its last day");
     // A day passes.
     let mut tx = k.db.tenant_tx(tenant).await.unwrap();
@@ -477,8 +476,8 @@ async fn scenario() {
         .unwrap();
     tx.commit().await.unwrap();
     refused(anna.k.run_action(&anna.ctx, "Quotation", q4, "make_sales_order", json!({})).await, "expired");
-    ferrum_app_crm::maintenance(&k).await.expect("maintenance");
-    ferrum_app_crm::maintenance(&k).await.expect("maintenance runs again");
+    ferrum_app_crm::maintenance(&k, tenant).await.expect("maintenance");
+    ferrum_app_crm::maintenance(&k, tenant).await.expect("maintenance runs again");
     assert_eq!(anna.get("Quotation", q4).await["status"], json!("Expired"));
     assert_eq!(anna.get("Quotation", q1).await["status"], json!("Ordered"), "ordered quotations never expire");
     let mut tx = k.db.tenant_tx(tenant).await.unwrap();
@@ -1189,8 +1188,8 @@ async fn sql(k: &Kernel, q: &str, record: Uuid) {
     tx.commit().await.unwrap();
 }
 
-async fn remind(k: &Kernel) {
-    ferrum_app_crm::maintenance(k).await.expect("maintenance");
+async fn remind(k: &Kernel, tenant: Uuid) {
+    ferrum_app_crm::maintenance(k, tenant).await.expect("maintenance");
 }
 
 /// A sales team's leads shared out by rules, the reminders that keep work from slipping, and the
@@ -1385,13 +1384,13 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     // An activity overdue: told once, not again, again once moved and overdue again.
     let three_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(3)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
     let task = anna.insert("Activity", json!({"activity_type": "Task", "subject": "Send brochure", "lead": l1["id"], "due_at": three_hours_ago})).await;
-    remind(k).await;
-    remind(k).await;
+    remind(k, tenant).await;
+    remind(k, tenant).await;
     assert_eq!(told(k, tenant, "crm.activity_overdue", uid(&task)).await, ["anna@rem.test"]);
     anna.update("Activity", uid(&task), json!({"due_at": (chrono::Utc::now() + chrono::Duration::days(1)).to_rfc3339()})).await;
-    remind(k).await;
+    remind(k, tenant).await;
     anna.update("Activity", uid(&task), json!({"due_at": three_hours_ago})).await;
-    remind(k).await;
+    remind(k, tenant).await;
     assert_eq!(told(k, tenant, "crm.activity_overdue", uid(&task)).await.len(), 2, "a new occasion");
     // My work: the overdue task and the deal to follow up, each linking to its record.
     let site = k.hooks.site("crm").expect("CRM's endpoints").clone();
@@ -1423,8 +1422,8 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     for l in [&quiet_lead, &converted, &planned] {
         sql(k, "update e_lead set created_at = now() - interval '25 hours' where id = $1", uid(l)).await;
     }
-    remind(k).await;
-    remind(k).await;
+    remind(k, tenant).await;
+    remind(k, tenant).await;
     assert_eq!(told(k, tenant, "crm.lead_untouched", uid(&quiet_lead)).await, [owner(&quiet_lead)]);
     assert!(told(k, tenant, "crm.lead_untouched", uid(&converted)).await.is_empty() && told(k, tenant, "crm.lead_untouched", uid(&planned)).await.is_empty());
 
@@ -1433,35 +1432,35 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     let back20 = "update e_opportunity set created_at = now() - interval '20 days', stage_changed_at = now() - interval '20 days', \
                   last_activity_at = least(last_activity_at, now() - interval '20 days') where id = $1";
     sql(k, back20, uid(&gone)).await;
-    remind(k).await;
-    remind(k).await;
+    remind(k, tenant).await;
+    remind(k, tenant).await;
     assert_eq!(told(k, tenant, "crm.deal_quiet", uid(&gone)).await, ["anna@rem.test"]);
     assert_eq!(told(k, tenant, "crm.deal_no_step", uid(&gone)).await, ["anna@rem.test"]);
     assert!(told(k, tenant, "crm.deal_quiet", did).await.is_empty(), "a deal worked on lately");
     anna.insert("Activity", json!({"activity_type": "Note", "subject": "Asked for a budget", "opportunity": gone["id"]})).await;
-    remind(k).await;
+    remind(k, tenant).await;
     sql(k, back20, uid(&gone)).await;
     sql(k, "update e_opportunity set last_activity_at = now() - interval '20 days' where id = $1", uid(&gone)).await;
-    remind(k).await;
+    remind(k, tenant).await;
     assert_eq!(told(k, tenant, "crm.deal_quiet", uid(&gone)).await.len(), 2, "quiet again");
     assert_eq!(told(k, tenant, "crm.deal_no_step", uid(&gone)).await.len(), 2);
     anna.update("Opportunity", uid(&gone), json!({"next_step": "Call the CFO"})).await;
-    remind(k).await;
+    remind(k, tenant).await;
     assert_eq!(told(k, tenant, "crm.deal_no_step", uid(&gone)).await.len(), 2, "it has a next step now");
     // A closed deal raises nothing.
     let won = anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": l3["id"], "amount": "100"})).await;
     sql(k, back20, uid(&won)).await;
     anna.action("Opportunity", uid(&won), "mark_won", json!({})).await;
-    remind(k).await;
+    remind(k, tenant).await;
     assert!(told(k, tenant, "crm.deal_quiet", uid(&won)).await.is_empty() && told(k, tenant, "crm.deal_no_step", uid(&won)).await.is_empty());
     // An owner who left is told nothing; after a handover, the new owner is.
     let daves = dave.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": l2["id"], "amount": "900", "next_step": "Demo"})).await;
     sql(k, back20, uid(&daves)).await;
     deactivate(&dave).await;
-    remind(k).await;
+    remind(k, tenant).await;
     assert!(told(k, tenant, "crm.deal_quiet", uid(&daves)).await.is_empty());
     maria.update("Opportunity", uid(&daves), json!({"assigned_to": "ben@rem.test"})).await;
-    remind(k).await;
+    remind(k, tenant).await;
     assert_eq!(told(k, tenant, "crm.deal_quiet", uid(&daves)).await, ["ben@rem.test"]);
     ben.get("Opportunity", uid(&daves)).await;
 
@@ -1470,7 +1469,7 @@ async fn assign_and_remind(k: &Arc<Kernel>) {
     let late = anna.insert("Activity", json!({"activity_type": "Task", "subject": "Too late", "lead": l1["id"], "due_at": three_hours_ago})).await;
     let silent = arrive(json!({"first_name": "Twelve", "source": "Website"})).await;
     sql(k, "update e_lead set created_at = now() - interval '25 hours' where id = $1", uid(&silent)).await;
-    remind(k).await;
+    remind(k, tenant).await;
     assert!(told(k, tenant, "crm.activity_overdue", uid(&late)).await.is_empty() && told(k, tenant, "crm.lead_untouched", uid(&silent)).await.is_empty());
 
     // ───────────── reports ─────────────
@@ -1953,7 +1952,7 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
     anna.submit("Quotation", late).await;
     anna.action("Quotation", late, "mark_sent", json!({})).await;
     sql(k, "update e_quotation set valid_till = current_date - 3 where id = $1", late).await;
-    ferrum_app_crm::maintenance(k).await.expect("maintenance");
+    ferrum_app_crm::maintenance(k, tenant).await.expect("maintenance");
     assert_eq!(anna.get("Quotation", late).await["status"], json!("Expired"));
     refused(anna.k.run_action(&anna.ctx, "Quotation", late, "make_sales_order", json!({})).await, "expired");
     refused(anna.k.run_action(&anna.ctx, "Quotation", late, "mark_accepted", json!({})).await, "not available");

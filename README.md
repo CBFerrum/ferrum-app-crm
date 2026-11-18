@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.15.2-0f766e?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.16.0-0f766e?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -39,10 +39,10 @@ priced and taxed by the same engine that invoices it.
 
 | | |
 |---|---|
-| **Version** | 0.15.2 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
+| **Version** | 0.16.0 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
 | **Kind** | Its own interface at `/crm/` (pipeline board, Today, deal, account, quotation, sequence and forecast pages) plus Ferrum's standard lists and forms for every record |
 | **What it adds** | 36 entities (24 records and 12 line tables), 4 roles, 13 reports, 2 print and document formats, 2 messages, 2 connections, 1 menu with 41 entries, 5 create shortcuts, 5 notification kinds |
-| **Depends on** | Ferrum platform `>=0.3.4, <0.4`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
+| **Depends on** | Ferrum platform `>=0.4.0, <0.5`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
 | **Works with** | ERP (orders, invoices), Mail (communications and calendar events), Helpdesk (tickets on the account page), Bookings, Forms |
 | **Languages** | English, Arabic, Hindi |
 | **Tests** | 27 Rust tests against a real PostgreSQL, 15 interface test files |
@@ -407,6 +407,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ### ✅ Recently shipped
 
+- [x] **0.16.0**: Upkeep runs one workspace at a time, on whichever replica is free.
 - [x] **0.15.2** — The package's SQL is one file.
 - [x] **0.15.1** — Rebuilt on Ferrum-Frontend 06bd1a2: its start through `mountApp`, and no routes to the screens apps no longer have.
 - [x] **0.15.0** — An approval is held to the digest of its terms alone: the total and discount kept beside it are gone.
@@ -466,7 +467,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ## 🚀 Install
 
-CRM is compiled into the Ferrum server image and installed from **Apps** (`/store/`) by a workspace administrator. Self-hosters who build their own image enable the `crm` feature of the server. The platform must satisfy `>=0.3.4, <0.4`. Sequences sent through Mail need Mail 0.20 or later; the order step needs ERP and the `crm_erp` package.
+CRM is compiled into the Ferrum server image and installed from **Apps** (`/store/`) by a workspace administrator. Self-hosters who build their own image enable the `crm` feature of the server. The platform must satisfy `>=0.4.0, <0.5`. Sequences sent through Mail need Mail 0.20 or later; the order step needs ERP and the `crm_erp` package.
 
 After installing:
 
@@ -542,7 +543,7 @@ docs/             connection notes and screenshots
 
 ## 📜 Changelog
 
-Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.15.2**.
+Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.16.0**.
 
 ## 🤝 Contributing
 

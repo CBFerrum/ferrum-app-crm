@@ -216,24 +216,10 @@ async fn due_at(tx: &mut Tx, tenant: Uuid, calendar: Option<&str>, days: i64, fr
     Ok(from + Duration::days(days))
 }
 
-/// Every step that is due, a batch a pass, tenant by tenant. Idempotent and safe on several replicas: one
-/// replica takes a tenant a round, and each enrolment is locked as its step runs.
-pub(crate) async fn run_due(k: &Kernel) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active'").fetch_all(&mut *tx).await?;
-    tx.commit().await?;
-    for tenant in tenants {
-        match run_tenant(k, tenant).await {
-            Ok(0) => {}
-            Ok(n) => tracing::info!(%tenant, steps = n, "sequence steps ran"),
-            Err(e) => tracing::warn!(%tenant, "sequence steps failed: {e}"),
-        }
-    }
-    Ok(())
-}
-
+/// Every step of one workspace that is due, a batch a pass. Idempotent and safe on several replicas: one replica takes a
+/// workspace a round, and each enrolment is locked as its step runs.
 // ponytail: 100 enrolments a tenant and pass; the next pass takes the rest.
-async fn run_tenant(k: &Kernel, tenant: Uuid) -> Result<usize> {
+pub(crate) async fn run_tenant(k: &Kernel, tenant: Uuid) -> Result<usize> {
     let schema = k.registry.schema(tenant).await?;
     if schema.entity("SequenceEnrolment").is_none() {
         return Ok(0);
