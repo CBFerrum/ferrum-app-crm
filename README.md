@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.16.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.16.1-0f766e?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -39,7 +39,7 @@ priced and taxed by the same engine that invoices it.
 
 | | |
 |---|---|
-| **Version** | 0.16.0 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
+| **Version** | 0.16.1 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
 | **Kind** | Its own interface at `/crm/` (pipeline board, Today, deal, account, quotation, sequence and forecast pages) plus Ferrum's standard lists and forms for every record |
 | **What it adds** | 36 entities (24 records and 12 line tables), 4 roles, 13 reports, 2 print and document formats, 2 messages, 2 connections, 1 menu with 41 entries, 5 create shortcuts, 5 notification kinds |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
@@ -170,7 +170,7 @@ On a phone:
 - **Activities.** Call, Meeting, Email, Task and Note, with a due time, an owner and the record it is about (lead, deal, customer, prospect or contact). Open, Done and Cancelled. A call keeps its outcome (Reached, No Answer, Left Message, Busy, Wrong Number) and its length in minutes.
 - **A workspace for a record.** A lead, a contact, a deal and an account share one page: key facts (a returned mail, do-not-call and unsubscribed are said at the top), quick actions to log a note, a call or a task, Write and Schedule where Mail and the calendar are installed, the timeline, and what relates to the record. An open task can be ticked off from it.
 - **One timeline.** Activities, notes, Mail's communications, calls and meetings, a deal's stage changes, quotations created, sent, viewed and answered, orders, Helpdesk tickets and Bookings, newest first, filtered by kind and read in pages. Each source is read with the caller's own rights.
-- **Mail and calls filed on the right people.** A mail or call in Mail's communications whose other party matches a contact, lead, customer or prospect (by the whole address or the last ten digits of a number, never by name) is filed on that record and on their newest open deal. A mail from someone nobody knows can make a lead (off by default); automatic senders never do. A hosted mailbox whose owner allowed filing is filed by itself.
+- **Mail and calls filed on the right people.** A mail or call in Mail's communications whose other party matches a contact, lead, customer or prospect (by the whole address or the last ten digits of a number, never by name) is filed on that record and on their newest open deal, and counts as touching them. Mail sent as marketing (a newsletter) is filed on the person only: no deal, no touch, so the untouched-lead and quiet-deal reminders still fire. A mail from someone nobody knows can make a lead (off by default); automatic senders never do. A hosted mailbox whose owner allowed filing is filed by itself.
 - **Meetings from the calendar.** A calendar event with a known guest makes a meeting activity on their record and deal. It moves with the event, is cancelled when the event is, and is done when it ends.
 - **Reminders.** People are told of their activities that are overdue, new leads nobody has touched, deals with nothing done lately and deals with no next step. The hours and days are set in CRM Settings (zero switches a reminder off), and each person chooses how each kind reaches them.
 
@@ -407,6 +407,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ### ✅ Recently shipped
 
+- [x] **0.16.1**: A marketing mail is shown on the person and touches no lead or deal.
 - [x] **0.16.0**: Upkeep runs one workspace at a time, on whichever replica is free.
 - [x] **0.15.2** — The package's SQL is one file.
 - [x] **0.15.1** — Rebuilt on Ferrum-Frontend 06bd1a2: its start through `mountApp`, and no routes to the screens apps no longer have.
@@ -543,7 +544,7 @@ docs/             connection notes and screenshots
 
 ## 📜 Changelog
 
-Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.16.0**.
+Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.16.1**.
 
 ## 🤝 Contributing
 

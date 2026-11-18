@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.16.1
+
+Needs the same platform as 0.16.0.
+
+- **A marketing mail is not a touch.** A sent mail whose `purpose` is Marketing (a Campaigns newsletter, say) is still filed on the person it went to, so it shows on their timeline, but it is filed on no deal and sets neither the lead's Last Touched nor the deal's Last Activity. The untouched-lead, quiet-deal and no-next-step reminders keep firing for people on a marketing list. A mail with no `purpose` is treated as before.
+
+No database or interface change.
+
 ## 0.16.0
 
 Needs Ferrum 0.4.0 (apps' upkeep runs one workspace at a time, on whichever replica is free).

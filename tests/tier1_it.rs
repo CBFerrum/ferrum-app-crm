@@ -106,6 +106,7 @@ fn fixture() -> Vec<ferrum_meta::Package> {
     - {name: channel, type: select, options: [Email, SMS, Chat, Phone, Note, Meeting], default: Email, required: true}
     - {name: direction, type: select, options: [Sent, Received], default: Sent, required: true}
     - {name: status, type: data}
+    - {name: purpose, type: select, options: [Transactional, Marketing], default: Transactional}
     - {name: communication_date, type: datetime}
     - {name: sender, type: data}
     - {name: sender_name, type: data}
@@ -724,12 +725,88 @@ async fn timeline_and_filing(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, mari
         .await;
     drain(k).await;
     assert!(admin.list("Activity", json!({"subject": "Strangers"})).await.is_empty());
+    marketing_mail(k, admin, anna, tenant).await;
     // the setting off: nothing is filed
     set(json!({"file_communications": false})).await;
     mail(admin, "Received", "jane@acme.test", "anna@tier1.test", "While filing is off", "Email").await;
     drain(k).await;
     assert!(!titles(&anna.timeline("Contact", jane, json!({})).await, "email").contains(&"While filing is off".to_string()));
     set(json!({"file_communications": true})).await;
+}
+
+/// Mail sent as marketing (a Campaigns newsletter) is shown on the person, and is not a dealing with them: it
+/// files on no deal and touches nothing, so the reminders keep firing.
+async fn marketing_mail(k: &Kernel, admin: &U, anna: &U, tenant: Uuid) {
+    let mia = uid(&anna.insert("Lead", json!({"first_name": "Mia", "last_name": "Marsh", "email": "mia@lead.test", "source": "Website"})).await);
+    let deal = uid(&anna.insert("Opportunity", json!({"opportunity_from": "Lead", "lead": mia.to_string(), "title": "Mia's deal", "amount": "50"})).await);
+    let news = uid(&admin
+        .insert(
+            "Communication",
+            json!({"subject": "Autumn offers", "channel": "Email", "direction": "Sent", "sender": "news@tier1.test", "recipients": "mia@lead.test",
+                   "purpose": "Marketing", "communication_date": chrono::Utc::now().to_rfc3339()}),
+        )
+        .await);
+    drain(k).await;
+
+    // a_marketing_mail_is_shown_on_the_person_and_touches_nothing
+    assert!(anna.get("Lead", mia).await["last_touched_at"].is_null(), "a marketing mail does not touch the lead");
+    assert!(anna.get("Opportunity", deal).await["last_activity_at"].is_null(), "nor the deal");
+    assert_eq!(titles(&anna.timeline("Lead", mia, json!({})).await, "email"), ["Autumn offers"], "shown on the person");
+    assert!(titles(&anna.timeline("Opportunity", deal, json!({})).await, "email").is_empty(), "not filed on the deal");
+
+    // the_same_marketing_mail_twice_files_once
+    sql(
+        k,
+        "update outbox set processed_at = null, available_at = now() where tenant_id = $1 and record_id = $2 and topic = 'Communication.created'",
+        tenant,
+        news,
+    )
+    .await;
+    drain(k).await;
+    drain(k).await;
+    let filed: i64 = scalar(k, "select count(*) from crm_filed where tenant_id = $1 and communication = $2", tenant, Some(news)).await;
+    assert_eq!(filed, 1, "filed once, on the person");
+
+    // the_untouched_lead_reminder_survives_a_marketing_mail
+    sql(k, "update e_lead set created_at = now() - interval '25 hours' where tenant_id = $1 and id = $2", tenant, mia).await;
+    ferrum_app_crm::maintenance(k, tenant).await.unwrap();
+    assert_eq!(told(k, tenant, "crm.lead_untouched", mia).await, ["anna@tier1.test"]);
+
+    // the_quiet_deal_reminder_survives_a_marketing_mail
+    sql(
+        k,
+        "update e_opportunity set created_at = now() - interval '15 days', stage_changed_at = now() - interval '15 days' where tenant_id = $1 and id = $2",
+        tenant,
+        deal,
+    )
+    .await;
+    ferrum_app_crm::maintenance(k, tenant).await.unwrap();
+    assert_eq!(told(k, tenant, "crm.deal_quiet", deal).await, ["anna@tier1.test"]);
+    assert_eq!(told(k, tenant, "crm.deal_no_step", deal).await, ["anna@tier1.test"]);
+
+    // a_mail_a_person_sent_still_touches
+    mail(admin, "Sent", "anna@tier1.test", "mia@lead.test", "Following up", "Email").await;
+    drain(k).await;
+    assert!(anna.get("Lead", mia).await["last_touched_at"].is_string(), "a mail a person sent touches");
+    assert!(anna.get("Opportunity", deal).await["last_activity_at"].is_string());
+    assert_eq!(titles(&anna.timeline("Opportunity", deal, json!({})).await, "email"), ["Following up"]);
+}
+
+/// Who was told of `kind` about `record`, in order.
+async fn told(k: &Kernel, tenant: Uuid, kind: &str, record: Uuid) -> Vec<String> {
+    let mut tx = k.db.system_tx().await.unwrap();
+    let who: Vec<String> = sqlx::query_scalar(
+        "select u.email::text from notification n join app_user u on u.tenant_id = n.tenant_id and u.id = n.user_id \
+         where n.tenant_id = $1 and n.kind = $2 and n.record_id = $3 order by n.created_at, n.id",
+    )
+    .bind(tenant)
+    .bind(kind)
+    .bind(record)
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    who
 }
 
 /// What Mail raises for a message of a hosted mailbox whose owner allowed filing (`MailMessage.received`, `.sent`).
