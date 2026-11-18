@@ -416,6 +416,24 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     // ── declining: a reason is required; the answer is Rejected, in the customer's words
     let q2 = quote(anna, acme, Some(jane), widget, "2").await;
     anna.action("Quotation", q2, "send_quotation", json!({})).await;
+    // a_member_cannot_answer_for_the_customer: the customer's actions are theirs, on their link or the portal; a person
+    // of the workspace, even its administrator, records an answer with Accepted or Rejected
+    for (who, action, params) in [
+        (anna, "customer_accept", json!({"signed_name": "Anna Rep"})),
+        (admin, "customer_accept", json!({"signed_name": "Admin"})),
+        (anna, "customer_decline", json!({"reason": "Said on the phone"})),
+        (anna, "customer_ask", json!({"question": "Asked by a member?"})),
+    ] {
+        let r = who.k.run_action(&who.ctx, "Quotation", q2, action, params).await;
+        assert!(matches!(r, Err(Error::Forbidden(_))), "{action} by {}: {r:?}", who.ctx.email);
+    }
+    assert_eq!(anna.get("Quotation", q2).await["status"], json!("Sent"), "nothing was answered");
+    assert!(anna.list("Activity", json!({"subject": "Asked by a member?"})).await.is_empty(), "nor asked");
+    // the_customer_still_answers_through_the_link_and_the_portal: someone outside the workspace (a portal person) asks
+    let portal = U { k: anna.k.clone(), ctx: ferrum_kernel::Ctx { outside: true, ..anna.ctx.clone() } };
+    portal.k.run_action(&portal.ctx, "Quotation", q2, "customer_ask", json!({"question": "From the portal?", "signed_name": "Jane Lee"})).await.expect("asked");
+    let task = anna.one("Activity", json!({"subject": "From the portal?"})).await;
+    assert_eq!((task["assigned_to"].clone(), task["details"].clone()), (json!("anna@tier1.test"), json!("Jane Lee: From the portal?")));
     let t2 = token(&admin.k.issue_link_now(&admin.ctx, "Quotation", q2, &spec(5)).await.unwrap().url);
     assert!(k.use_link("tier1", &t2, "customer_decline", &Map::new(), None).await.is_err(), "the reason is required");
     assert!(k.use_link("tier1", &t2, "mark_lost", &given(json!({"lost_reason": "x"})), None).await.is_err(), "a link does only what it names");

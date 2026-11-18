@@ -144,7 +144,8 @@
           attachments: ["results[1]"]
           values: {url: "results[2] != null ? results[2].url : (results[3] != null ? results[3].url : results[4].url)"}
           secret: [url]
-    # What the customer does on their link. They are not signed in: each action's conditions and parameters are all they have.
+    # What the customer does on their link or the portal. They are not signed in: each action's conditions and parameters are all they
+    # have. A person of the workspace is refused them (src/quotation.rs): their own are Accepted, Rejected and the activities.
     - name: customer_accept
       label: Accept
       hidden: true
@@ -171,20 +172,6 @@
       params:
         - {name: question, type: text, label: Your question, required: true}
         - {name: signed_name, type: data, label: Your name}
-      effects:
-        - type: create_document
-          entity: Activity
-          values:
-            activity_type: "'Task'"
-            subject: "size(params.question) > 80 ? params.question.substring(0, 80) : params.question"
-            details: "concat(params.signed_name, ': ', params.question)"
-            assigned_to: doc.assigned_to
-            sales_team: doc.sales_team
-            opportunity: doc.opportunity
-            lead: doc.lead
-            customer: doc.customer
-            contact: doc.contact
-        - {type: message, template: crm.quotation_question, to: [owner], channels: [inapp]}
     - name: mark_rejected
       label: Rejected
       docstatus: [1]

@@ -14,6 +14,7 @@ use ferrum_app_erp::pricing::{Side, calculate};
 use ferrum_domain::flow::create_for_user;
 use ferrum_domain::flow::{MapSpec, add_progress_in, created, map_document};
 use ferrum_domain::util::{b, d, date, id, money, rows, s, set, sys, unit_factor};
+use ferrum_kernel::messages::{self, Message};
 use ferrum_kernel::value::parse_date;
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, Filter, HookCtx, Kernel, Op, Result, Tx};
 use rust_decimal::Decimal;
@@ -195,10 +196,16 @@ impl DocHook for QuotationHook {
     }
 
     async fn action(&self, hc: &mut HookCtx<'_>, name: &str, doc: &Doc, params: &Value) -> Result<Option<Value>> {
+        // The customer's own actions: they read the quotation and answer for themselves, on their link or the portal. A
+        // person of the workspace records an answer with Accepted or Rejected, which need the right to submit.
+        if name.starts_with("customer_") && !hc.ctx.outside {
+            return Err(Error::Forbidden("only the customer answers here, on their link or the portal; record their answer with Accepted or Rejected".into()));
+        }
         match name {
             "make_sales_order" => make_sales_order(hc, doc).await.map(Some),
             "mark_lost" => mark_lost(hc, doc, params).await.map(Some),
             "mark_sent" | "mark_accepted" | "mark_rejected" | "customer_accept" | "customer_decline" => answer(hc, name, doc, params).await.map(Some),
+            "customer_ask" => ask(hc, doc, params).await.map(Some),
             "add_rule_needs" => add_rule_needs(hc, doc).await.map(Some),
             "approve_quotation" => approve(hc, doc).await.map(Some),
             _ => Ok(None),
@@ -511,6 +518,43 @@ async fn answer(hc: &mut HookCtx<'_>, name: &str, q: &Doc, params: &Value) -> Re
     let now = hc.kernel.get_tx(&sys(hc.ctx), hc.tx, "Quotation", qid, false).await?;
     out["status"] = now.get("status").cloned().unwrap_or(Value::Null);
     Ok(out)
+}
+
+/// The customer's question on their quotation, from their link or the portal: a task for the quotation's owner, and
+/// the owner told (`crm.quotation_question`).
+async fn ask(hc: &mut HookCtx<'_>, q: &Doc, params: &Value) -> Result<Value> {
+    let qid = id(q, "id").ok_or_else(|| Error::internal("quotation without id"))?;
+    let text = |k: &str| params.get(k).and_then(Value::as_str).map(str::trim).filter(|v| !v.is_empty());
+    let question = text("question").ok_or_else(|| Error::field("question", "Your question is required"))?;
+    let mut a = Doc::new();
+    a.insert("activity_type".into(), json!("Task"));
+    a.insert("subject".into(), json!(question.chars().take(80).collect::<String>()));
+    a.insert(
+        "details".into(),
+        json!(match text("signed_name") {
+            Some(name) => format!("{name}: {question}"),
+            None => question.to_string(),
+        }),
+    );
+    for f in ["assigned_to", "sales_team", "opportunity", "lead", "customer", "contact"] {
+        if let Some(v) = q.get(f).filter(|v| !v.is_null()) {
+            a.insert(f.into(), v.clone());
+        }
+    }
+    let sctx = sys(hc.ctx);
+    let task = hc.kernel.insert_tx(&sctx, hc.tx, "Activity", a).await?;
+    let to = messages::recipients(hc.kernel, hc.tx, &sctx, "Quotation", &Value::Object(q.clone()), "owner").await?;
+    let m = Message {
+        template: "crm.quotation_question".into(),
+        entity: Some("Quotation".into()),
+        record: Some(qid),
+        to,
+        channels: vec!["inapp".into()],
+        ..Default::default()
+    };
+    messages::send(hc.kernel, hc.tx, &sctx, &m).await?;
+    let now = hc.kernel.get_tx(&sctx, hc.tx, "Quotation", qid, false).await?;
+    Ok(json!({"status": now.get("status").cloned().unwrap_or(Value::Null), "made": [created("Activity", &task)]}))
 }
 
 /// Ends the signed links of a quotation, in the caller's transaction, by the platform's call (which says so in the

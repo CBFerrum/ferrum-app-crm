@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.16.2
+
+Package `crm` 0.8.1. Needs the same platform as 0.16.0. No database or interface change.
+
+- **Only the customer answers.** A quotation's Accept, Decline and Ask a Question are the customer's, on their link (or
+  a portal role an administrator gives them). A person of the workspace pressing one, its administrator included, is
+  refused: they record the customer's answer with Accepted or Rejected, which need the right to submit. Ask a Question
+  is answered by the app now (the same task for the owner, and the owner told), so it can refuse a member.
+- **Create Opportunity needs the right to change the lead.** It sets a new or contacted lead Qualified; someone who only
+  reads the lead could do that before.
+
 ## 0.16.1
 
 Needs the same platform as 0.16.0.

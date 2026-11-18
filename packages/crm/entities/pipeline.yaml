@@ -102,7 +102,7 @@
       permission: write
       condition: "doc.status == 'Converted'"
       confirm: "Give the lead back its deals, quotations and activities, and remove the customer, contact and address the conversion made?"
-    - {name: make_opportunity, label: Create Opportunity, permission: read, condition: "doc.status != 'Lost' && doc.status != 'Junk'"}
+    - {name: make_opportunity, label: Create Opportunity, permission: write, condition: "doc.status != 'Lost' && doc.status != 'Junk'"}
     - name: enrol_in_sequence
       label: Enrol in Sequence
       permission: write

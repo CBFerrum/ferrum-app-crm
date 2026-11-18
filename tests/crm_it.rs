@@ -253,6 +253,14 @@ async fn scenario() {
     assert_eq!(note["status"], json!("Done"), "notes are done when written");
     assert_eq!(anna.get("Lead", l2_id).await["status"], json!("New"), "a note is not an interaction");
 
+    // ───────────── a_reader_of_a_lead_cannot_qualify_it_by_making_a_deal ─────────────
+    // Vera reads every lead (CRM Viewer) and makes deals of her own (Sales User), but may not change Anna's lead.
+    let vera = user("vera@crm.test", "Vera Viewer", &["Sales User", "CRM Viewer"]).await;
+    assert_eq!(vera.get("Lead", l1_id).await["status"], json!("Contacted"), "she reads it");
+    assert!(vera.k.run_action(&vera.ctx, "Lead", l1_id, "make_opportunity", json!({})).await.is_err(), "she may not qualify it");
+    assert_eq!(anna.get("Lead", l1_id).await["status"], json!("Contacted"));
+    assert!(admin.list("Opportunity", json!({"lead": l1_id.to_string()})).await.is_empty(), "and no deal was made");
+
     // ───────────── opportunity from a lead ─────────────
     let made = anna.action("Lead", l1_id, "make_opportunity", json!({})).await;
     assert_eq!(made["entity"], json!("Opportunity"));

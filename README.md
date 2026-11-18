@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.16.1-0f766e?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.16.2-0f766e?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -39,7 +39,7 @@ priced and taxed by the same engine that invoices it.
 
 | | |
 |---|---|
-| **Version** | 0.16.1 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
+| **Version** | 0.16.2 (packages: `crm` 0.8.1, `crm_erp` 0.1.2) |
 | **Kind** | Its own interface at `/crm/` (pipeline board, Today, deal, account, quotation, sequence and forecast pages) plus Ferrum's standard lists and forms for every record |
 | **What it adds** | 36 entities (24 records and 12 line tables), 4 roles, 13 reports, 2 print and document formats, 2 messages, 2 connections, 1 menu with 41 entries, 5 create shortcuts, 5 notification kinds |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
@@ -139,7 +139,7 @@ On a phone:
 - **Consent kept apart for calls and email.** Do Not Call, Unsubscribed, the day each was given or withdrawn, and how (web form, in person, call, letter). A call logged to someone on Do Not Call needs a reason.
 - **Bounced mail.** The day a mail to the address came back is kept (Email Bounced On); sequences send nothing more to it.
 - **Convert to a customer.** Convert to Customer makes a customer, a contact and an address, or goes onto an existing customer and contact, carrying the lead's notes along. The new customer takes the lead's owner and territory. Undo Conversion gives the lead back while nothing else hangs on it.
-- **Create Opportunity** from a lead that is not Lost or Junk.
+- **Create Opportunity** from a lead that is not Lost or Junk, by someone who may change the lead (it counts as qualified from then on).
 - **Duplicate prospects, leads and customers can be merged** with the platform's merge.
 
 ### 🏢 Accounts, contacts and prospects
@@ -407,6 +407,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ### ✅ Recently shipped
 
+- [x] **0.16.2**: Only the customer answers a quotation on their link; making a deal of a lead needs the right to change the lead.
 - [x] **0.16.1**: A marketing mail is shown on the person and touches no lead or deal.
 - [x] **0.16.0**: Upkeep runs one workspace at a time, on whichever replica is free.
 - [x] **0.15.2** — The package's SQL is one file.
@@ -544,7 +545,7 @@ docs/             connection notes and screenshots
 
 ## 📜 Changelog
 
-Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.16.1**.
+Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.16.2**.
 
 ## 🤝 Contributing
 
