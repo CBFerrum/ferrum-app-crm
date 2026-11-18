@@ -9,8 +9,10 @@
   label: Record Type Requirement
   kind: child
   fields:
-    - {name: stage_name, type: data, in_list: true, label: When Entering, description: "The name of a stage (deals) or a status (leads). Empty: whenever it is saved at all"}
+    - {name: stage, type: link, to: SalesStage, in_list: true, label: When Entering Stage, description: "For a deal's type: the stage. Empty with no status below: whenever it is saved at all"}
+    - {name: stage_name, type: data, in_list: true, label: When It Becomes, description: "For a lead's type: the status. Empty: whenever it is saved at all"}
     - {name: field, type: data, required: true, in_list: true, description: "A field of the deal or lead, by its name, that must have a value then"}
+    - {name: only_if, type: text, in_list: true, label: Only If, description: "Empty: always. A condition on the record, as rules write them: doc.amount > 50000"}
 
 - name: RecordTypeStage
   label: Record Type Stage

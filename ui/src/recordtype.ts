@@ -15,9 +15,13 @@ export interface DefaultRow {
 
 export interface RequirementRow {
   id?: string;
-  /** A stage's name (deals) or a status (leads); empty: whenever it is saved at all. */
+  /** A deal's type: the stage, by record. */
+  stage: string | null;
+  /** A lead's type: the status; a deal's row kept before stages were named by record: the stage's name. Both empty: whenever it is saved at all. */
   stage_name: string;
   field: string;
+  /** Empty: always. A condition on the record, as rules write them. */
+  only_if: string;
 }
 
 /** A row of the type's Allowed Stages: a stage of the deal's pipeline. */
@@ -106,12 +110,21 @@ export function stagesFor(stages: StageInfo[], pipeline: string | null): string[
   return [...new Set(sorted.map((s) => s.stage_name))];
 }
 
+/** The stages a deal's requirement can name, as records: the order of [`stagesFor`], each stage once (two pipelines' stages of one
+ *  name are two choices). */
+export function stageChoices(stages: StageInfo[], pipeline: string | null): StageInfo[] {
+  const rank = (s: StageInfo) => ((s.outcome ?? "Open") === "Open" ? 0 : 1);
+  return stages
+    .filter((s) => !pipeline || !s.pipeline || s.pipeline === pipeline)
+    .sort((a, b) => rank(a) - rank(b) || Number(a.stage_order ?? 0) - Number(b.stage_order ?? 0) || a.stage_name.localeCompare(b.stage_name));
+}
+
 /** What a requirement can say it is asked on: a deal's stages, or a lead's statuses. */
 export const entryChoices = (a: AppliesTo, stages: StageInfo[], pipeline: string | null, leadStatuses: string[]) => (a === "Opportunity" ? stagesFor(stages, pipeline) : leadStatuses);
 
 /** What is wrong with the rows before the server is asked (it refuses the same): a default without its value, a field named twice, a field no
  *  longer on the form, a stage the type's pipeline does not have. */
-export function typeIssues(d: RecordTypeDoc, fields: FieldInfo[], entries: string[]): string | null {
+export function typeIssues(d: RecordTypeDoc, fields: FieldInfo[], entries: string[], stages: StageInfo[] = []): string | null {
   if (!d.type_name.trim()) return t("Name the type");
   const known = new Set(fields.map((f) => f.name));
   const seen = new Set<string>();
@@ -124,7 +137,8 @@ export function typeIssues(d: RecordTypeDoc, fields: FieldInfo[], entries: strin
   }
   for (const r of d.requirements) {
     if (!r.field) return t("Choose a field for each requirement");
-    if (r.stage_name && entries.length && !entries.includes(r.stage_name)) return t("{stage} is not one of the stages it can enter", { stage: r.stage_name });
+    if (!r.stage && r.stage_name && entries.length && !entries.includes(r.stage_name)) return t("{stage} is not one of the stages it can enter", { stage: r.stage_name });
+    if (r.stage && stages.length && !stages.some((s) => s.id === r.stage)) return t("{stage} is not one of the stages it can enter", { stage: r.stage });
   }
   return null;
 }
@@ -137,7 +151,10 @@ export function typeBody(d: RecordTypeDoc): Record<string, unknown> {
     pipeline: d.applies_to === "Opportunity" ? d.pipeline : null,
     disabled: d.disabled,
     defaults: d.defaults.map((r) => ({ ...(r.id ? { id: r.id } : {}), field: r.field, value: r.value.trim() })),
-    requirements: d.requirements.map((r) => ({ ...(r.id ? { id: r.id } : {}), stage_name: r.stage_name.trim() || null, field: r.field })),
+    requirements: d.requirements.map((r) => {
+      const stage = d.applies_to === "Opportunity" ? r.stage || null : null;
+      return { ...(r.id ? { id: r.id } : {}), stage, stage_name: stage ? null : r.stage_name.trim() || null, field: r.field, only_if: r.only_if.trim() || null };
+    }),
     allowed_stages: d.applies_to === "Opportunity" ? d.allowed_stages.map((r) => ({ ...(r.id ? { id: r.id } : {}), stage: r.stage })) : [],
   };
 }

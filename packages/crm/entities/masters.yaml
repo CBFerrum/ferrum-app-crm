@@ -12,6 +12,13 @@
     - {name: description, type: text}
   list: {columns: [pipeline_name, is_default, disabled], sort: pipeline_name asc}
 
+- name: StageRequirement
+  label: Stage Requirement
+  kind: child
+  fields:
+    - {name: field, type: data, required: true, in_list: true, description: "A field of the deal, by its name, that must have a value when a deal enters the stage: campaign, territory, expected_close_date…"}
+    - {name: only_if, type: text, in_list: true, label: Only If, description: "Empty: always. A condition on the deal, as rules write them: doc.amount > 50000"}
+
 - name: SalesStage
   label: Sales Stage
   kind: master
@@ -37,11 +44,13 @@
     - {name: requires_next_step, type: check, label: A Next Step, visible_if: "doc.outcome != 'Lost'"}
     - {name: requires_lines, type: check, label: At Least One Line, visible_if: "doc.outcome != 'Lost'"}
     - {name: requires_quotation, type: check, label: A Submitted Quotation, visible_if: "doc.outcome != 'Lost'"}
+    - {name: required_fields, type: table, of: StageRequirement, label: Other Fields a Deal Must Have, visible_if: "doc.outcome != 'Lost'",
+       description: "Asked of every deal moved forward into this stage, with or without a record type"}
     - {name: disabled, type: check, in_filter: true, description: "Refused while open deals stand in it"}
   unique: [[pipeline, stage_name]]
   form:
     - {label: Stage, fields: [pipeline, stage_name, probability, stage_order, outcome, forecast_category, disabled]}
-    - {label: Before a Deal Enters It, visible_if: "doc.outcome != 'Lost'", fields: [requires_amount, requires_close_date, requires_primary_contact, requires_next_step, requires_lines, requires_quotation]}
+    - {label: Before a Deal Enters It, visible_if: "doc.outcome != 'Lost'", fields: [requires_amount, requires_close_date, requires_primary_contact, requires_next_step, requires_lines, requires_quotation, required_fields]}
   list: {columns: [stage_name, pipeline, probability, stage_order, outcome], sort: stage_order asc}
 
 - name: BuyingRole

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { allowable, blankType, entryChoices, fieldChoices, grouped, stagesFor, strayStages, summary, toggled, typeBody, typeIssues, valueKind } from "./recordtype";
+import { allowable, blankType, entryChoices, fieldChoices, grouped, stageChoices, stagesFor, strayStages, summary, toggled, typeBody, typeIssues, valueKind } from "./recordtype";
 
 // Fields as the platform's metadata lists them for a deal.
 const fields = [
@@ -42,7 +42,7 @@ describe("the pickers", () => {
 });
 
 describe("saving a type", () => {
-  const ok = { ...blankType(), type_name: "Renewal", defaults: [{ field: "source", value: "Referral" }], requirements: [{ stage_name: "Proposal", field: "next_step" }] };
+  const ok = { ...blankType(), type_name: "Renewal", defaults: [{ field: "source", value: "Referral" }], requirements: [{ stage: null, stage_name: "Proposal", field: "next_step", only_if: "" }] };
 
   it("is not saved without a name, a value for each default, a field for each requirement or with a field twice", () => {
     const f = fieldChoices(fields);
@@ -52,21 +52,36 @@ describe("saving a type", () => {
     expect(typeIssues({ ...ok, defaults: [{ field: "", value: "x" }] }, f, [])).toBe("Choose a field for each default");
     expect(typeIssues({ ...ok, defaults: [ok.defaults[0], { field: "source", value: "Web" }] }, f, [])).toBe("Source has two defaults");
     expect(typeIssues({ ...ok, defaults: [{ field: "gone", value: "1" }] }, f, [])).toBe("gone is not a field of the form");
-    expect(typeIssues({ ...ok, requirements: [{ stage_name: "Won It", field: "next_step" }] }, f, ["Proposal"])).toBe("Won It is not one of the stages it can enter");
-    expect(typeIssues({ ...ok, requirements: [{ stage_name: "", field: "" }] }, f, [])).toBe("Choose a field for each requirement");
+    expect(typeIssues({ ...ok, requirements: [{ stage: null, stage_name: "Won It", field: "next_step", only_if: "" }] }, f, ["Proposal"])).toBe("Won It is not one of the stages it can enter");
+    expect(typeIssues({ ...ok, requirements: [{ stage: null, stage_name: "", field: "", only_if: "" }] }, f, [])).toBe("Choose a field for each requirement");
+    // a stage named by record that the type's pipeline does not offer
+    expect(typeIssues({ ...ok, requirements: [{ stage: "5", stage_name: "", field: "next_step", only_if: "" }] }, f, [], stageChoices(stages, "p1"))).toBe("5 is not one of the stages it can enter");
+    expect(typeIssues({ ...ok, requirements: [{ stage: "2", stage_name: "", field: "next_step", only_if: "" }] }, f, [], stageChoices(stages, "p1"))).toBeNull();
   });
 
   it("saves a deal's type with its pipeline and a lead's without, an empty stage meaning whenever it is saved", () => {
-    expect(typeBody({ ...ok, pipeline: "p1", requirements: [{ id: "r1", stage_name: " ", field: "next_step" }] })).toEqual({
+    expect(typeBody({ ...ok, pipeline: "p1", requirements: [{ id: "r1", stage: null, stage_name: " ", field: "next_step", only_if: " " }] })).toEqual({
       type_name: "Renewal",
       applies_to: "Opportunity",
       pipeline: "p1",
       disabled: false,
       defaults: [{ field: "source", value: "Referral" }],
-      requirements: [{ id: "r1", stage_name: null, field: "next_step" }],
+      requirements: [{ id: "r1", stage: null, stage_name: null, field: "next_step", only_if: null }],
       allowed_stages: [],
     });
     expect(typeBody({ ...ok, applies_to: "Lead", pipeline: "p1" }).pipeline).toBeNull();
+  });
+
+  it("names a deal's stage by record, with a condition, and drops the name once a stage is chosen", () => {
+    const body = typeBody({ ...ok, requirements: [{ stage: "2", stage_name: "Proposal", field: "next_step", only_if: " doc.amount > 50000 " }] });
+    expect(body.requirements).toEqual([{ stage: "2", stage_name: null, field: "next_step", only_if: "doc.amount > 50000" }]);
+    const lead = typeBody({ ...ok, applies_to: "Lead", requirements: [{ stage: "2", stage_name: "Qualified", field: "budget", only_if: "" }] });
+    expect(lead.requirements).toEqual([{ stage: null, stage_name: "Qualified", field: "budget", only_if: null }]);
+  });
+
+  it("offers the stages by record: the type's pipeline's, open ones in order, then won and lost; every pipeline's when it names none", () => {
+    expect(stageChoices(stages, "p1").map((s) => s.id)).toEqual(["1", "2", "3"]);
+    expect(stageChoices(stages, null).map((s) => s.id)).toEqual(["1", "4", "2", "5", "3"]);
   });
 });
 

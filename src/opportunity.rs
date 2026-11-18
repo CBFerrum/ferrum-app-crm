@@ -255,7 +255,8 @@ async fn stage(hc: &mut HookCtx<'_>, doc: &mut Doc, old: Option<&Doc>) -> Result
     Ok(())
 }
 
-/// What a stage asks of a deal entering it: refused, naming what is missing, when a deal moves
+/// What a stage asks of a deal entering it (its ticks and any other field it lists, each maybe only if a condition
+/// holds): refused, naming what is missing, when a deal moves
 /// forward into it (or is made in it) without them. Moving back in its pipeline, losing it, reopening
 /// it and what the engine does (an order winning it) are never held up.
 async fn requirements(hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
@@ -281,21 +282,21 @@ async fn requirements(hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Res
             return Ok(());
         }
     }
-    let mut missing = Vec::new();
+    let mut missing: Vec<String> = Vec::new();
     if b(&new, "requires_amount") && d(doc, "amount") <= Decimal::ZERO {
-        missing.push("an amount");
+        missing.push("an amount".into());
     }
     if b(&new, "requires_close_date") && s(doc, "expected_close_date").is_none() {
-        missing.push("an expected close date");
+        missing.push("an expected close date".into());
     }
     if b(&new, "requires_primary_contact") && id(doc, "contact").is_none() {
-        missing.push("a primary contact");
+        missing.push("a primary contact".into());
     }
     if b(&new, "requires_next_step") && s(doc, "next_step").is_none_or(|n| n.trim().is_empty()) {
-        missing.push("a next step");
+        missing.push("a next step".into());
     }
     if b(&new, "requires_lines") && rows(doc, "items").is_empty() {
-        missing.push("at least one line");
+        missing.push("at least one line".into());
     }
     if b(&new, "requires_quotation") {
         let quoted = match id(doc, "id") {
@@ -306,9 +307,10 @@ async fn requirements(hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Res
             None => false,
         };
         if !quoted {
-            missing.push("a submitted quotation");
+            missing.push("a submitted quotation".into());
         }
     }
+    missing.extend(crate::record_type::asked(hc, doc, &rows(&new, "required_fields"), |_| true)?);
     if missing.is_empty() {
         return Ok(());
     }

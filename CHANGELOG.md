@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.18.0
+
+Package `crm` 0.10.0. Needs the same platform as 0.16.0. Interface rebuilt (`ui/dist`).
+
+- **A stage asks for any field.** A sales stage's Other Fields a Deal Must Have lists fields of the deal, each with an
+  optional condition (Only If, written as rules are: `doc.amount > 50000`). They are asked of every deal a person
+  moves forward into the stage, with or without a record type, beside the six ticks, in the same refusal. Moving
+  back, losing and the engine's saves are never held up. A field the deal does not have, or a condition that does not
+  compile, is refused when the stage is saved; a condition that cannot be worked out for a deal refuses its move and
+  says so.
+- **A record type names its stage by record.** A deal type's requirement has When Entering Stage, a link to the stage,
+  so renaming the stage keeps it. Rows kept by name match by name as before until the type is next saved, when a name
+  exactly one stage answers to becomes that stage. A requirement may carry Only If too. A lead's type names a status,
+  never a stage; a stage outside the type's pipeline is refused.
+- **The record type editor** chooses a deal's stage from the stages themselves (an old row shows "(by name)" until
+  another is chosen) and has Only If on each requirement.
+- Database: table `e_sales_stage__required_fields` (rows of the new Stage Requirement); the record type's requirement
+  rows gain `stage` and `only_if`.
+
 ## 0.17.0
 
 Package `crm` 0.9.0. Needs the same platform as 0.16.0. No interface change (the prospect form shows Allow Duplicate).

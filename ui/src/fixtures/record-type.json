@@ -1,0 +1,1 @@
+{"id":"t1","version":3,"type_name":"Enterprise deal","applies_to":"Opportunity","pipeline":"p1","disabled":false,"defaults":[],"allowed_stages":[],"requirements":[{"id":"q1","stage":"s2","stage_name":null,"field":"next_step","only_if":"doc.amount > 50000"}]}

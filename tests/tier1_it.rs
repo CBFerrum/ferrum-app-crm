@@ -1242,6 +1242,39 @@ async fn record_types(admin: &U, anna: &U) {
     anna.update("Opportunity", uid(&other), json!({"sales_stage": stage_of("Proposal").await})).await;
     admin.update("RecordType", vid(&json!({"id": lead_kind})), json!({"disabled": true})).await;
     refused(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "Off", "record_type": lead_kind}))).await, "switched off");
+    // an_old_requirement_by_name_still_holds_and_is_resolved_on_save: saved again, its rows name their stage by record
+    let proposal = stage_of("Proposal").await;
+    admin.update("RecordType", vid(&json!({"id": kind})), json!({"disabled": false})).await;
+    let rows = admin.get("RecordType", vid(&json!({"id": kind}))).await["requirements"].as_array().unwrap().clone();
+    assert_eq!((rows[0]["stage"].clone(), rows[0]["stage_name"].clone()), (proposal.clone(), Value::Null), "{rows:?}");
+    assert_eq!((rows[1]["stage"].clone(), rows[1]["stage_name"].clone()), (stage_of("Contract").await, Value::Null));
+    // renaming_a_stage_keeps_a_type_s_requirement
+    admin.update("SalesStage", vid(&json!({"id": proposal})), json!({"stage_name": "Offer"})).await;
+    let d2 = anna.insert("Opportunity", json!({"opportunity_from": "Customer", "customer": acme, "record_type": kind, "amount": "100"})).await;
+    refused(anna.k.update(&anna.ctx, "Opportunity", uid(&d2), obj(json!({"sales_stage": proposal})), None).await, "asks for Next Step before Offer");
+    // a type's requirement by stage, with a condition; a lead's type names a status, never a stage
+    let cond = uid(&admin
+        .insert(
+            "RecordType",
+            json!({"type_name": "Big deal", "applies_to": "Opportunity", "pipeline": pipeline,
+                   "requirements": [{"stage": proposal, "field": "expected_close_date", "only_if": "doc.amount > 1000"}]}),
+        )
+        .await);
+    let d3 = anna.insert("Opportunity", json!({"opportunity_from": "Customer", "customer": acme, "record_type": cond.to_string(), "amount": "100"})).await;
+    anna.update("Opportunity", uid(&d3), json!({"sales_stage": proposal})).await;
+    let d4 = anna.insert("Opportunity", json!({"opportunity_from": "Customer", "customer": acme, "record_type": cond.to_string(), "amount": "5000"})).await;
+    refused(anna.k.update(&anna.ctx, "Opportunity", uid(&d4), obj(json!({"sales_stage": proposal})), None).await, "Expected Close");
+    refused(
+        admin
+            .k
+            .insert(
+                &admin.ctx,
+                "RecordType",
+                obj(json!({"type_name": "Staged lead", "applies_to": "Lead", "requirements": [{"stage": proposal, "field": "budget"}]})),
+            )
+            .await,
+        "status",
+    );
     prospect_activities(admin, anna).await;
 }
 

@@ -1905,6 +1905,50 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
     );
     anna.update("Opportunity", rollout, json!({"sales_stage": proposal})).await;
 
+    // ───────────── a_stage_asks_for_any_field_of_any_deal ─────────────
+    maria.update("SalesStage", idv(&proposal), json!({"required_fields": [{"field": "campaign"}]})).await;
+    let ready = json!({"amount": "10", "expected_close_date": day, "contact": ann, "sales_stage": qualification});
+    let camp = uid(&anna.insert("Opportunity", deal("Camp", ready.clone())).await);
+    let said = refusal(anna.k.update(&anna.ctx, "Opportunity", camp, obj(json!({"sales_stage": proposal})), None).await);
+    assert!(said.contains("Campaign") && said.contains("before deal Camp"), "{said}");
+    let webinar = maria.insert("Campaign", json!({"campaign_name": "Stage webinar", "campaign_type": "Webinar", "status": "Active", "start_date": day})).await;
+    anna.update("Opportunity", camp, json!({"sales_stage": proposal, "campaign": webinar["id"]})).await;
+    // moving_back_losing_and_the_engine_are_not_held_up
+    let bare = uid(&anna.insert("Opportunity", deal("No campaign", ready.clone())).await);
+    anna.update("Opportunity", camp, json!({"sales_stage": qualification, "campaign": null})).await;
+    anna.action("Opportunity", camp, "mark_lost", json!({"lost_reason": "Timing"})).await;
+    let engine = Ctx::system(tenant, admin.ctx.schema.clone());
+    k.update(&engine, "Opportunity", bare, obj(json!({"sales_stage": proposal})), None).await.expect("the engine is not held up");
+    // a_stage_refuses_a_field_the_deal_does_not_have_and_a_condition_that_does_not_compile
+    refused(
+        maria.k.update(&maria.ctx, "SalesStage", idv(&qualification), obj(json!({"required_fields": [{"field": "no_such_field"}]})), None).await,
+        "no_such_field",
+    );
+    refused(
+        maria
+            .k
+            .update(&maria.ctx, "SalesStage", idv(&qualification), obj(json!({"required_fields": [{"field": "next_step", "only_if": "doc.amount >"}]})), None)
+            .await,
+        "only_if",
+    );
+    // a_sales_user_cannot_change_what_a_stage_asks
+    let r = anna.k.update(&anna.ctx, "SalesStage", idv(&qualification), obj(json!({"required_fields": [{"field": "next_step"}]})), None).await;
+    assert!(matches!(r, Err(Error::Forbidden(_))), "{r:?}");
+    // a_requirement_with_a_condition_is_asked_only_then
+    maria.update("SalesStage", idv(&qualification), json!({"required_fields": [{"field": "next_step", "only_if": "doc.amount > 1000"}]})).await;
+    let small = uid(&anna.insert("Opportunity", deal("Small one", json!({"amount": "500", "sales_stage": prospecting}))).await);
+    anna.update("Opportunity", small, json!({"sales_stage": qualification})).await;
+    let big = uid(&anna.insert("Opportunity", deal("Big one", json!({"amount": "5000", "sales_stage": prospecting}))).await);
+    refused(anna.k.update(&anna.ctx, "Opportunity", big, obj(json!({"sales_stage": qualification})), None).await, "Next Step");
+    anna.update("Opportunity", big, json!({"sales_stage": qualification, "next_step": "Call the buyer"})).await;
+    // a_condition_that_cannot_be_worked_out_refuses_and_says_so
+    maria.update("SalesStage", idv(&qualification), json!({"required_fields": [{"field": "next_step", "only_if": "doc.amount > 'x'"}]})).await;
+    let odd = uid(&anna.insert("Opportunity", deal("Odd one", json!({"amount": "5", "sales_stage": prospecting}))).await);
+    refused(anna.k.update(&anna.ctx, "Opportunity", odd, obj(json!({"sales_stage": qualification})), None).await, "cannot be worked out");
+    for st in [&proposal, &qualification] {
+        maria.update("SalesStage", idv(st), json!({"required_fields": []})).await;
+    }
+
     // ───────────── lines priced from a price list in another currency ─────────────
     let yesterday = (today() - chrono::Duration::days(1)).to_string();
     admin.insert("ExchangeRate", json!({"from_currency": usd["id"], "to_currency": inr["id"], "rate": "83", "valid_from": yesterday})).await;
