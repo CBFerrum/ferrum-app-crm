@@ -11,6 +11,9 @@
 //!   address. Matching is by the whole address (any case) or the whole number (its last ten
 //!   digits, as leads are kept), never by name. People of the workspace and Mail's own accounts
 //!   are not "the other party".
+//! * A mail sent as marketing (`purpose` Marketing: a newsletter, a campaign) is filed on the person only, so their
+//!   timeline shows what they were sent. Nobody in sales wrote it and the person did nothing: it is filed on no deal
+//!   and touches nothing, so the untouched-lead and quiet-deal reminders keep firing.
 //! * With CRM Settings' Make a Lead of an Unknown Sender, mail received from an address nothing
 //!   knows (and that is not an automatic sender) makes a lead.
 //! * A calendar event with a guest who is a known person becomes a meeting activity on their
@@ -258,6 +261,8 @@ async fn communication(k: &Kernel, tenant: Uuid, comm: Uuid) -> Result<()> {
         Err(e) => return Err(e),
     };
     let received = s(&doc, "direction") == Some("Received");
+    // A reply is never bulk, whatever it says; a mail kept without `purpose` is not marketing.
+    let bulk = !received && s(&doc, "purpose") == Some("Marketing");
     let at = s(&doc, "communication_date").and_then(|t| parse_datetime(t).ok()).unwrap_or_else(Utc::now);
     let arrival = if received && s(&doc, "channel") == Some("Email") { arrival(doc.get("headers"), s(&doc, "sender")) } else { Arrival::Ordinary };
     if arrival == Arrival::Bounce {
@@ -296,6 +301,9 @@ async fn communication(k: &Kernel, tenant: Uuid, comm: Uuid) -> Result<()> {
     people.dedup();
     for p in people {
         if !file(&mut tx, tenant, comm, p.entity, p.id, "address").await? {
+            continue;
+        }
+        if bulk {
             continue;
         }
         let deal = newest_open_deal(&mut tx, tenant, p).await?;
@@ -619,7 +627,8 @@ async fn new_lead(k: &Kernel, ctx: &Ctx, tx: &mut Tx, account_company: Option<Uu
     id(&made, "id").ok_or_else(|| Error::internal("a lead without an id"))
 }
 
-/// A person written to or heard from is touched: their lead, and the deal the mail was filed on.
+/// A person written to or heard from is touched: their lead, and the deal the mail was filed on. Mail sent as
+/// marketing never gets here: it is shown on the person and touches nothing.
 async fn touch(k: &Kernel, ctx: &Ctx, tx: &mut Tx, who: Person, deal: Option<Uuid>, at: DateTime<Utc>) -> Result<()> {
     let stamp = json!(at.to_rfc3339_opts(SecondsFormat::Millis, true));
     if who.entity == "Lead"
