@@ -252,45 +252,102 @@ async fn approval_rules(hc: &mut HookCtx<'_>) -> Result<Vec<ApprovalRule>> {
 }
 
 /// What the quotation's lines break of the product rules, one sentence each: an item without the
-/// one it requires, two that exclude each other, or too few of another per unit (in stock units).
+/// one it requires, two that exclude each other, too few of another per unit (in stock units), or fewer
+/// lines at no charge (a 100% line discount) of a component than the kits on it include; one sentence per
+/// component, naming every kit that brings it.
 async fn product_rule_issues(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Vec<String>> {
-    let (qty, names, rules) = product_rules(hc, doc).await?;
+    let (qty, free, names, rules) = product_rules(hc, doc).await?;
     let name = |i: &Uuid| names.get(i).cloned().unwrap_or_else(|| i.to_string());
     let mut out = Vec::new();
-    for (item, rule, other, per, why) in rules {
-        let (mine, theirs) = (qty.get(&item).copied().unwrap_or_default(), qty.get(&other).copied().unwrap_or_default());
+    for (item, rule, other, per, why) in &rules {
+        let (mine, theirs) = (qty.get(item).copied().unwrap_or_default(), qty.get(other).copied().unwrap_or_default());
         match rule.as_str() {
-            "Requires" if theirs.is_zero() => out.push(format!("{why} ({} needs {})", name(&item), name(&other))),
-            "Excludes" if !theirs.is_zero() => out.push(format!("{why} ({} is not quoted with {})", name(&item), name(&other))),
+            "Requires" if theirs.is_zero() => out.push(format!("{why} ({} needs {})", name(item), name(other))),
+            "Excludes" if !theirs.is_zero() => out.push(format!("{why} ({} is not quoted with {})", name(item), name(other))),
             "At least per unit" => {
                 let need = (mine * per.unwrap_or_default()).normalize();
                 if theirs < need {
-                    out.push(format!("{why} ({need} of {} for {} of {}, not {})", name(&other), mine.normalize(), name(&item), theirs.normalize()));
+                    out.push(format!("{why} ({need} of {} for {} of {}, not {})", name(other), mine.normalize(), name(item), theirs.normalize()));
                 }
             }
             _ => {}
         }
     }
+    for kit in included(&qty, &free, &rules) {
+        let have = free.get(&kit.component).copied().unwrap_or_default();
+        if kit.need > have {
+            let kits: Vec<String> = kit.kits.iter().map(|(k, n)| format!("{} of {}", n.normalize(), name(k))).collect();
+            out.push(format!(
+                "{} ({} of {} come with {}, not {})",
+                kit.why.join("; "),
+                kit.need.normalize(),
+                name(&kit.component),
+                kits.join(" and "),
+                have.normalize()
+            ));
+        }
+    }
     Ok(out)
 }
 
-type Rules = Vec<(Uuid, String, Uuid, Option<Decimal>, String)>;
+type Rule = (Uuid, String, Uuid, Option<Decimal>, String);
+type Rules = Vec<Rule>;
 
-/// The quotation's quantity of each item (in stock units), the items' names, and the enabled
-/// product rules of the items on it.
-async fn product_rules(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<(HashMap<Uuid, Decimal>, HashMap<Uuid, String>, Rules)> {
+/// What the kits on a quotation include of one component: how many, from which kits (each with its charged units),
+/// and the rules' descriptions.
+struct Included {
+    component: Uuid,
+    need: Decimal,
+    kits: Vec<(Uuid, Decimal)>,
+    why: Vec<String>,
+}
+
+/// Each component the quotation's kits include (Includes rules), in rule order: only charged units of a kit bring
+/// components (`qty` less `free`, the units on lines at a 100% discount).
+// ponytail: kits do not nest (a kit at no charge brings nothing); expand recursively with a depth limit if a
+// workspace sells kits of kits.
+fn included(qty: &HashMap<Uuid, Decimal>, free: &HashMap<Uuid, Decimal>, rules: &[Rule]) -> Vec<Included> {
+    let mut out: Vec<Included> = Vec::new();
+    for (kit, rule, component, per, why) in rules {
+        let charged = qty.get(kit).copied().unwrap_or_default() - free.get(kit).copied().unwrap_or_default();
+        if rule != "Includes" || charged <= Decimal::ZERO {
+            continue;
+        }
+        let i = match out.iter().position(|i| i.component == *component) {
+            Some(i) => i,
+            None => {
+                out.push(Included { component: *component, need: Decimal::ZERO, kits: vec![], why: vec![] });
+                out.len() - 1
+            }
+        };
+        out[i].need += charged * per.unwrap_or_default();
+        out[i].kits.push((*kit, charged));
+        out[i].why.push(why.clone());
+    }
+    out
+}
+
+/// The quotation's quantity of each item (in stock units), of it on lines at no charge (a 100% line discount), the
+/// items' names, and the enabled product rules of the items on it.
+type Quantities = HashMap<Uuid, Decimal>;
+async fn product_rules(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<(Quantities, Quantities, HashMap<Uuid, String>, Rules)> {
     let mut qty: HashMap<Uuid, Decimal> = HashMap::new();
+    let mut free: HashMap<Uuid, Decimal> = HashMap::new();
     let mut names: HashMap<Uuid, String> = HashMap::new();
     for line in rows(doc, "items") {
         let Some(item) = id(&line, "item") else { continue };
         let stock = d(&line, "stock_qty");
-        *qty.entry(item).or_default() += if stock.is_zero() { d(&line, "qty") } else { stock };
+        let q = if stock.is_zero() { d(&line, "qty") } else { stock };
+        *qty.entry(item).or_default() += q;
+        if d(&line, "discount_percent") == Decimal::ONE_HUNDRED {
+            *free.entry(item).or_default() += q;
+        }
         if let Some(n) = s(&line, "item_name") {
             names.insert(item, n.to_string());
         }
     }
     if qty.is_empty() {
-        return Ok((qty, names, vec![]));
+        return Ok((qty, free, names, vec![]));
     }
     let items: Vec<Uuid> = qty.keys().copied().collect();
     let rules: Rules = sqlx::query_as(
@@ -310,13 +367,23 @@ async fn product_rules(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<(HashMap<Uuid,
             .await?;
         names.extend(found);
     }
-    Ok((qty, names, rules))
+    Ok((qty, free, names, rules))
 }
 
-/// What the rules need that the lines lack, as lines to add: each required item once, and the
-/// shortfall of one needed per unit (in stock units). Two items that exclude each other are a
-/// person's choice and stay as they are.
-fn rule_needs(qty: &HashMap<Uuid, Decimal>, rules: &Rules) -> Vec<(Uuid, Decimal)> {
+/// What the rules need that the lines lack, as lines to add (item, quantity, at no charge): first what the kits
+/// include beyond the lines at no charge already there, then each required item once and the shortfall of one needed
+/// per unit (in stock units), counting what was just added (an included cable also meets "needs a cable"). Two items
+/// that exclude each other are a person's choice and stay as they are.
+fn rule_needs(qty: &Quantities, free: &Quantities, rules: &[Rule]) -> Vec<(Uuid, Decimal, bool)> {
+    let mut out: Vec<(Uuid, Decimal, bool)> = Vec::new();
+    let mut added: Quantities = HashMap::new();
+    for kit in included(qty, free, rules) {
+        let short = (kit.need - free.get(&kit.component).copied().unwrap_or_default()).normalize();
+        if short > Decimal::ZERO {
+            out.push((kit.component, short, true));
+            added.insert(kit.component, short);
+        }
+    }
     let mut need: Vec<(Uuid, Decimal)> = Vec::new();
     for (item, rule, other, per, _) in rules {
         let mine = qty.get(item).copied().unwrap_or_default();
@@ -330,29 +397,38 @@ fn rule_needs(qty: &HashMap<Uuid, Decimal>, rules: &Rules) -> Vec<(Uuid, Decimal
             None => need.push((*other, wanted)),
         }
     }
-    need.into_iter()
-        .map(|(item, wanted)| (item, (wanted - qty.get(&item).copied().unwrap_or_default()).normalize()))
-        .filter(|(_, short)| *short > Decimal::ZERO)
-        .collect()
+    let have = |i: &Uuid| qty.get(i).copied().unwrap_or_default() + added.get(i).copied().unwrap_or_default();
+    out.extend(need.into_iter().map(|(item, wanted)| (item, (wanted - have(&item)).normalize(), false)).filter(|(_, short, _)| *short > Decimal::ZERO));
+    out
 }
 
-/// Adds the lines the product rules need, priced like any line, and says what it added.
+/// Adds the lines the product rules need, each priced like any line, what a kit includes at a 100% line discount, and
+/// says what it added. Run again, it finds nothing missing (its condition no longer holds).
 async fn add_rule_needs(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     let quotation = id(doc, "id").ok_or_else(|| Error::internal("quotation without id"))?;
-    let (qty, names, rules) = product_rules(hc, doc).await?;
-    let needs = rule_needs(&qty, &rules);
+    let (qty, free, names, rules) = product_rules(hc, doc).await?;
+    let needs = rule_needs(&qty, &free, &rules);
     if needs.is_empty() {
         return Ok(json!({"added": [], "message": "Nothing to add: what is left is a choice between items that exclude each other"}));
     }
     let mut lines: Vec<Value> = rows(doc, "items").into_iter().map(Value::Object).collect();
-    lines.extend(needs.iter().map(|(item, short)| json!({"item": item.to_string(), "qty": short.to_string()})));
+    lines.extend(needs.iter().map(|(item, short, included)| match included {
+        true => json!({"item": item.to_string(), "qty": short.to_string(), "discount_percent": "100"}),
+        false => json!({"item": item.to_string(), "qty": short.to_string()}),
+    }));
     let mut patch = Doc::new();
     patch.insert("items".into(), Value::Array(lines));
     hc.kernel.update_tx(hc.ctx, hc.tx, "Quotation", quotation, patch, None).await?;
-    let said: Vec<String> = needs.iter().map(|(item, short)| format!("{} × {short}", names.get(item).cloned().unwrap_or_else(|| item.to_string()))).collect();
-    Ok(
-        json!({"added": needs.iter().map(|(i, q)| json!({"item": i, "qty": q.to_string()})).collect::<Vec<_>>(), "message": format!("Added {}", said.join(", "))}),
-    )
+    let said: Vec<String> = needs
+        .iter()
+        .map(|(item, short, included)| {
+            format!("{} × {short}{}", names.get(item).cloned().unwrap_or_else(|| item.to_string()), if *included { " (included)" } else { "" })
+        })
+        .collect();
+    Ok(json!({
+        "added": needs.iter().map(|(i, q, included)| json!({"item": i, "qty": q.to_string(), "included": included})).collect::<Vec<_>>(),
+        "message": format!("Added {}", said.join(", "))
+    }))
 }
 
 /// The rules a quotation is past. Its total is compared in the company's currency.
@@ -788,10 +864,19 @@ mod tests {
             rule(widget, "Excludes", guide, None),
             rule(widget, "Requires", kit, None),
         ];
-        let mut needs = rule_needs(&qty, &rules);
+        let none = HashMap::new();
+        let mut needs = rule_needs(&qty, &none, &rules);
         needs.sort();
-        assert_eq!(needs, vec![(kit, Decimal::from(4)), (install, Decimal::ONE)], "six kits less the two quoted; an exclusion adds nothing");
-        assert!(rule_needs(&HashMap::from([(widget, Decimal::from(3)), (install, Decimal::ONE), (kit, Decimal::from(6))]), &rules).is_empty());
+        assert_eq!(needs, vec![(kit, Decimal::from(4), false), (install, Decimal::ONE, false)], "six kits less the two quoted; an exclusion adds nothing");
+        assert!(rule_needs(&HashMap::from([(widget, Decimal::from(3)), (install, Decimal::ONE), (kit, Decimal::from(6))]), &none, &rules).is_empty());
+        // A kit: each charged unit brings its components at no charge; free ones already there count; a free kit brings nothing.
+        let (starter, cable) = (Uuid::from_u128(5), Uuid::from_u128(6));
+        let kits = vec![rule(starter, "Includes", cable, Some(2)), rule(widget, "Requires", cable, None)];
+        let three = HashMap::from([(starter, Decimal::from(3)), (widget, Decimal::ONE)]);
+        assert_eq!(rule_needs(&three, &none, &kits), vec![(cable, Decimal::from(6), true)], "the included cables also meet the widget's need");
+        let with = HashMap::from([(starter, Decimal::from(3)), (cable, Decimal::from(6))]);
+        assert!(rule_needs(&with, &HashMap::from([(cable, Decimal::from(6))]), &kits).is_empty());
+        assert_eq!(rule_needs(&HashMap::from([(starter, Decimal::from(3))]), &HashMap::from([(starter, Decimal::from(3))]), &kits[..1]), vec![]);
     }
     use super::*;
 

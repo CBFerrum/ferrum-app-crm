@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.19.0
+
+Package `crm` 0.11.0. Needs the same platform as 0.16.0. No database or interface change.
+
+- **Kits.** A Product Rule can be Includes: each charged unit of the item comes with so many of another (Qty of the
+  Other per Unit, in stock units). A draft quotation whose kits include more of a component than it has on lines at
+  a 100% line discount says so in Product Rules Broken (one sentence per component, naming every kit) and is not
+  submitted. Add What the Rules Need adds the shortfall as a line at a 100% discount, before the other rules' lines,
+  and those count it ("needs a cable" is met by an included cable). The sales order made from the quotation carries
+  the same lines at the same prices. A kit at no charge brings nothing (kits do not nest).
+- **Add What the Rules Need has a contract**: what it adds (`item`, `qty`, `included`) and what "done" means, for an
+  agent calling `crm.quotation.add_rule_needs`.
+
 ## 0.18.0
 
 Package `crm` 0.10.0. Needs the same platform as 0.16.0. Interface rebuilt (`ui/dist`).

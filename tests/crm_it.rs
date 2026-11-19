@@ -849,6 +849,88 @@ async fn scenario() {
     assert!(quote["rule_issues"].is_null(), "nothing broken: {quote:?}");
     assert_eq!(anna.submit("Quotation", q).await["docstatus"], json!(1));
 
+    // ───────────── kits: an item that includes others at no charge ─────────────
+    let (starter, cable, pro, lamp) =
+        (item("STARTER", "Starter Kit", "100").await, item("CABLE", "Cable", "8").await, item("PRO", "Pro Kit", "200").await, item("LAMP", "Lamp", "30").await);
+    // a_kit_rule_needs_its_quantity
+    refused(
+        maria.k.insert(&maria.ctx, "ProductRule", obj(json!({"item": starter, "rule": "Includes", "other_item": cable, "description": "x"}))).await,
+        "qty_per_unit",
+    );
+    maria
+        .insert(
+            "ProductRule",
+            json!({"item": starter, "rule": "Includes", "other_item": cable, "qty_per_unit": "2", "description": "A starter kit comes with two cables"}),
+        )
+        .await;
+    // a_kit_lists_what_it_includes_until_the_lines_are_there
+    let kq = anna.insert("Quotation", lines(json!([{"item": starter, "qty": "3"}]))).await;
+    let issues = kq["rule_issues"].as_str().unwrap_or_default().to_string();
+    assert!(issues.contains("A starter kit comes with two cables (6 of Cable come with 3 of Starter Kit, not 0)"), "{issues}");
+    let kq = uid(&kq);
+    refused(anna.k.submit(&anna.ctx, "Quotation", kq, None).await, "product rules");
+    // a_viewer_cannot_add_what_the_rules_need
+    let vic = user("vic@crm.test", "Vic Viewer", &["CRM Viewer"]).await;
+    let r = vic.k.run_action(&vic.ctx, "Quotation", kq, "add_rule_needs", json!({})).await;
+    assert!(matches!(r, Err(Error::Forbidden(_))), "{r:?}");
+    // add_what_the_rules_need_adds_included_lines_at_no_charge
+    let added = anna.action("Quotation", kq, "add_rule_needs", json!({})).await;
+    assert!(added["message"].as_str().is_some_and(|m| m.contains("Cable × 6 (included)")), "{added}");
+    assert_eq!(added["added"][0]["included"], json!(true), "{added}");
+    let quote = anna.get("Quotation", kq).await;
+    let cables: Vec<Value> = quote["items"].as_array().unwrap().iter().filter(|l| l["item"] == json!(cable)).cloned().collect();
+    assert_eq!(cables.len(), 1, "{quote:?}");
+    assert_eq!(
+        (dec(&cables[0]["qty"]), dec(&cables[0]["discount_percent"]), dec(&cables[0]["rate"]), dec(&cables[0]["amount"])),
+        (n("6"), n("100"), n("0"), n("0"))
+    );
+    assert_eq!(dec(&quote["net_total"]), n("300"), "the kits' price is the quotation's");
+    assert!(quote["rule_issues"].is_null(), "{quote:?}");
+    // adding_twice_adds_once
+    refused(anna.k.run_action(&anna.ctx, "Quotation", kq, "add_rule_needs", json!({})).await, "not available");
+    assert_eq!(anna.get("Quotation", kq).await["items"].as_array().map(Vec::len), Some(2));
+    // an_included_line_reaches_the_sales_order_at_no_charge
+    anna.submit("Quotation", kq).await;
+    let order = vid(&anna.action("Quotation", kq, "make_sales_order", json!({})).await);
+    let doc = anna.get("SalesOrder", order).await;
+    let line = doc["items"].as_array().unwrap().iter().find(|l| l["item"] == json!(cable)).cloned().expect("the cable line");
+    assert_eq!((dec(&line["discount_percent"]), dec(&line["rate"])), (n("100"), n("0")));
+    anna.submit("SalesOrder", order).await;
+    // a_charged_line_of_the_component_does_not_count_as_included
+    let q3 = anna.insert("Quotation", lines(json!([{"item": starter, "qty": "1"}, {"item": cable, "qty": "2"}]))).await;
+    assert!(q3["rule_issues"].as_str().unwrap_or_default().contains("(2 of Cable come with 1 of Starter Kit, not 0)"), "{q3:?}");
+    anna.action("Quotation", uid(&q3), "add_rule_needs", json!({})).await;
+    let cables: Vec<Decimal> = anna.get("Quotation", uid(&q3)).await["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["item"] == json!(cable))
+        .map(|l| dec(&l["discount_percent"]))
+        .collect();
+    assert_eq!(cables, [n("0"), n("100")], "one charged, one included");
+    // two_kits_with_one_component_add_up
+    maria
+        .insert(
+            "ProductRule",
+            json!({"item": pro, "rule": "Includes", "other_item": cable, "qty_per_unit": "1", "description": "A pro kit comes with a cable"}),
+        )
+        .await;
+    let q4 = anna
+        .insert("Quotation", lines(json!([{"item": starter, "qty": "1"}, {"item": pro, "qty": "1"}, {"item": cable, "qty": "2", "discount_percent": "100"}])))
+        .await;
+    let issues = q4["rule_issues"].as_str().unwrap_or_default().to_string();
+    assert!(
+        issues.contains("A pro kit comes with a cable") && issues.contains("A starter kit comes with two cables") && issues.contains("3 of Cable"),
+        "{issues}"
+    );
+    assert_eq!(issues.matches("of Cable come with").count(), 1, "one issue: {issues}");
+    let added = anna.action("Quotation", uid(&q4), "add_rule_needs", json!({})).await;
+    assert!(added["message"].as_str().is_some_and(|m| m.contains("Cable × 1 (included)")), "{added}");
+    // requires_and_per_unit_are_as_they_were: an included cable satisfies "needs a cable"
+    maria.insert("ProductRule", json!({"item": lamp, "rule": "Requires", "other_item": cable, "description": "A lamp needs a cable"})).await;
+    let q8 = anna.insert("Quotation", lines(json!([{"item": lamp, "qty": "1"}, {"item": cable, "qty": "1", "discount_percent": "100"}]))).await;
+    assert!(q8["rule_issues"].is_null(), "{q8:?}");
+
     crm_alone(&k).await;
     day_one(&k).await;
     assign_and_remind(&k).await;

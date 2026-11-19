@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.18.0-0f766e?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.19.0-0f766e?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -39,7 +39,7 @@ priced and taxed by the same engine that invoices it.
 
 | | |
 |---|---|
-| **Version** | 0.18.0 (packages: `crm` 0.10.0, `crm_erp` 0.1.2) |
+| **Version** | 0.19.0 (packages: `crm` 0.11.0, `crm_erp` 0.1.2) |
 | **Kind** | Its own interface at `/crm/` (pipeline board, Today, deal, account, quotation, sequence and forecast pages) plus Ferrum's standard lists and forms for every record |
 | **What it adds** | 36 entities (24 records and 12 line tables), 4 roles, 13 reports, 2 print and document formats, 2 messages, 2 connections, 1 menu with 41 entries, 5 create shortcuts, 5 notification kinds |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
@@ -195,7 +195,7 @@ On a phone:
 - **Order on accept.** A setting (off by default) makes the draft sales order the moment a quotation is accepted.
 - **Revisions.** A quotation is revised by cancelling and amending; Revision, Revises and Replaced By keep the chain.
 - **Approval.** Approval rules set a discount percentage or a total above which someone with a chosen role must approve before submitting. What was approved is kept as a digest of its terms (party, lines, discount, taxes, currency, terms and validity), and a later change needs approval again. The orders and invoices made from it keep the approved terms.
-- **Product rules.** An item can require another, exclude another, or need so many of another per unit. A draft that breaks a rule says so, and Add What the Rules Need adds the missing lines.
+- **Product rules and kits.** An item can require another, exclude another, need so many of another per unit, or be a kit that includes so many of another per unit at no charge. A draft that breaks a rule says so, and Add What the Rules Need adds the missing lines, a kit's components at a 100% line discount, so the customer's document lists what they get and the total is the kit's price; the sales order carries the same lines and prices.
 - **Print format.** A printable quotation, and a customer document (`crm.quotation_document`) that a workspace edits in Settings.
 - **What the customer typed is personal data.** It is exported and erased with the person.
 
@@ -295,7 +295,7 @@ Everything CRM adds is ordinary Ferrum metadata and Rust: its records get lists,
 | Territory, SalesTeam | Who sees what | Territory tree and sales people; manager and members |
 | SalesTarget | What a person or team should win | Period, measure (Amount Won, Deals Won), target |
 | LeadAssignmentRule, LeadScoringRule | Sharing out and ranking | Order, matches, method; field, value, points |
-| QuotationApprovalRule, ProductRule | Quotation limits | Discount over, total over, approver role; requires, excludes, per unit |
+| QuotationApprovalRule, ProductRule | Quotation limits | Discount over, total over, approver role; requires, excludes, per unit, includes |
 | Sequence, SequenceEnrolment | Timed outreach | Steps, working-day waits; status, next step due, stopped reason |
 | ForecastSubmission, ForecastSnapshot | A forecast and its history | Period, lines by category, submitted, adjusted |
 | RecordType | A kind of deal or lead | Pipeline, defaults, requirements, allowed stages |
@@ -351,7 +351,7 @@ Compared with Salesforce Sales Cloud, HubSpot Sales Hub, Microsoft Dynamics 365 
 | Quote approvals | 🟡 [5] | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
 | E-signature on quotes | ❌ | 🟡 | ✅ | 🟡 | 🟡 | ✅ | ✅ |
 | Quote to order and invoice in the same system | ✅ | 🟡 | 🟡 | ✅ | 🟡 | ✅ | ✅ |
-| Product bundles and CPQ | ❌ | ✅ | 🟡 | ✅ | ❌ | 🟡 | 🟡 |
+| Product bundles and CPQ | 🟡 [9] | ✅ | 🟡 | ✅ | ❌ | 🟡 | 🟡 |
 | Subscriptions and renewals | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | 🟡 |
 | Forecast submitted and adjusted, with history | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
 | Targets and quotas | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -380,6 +380,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 6. The platform assistant answers questions about records; nothing summarises a record or suggests a next step yet.
 7. A responsive web interface with touch menus on the board; no native app and no offline cache for CRM screens yet.
 8. Odoo Community is open source; Odoo Enterprise is not.
+9. Kits that include other items at no charge (on their own lines, carried to the sales order). No set price shared out over the components, and no configurator (options, attributes, guided selling).
 
 ### 🏆 Where Ferrum CRM stands out
 
@@ -407,6 +408,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ### ✅ Recently shipped
 
+- [x] **0.19.0**: Kits: a product rule Includes adds a kit's components at no charge.
 - [x] **0.18.0**: A stage asks for any field of a deal, with a condition; a record type names its stage by record.
 - [x] **0.17.0**: A lead is checked against customers, contacts and prospects, a prospect against prospects and customers; a refusal names only what you may open.
 - [x] **0.16.2**: Only the customer answers a quotation on their link; making a deal of a lead needs the right to change the lead.
@@ -453,7 +455,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 - [ ] Lead-ad sync from Meta, Google and LinkedIn.
 - [ ] Scoring on behaviour and on contacts and deals; deal risk and predicted close.
 - [ ] AI summary of a lead, deal, account or thread, and a drafted reply.
-- [ ] Product bundles with price roll-up; subscriptions, renewals and co-term.
+- [ ] A bundle price shared out over its components, and a configurator; subscriptions, renewals and co-term.
 - [ ] Quote to contract through Ferrum Contracts.
 - [ ] Commission and incentive plans.
 - [ ] Deal splits and deal teams; mutual action plans.
@@ -547,7 +549,7 @@ docs/             connection notes and screenshots
 
 ## 📜 Changelog
 
-Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.18.0**.
+Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.19.0**.
 
 ## 🤝 Contributing
 

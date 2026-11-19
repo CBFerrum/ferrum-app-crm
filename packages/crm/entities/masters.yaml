@@ -162,12 +162,13 @@
   kind: master
   module: crm
   title_field: description
-  description: "What may be quoted together: an item that needs another on the same quotation, two that exclude each other, or one that needs so many of another per unit. A quotation that breaks one lists it, and is not submitted until it is put right."
+  description: "What may be quoted together: an item that needs another on the same quotation, two that exclude each other, one that needs so many of another per unit, or a kit that includes so many of another per unit at no charge. A quotation that breaks one lists it, and is not submitted until it is put right."
   fields:
     - {name: item, type: link, to: Item, required: true, in_list: true, in_filter: true}
-    - {name: rule, type: select, options: [Requires, Excludes, At least per unit], required: true, default: Requires, in_list: true}
+    - {name: rule, type: select, options: [Requires, Excludes, At least per unit, Includes], required: true, default: Requires, in_list: true,
+       description: "Includes: each unit of the item comes with this many of the other, on lines at a 100% discount; the item's own price is the kit's"}
     - {name: other_item, type: link, to: Item, required: true, in_list: true}
-    - {name: qty_per_unit, type: decimal, min: "0.000000001", visible_if: "doc.rule == 'At least per unit'", required_if: "doc.rule == 'At least per unit'", label: Qty of the Other per Unit, description: In stock units}
+    - {name: qty_per_unit, type: decimal, min: "0.000000001", visible_if: "doc.rule == 'At least per unit' || doc.rule == 'Includes'", required_if: "doc.rule == 'At least per unit' || doc.rule == 'Includes'", label: Qty of the Other per Unit, description: In stock units}
     - {name: description, type: data, required: true, in_list: true, description: "What people read when the rule is broken, e.g. The boiler is installed with its kit"}
     - {name: disabled, type: check, in_filter: true}
   rules:
