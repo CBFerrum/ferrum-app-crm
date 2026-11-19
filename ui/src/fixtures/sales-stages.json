@@ -1,0 +1,1 @@
+{"rows":[{"id":"s1","stage_name":"Discovery","pipeline":"p1","stage_order":1,"outcome":"Open"},{"id":"s2","stage_name":"Proposal","pipeline":"p1","stage_order":2,"outcome":"Open"}]}

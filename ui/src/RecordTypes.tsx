@@ -19,6 +19,7 @@ import {
   type FieldInfo,
   grouped,
   type RecordTypeDoc,
+  stageChoices,
   stagesFor,
   strayStages,
   toggled,
@@ -30,6 +31,9 @@ import {
   valueKind,
 } from "./recordtype";
 import { Problem } from "./states";
+
+/** The value of a deal's requirement still kept by its stage's name: shown until another stage is chosen. */
+const BY_NAME = "by-name";
 
 const stagesQuery = () => api.get<{ rows: StageInfo[] }>("/api/v1/SalesStage", { fields: "stage_name,stage_order,pipeline,outcome", filters: JSON.stringify({ disabled: false }), limit: 500, titles: true }).then((r) => r.rows);
 
@@ -185,7 +189,8 @@ function Editor({ initial, id, version, writable }: { initial: RecordTypeDoc; id
   const fields = fieldChoices((meta?.fields ?? []) as FieldInfo[]);
   const statuses = ((lead.data?.fields ?? []).find((f) => f.name === "status")?.options ?? []) as string[];
   const entries = entryChoices(d.applies_to, stages.data ?? [], d.pipeline, statuses);
-  const issue = meta ? typeIssues(d, fields, []) : null;
+  const choices = stageChoices(stages.data ?? [], d.pipeline);
+  const issue = meta ? typeIssues(d, fields, [], d.applies_to === "Opportunity" && stages.data ? choices : []) : null;
   const dirty = JSON.stringify(d) !== JSON.stringify(initial);
   const save = useMutation({
     mutationFn: () => (id ? api.patch<{ id: string }>(docPath("RecordType", id), typeBody(d), { ifMatch: version }) : api.post<{ id: string }>(docPath("RecordType"), typeBody(d), { idempotencyKey: key })),
@@ -280,17 +285,41 @@ function Editor({ initial, id, version, writable }: { initial: RecordTypeDoc; id
           <li key={r.id ?? `r-${i}`} className="crm-step">
             <div className="crm-step-grid">
               <Field label={d.applies_to === "Opportunity" ? t("When entering") : t("When it becomes")} htmlFor={`rt-rs-${i}`}>
-                <select id={`rt-rs-${i}`} className="input" value={r.stage_name} onChange={(e) => setD({ ...d, requirements: d.requirements.map((x, j) => (j === i ? { ...x, stage_name: e.target.value } : x)) })}>
-                  <option value="">{t("Whenever it is saved")}</option>
-                  {r.stage_name && !entries.includes(r.stage_name) && <option value={r.stage_name}>{isolate(r.stage_name)}</option>}
-                  {entries.map((s) => (
-                    <option key={s} value={s}>
-                      {isolate(s)}
-                    </option>
-                  ))}
-                </select>
+                {d.applies_to === "Opportunity" ? (
+                  <select
+                    id={`rt-rs-${i}`}
+                    className="input"
+                    value={r.stage ?? (r.stage_name ? BY_NAME : "")}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v !== BY_NAME) setD({ ...d, requirements: d.requirements.map((x, j) => (j === i ? { ...x, stage: v || null, stage_name: "" } : x)) });
+                    }}
+                  >
+                    <option value="">{t("Whenever it is saved")}</option>
+                    {!r.stage && r.stage_name && <option value={BY_NAME}>{t("{stage} (by name)", { stage: r.stage_name })}</option>}
+                    {r.stage && !choices.some((s) => s.id === r.stage) && <option value={r.stage}>{t("A stage this pipeline does not have")}</option>}
+                    {choices.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {d.pipeline || !s._titles?.pipeline ? isolate(s.stage_name) : `${isolate(s.stage_name)} · ${isolate(s._titles.pipeline)}`}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <select id={`rt-rs-${i}`} className="input" value={r.stage_name} onChange={(e) => setD({ ...d, requirements: d.requirements.map((x, j) => (j === i ? { ...x, stage_name: e.target.value } : x)) })}>
+                    <option value="">{t("Whenever it is saved")}</option>
+                    {r.stage_name && !entries.includes(r.stage_name) && <option value={r.stage_name}>{isolate(r.stage_name)}</option>}
+                    {entries.map((s) => (
+                      <option key={s} value={s}>
+                        {isolate(s)}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </Field>
               <FieldSelect id={`rt-rf-${i}`} label={t("Must have")} value={r.field} fields={fields} onChange={(f) => setD({ ...d, requirements: d.requirements.map((x, j) => (j === i ? { ...x, field: f } : x)) })} />
+              <Field label={t("Only if")} htmlFor={`rt-ro-${i}`} hint={t("Empty: always. A condition on the record, such as doc.amount > 50000")}>
+                <input id={`rt-ro-${i}`} className="input" value={r.only_if} onChange={(e) => setD({ ...d, requirements: d.requirements.map((x, j) => (j === i ? { ...x, only_if: e.target.value } : x)) })} />
+              </Field>
             </div>
             {writable && (
               <Button size="sm" aria-label={t("Remove requirement {n}", { n: i + 1 })} onClick={() => setD({ ...d, requirements: d.requirements.filter((_, j) => j !== i) })}>
@@ -302,7 +331,7 @@ function Editor({ initial, id, version, writable }: { initial: RecordTypeDoc; id
       </ul>
       {writable && (
         <div className="row">
-          <Button icon="plus" onClick={() => setD({ ...d, requirements: [...d.requirements, { stage_name: "", field: "" }] })}>
+          <Button icon="plus" onClick={() => setD({ ...d, requirements: [...d.requirements, { stage: null, stage_name: "", field: "", only_if: "" }] })}>
             {t("Add a requirement")}
           </Button>
           <span className="spacer" />
@@ -329,7 +358,7 @@ function TypePage({ meta, id }: { meta: EntityMeta; id: string }) {
         <Icon name="chevronRight" size={12} />
       </div>
       <h1 className="page-title">{isolate(doc.type_name)}</h1>
-      <Editor key={`${id}-${doc.version}`} id={id} version={doc.version} writable={can(meta.permissions, "write")} initial={{ ...blankType(doc.applies_to), ...doc, pipeline: doc.pipeline ?? null, disabled: !!doc.disabled, defaults: doc.defaults ?? [], allowed_stages: doc.allowed_stages ?? [], requirements: (doc.requirements ?? []).map((r) => ({ ...r, stage_name: r.stage_name ?? "" })) }} />
+      <Editor key={`${id}-${doc.version}`} id={id} version={doc.version} writable={can(meta.permissions, "write")} initial={{ ...blankType(doc.applies_to), ...doc, pipeline: doc.pipeline ?? null, disabled: !!doc.disabled, defaults: doc.defaults ?? [], allowed_stages: doc.allowed_stages ?? [], requirements: (doc.requirements ?? []).map((r) => ({ ...r, stage: r.stage ?? null, stage_name: r.stage_name ?? "", only_if: r.only_if ?? "" })) }} />
     </div>
   );
 }

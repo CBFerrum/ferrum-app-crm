@@ -416,6 +416,24 @@ async fn quotation_link(k: &Arc<Kernel>, admin: &U, anna: &U, ben: &U, cid: &str
     // ── declining: a reason is required; the answer is Rejected, in the customer's words
     let q2 = quote(anna, acme, Some(jane), widget, "2").await;
     anna.action("Quotation", q2, "send_quotation", json!({})).await;
+    // a_member_cannot_answer_for_the_customer: the customer's actions are theirs, on their link or the portal; a person
+    // of the workspace, even its administrator, records an answer with Accepted or Rejected
+    for (who, action, params) in [
+        (anna, "customer_accept", json!({"signed_name": "Anna Rep"})),
+        (admin, "customer_accept", json!({"signed_name": "Admin"})),
+        (anna, "customer_decline", json!({"reason": "Said on the phone"})),
+        (anna, "customer_ask", json!({"question": "Asked by a member?"})),
+    ] {
+        let r = who.k.run_action(&who.ctx, "Quotation", q2, action, params).await;
+        assert!(matches!(r, Err(Error::Forbidden(_))), "{action} by {}: {r:?}", who.ctx.email);
+    }
+    assert_eq!(anna.get("Quotation", q2).await["status"], json!("Sent"), "nothing was answered");
+    assert!(anna.list("Activity", json!({"subject": "Asked by a member?"})).await.is_empty(), "nor asked");
+    // the_customer_still_answers_through_the_link_and_the_portal: someone outside the workspace (a portal person) asks
+    let portal = U { k: anna.k.clone(), ctx: ferrum_kernel::Ctx { outside: true, ..anna.ctx.clone() } };
+    portal.k.run_action(&portal.ctx, "Quotation", q2, "customer_ask", json!({"question": "From the portal?", "signed_name": "Jane Lee"})).await.expect("asked");
+    let task = anna.one("Activity", json!({"subject": "From the portal?"})).await;
+    assert_eq!((task["assigned_to"].clone(), task["details"].clone()), (json!("anna@tier1.test"), json!("Jane Lee: From the portal?")));
     let t2 = token(&admin.k.issue_link_now(&admin.ctx, "Quotation", q2, &spec(5)).await.unwrap().url);
     assert!(k.use_link("tier1", &t2, "customer_decline", &Map::new(), None).await.is_err(), "the reason is required");
     assert!(k.use_link("tier1", &t2, "mark_lost", &given(json!({"lost_reason": "x"})), None).await.is_err(), "a link does only what it names");
@@ -1224,6 +1242,39 @@ async fn record_types(admin: &U, anna: &U) {
     anna.update("Opportunity", uid(&other), json!({"sales_stage": stage_of("Proposal").await})).await;
     admin.update("RecordType", vid(&json!({"id": lead_kind})), json!({"disabled": true})).await;
     refused(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "Off", "record_type": lead_kind}))).await, "switched off");
+    // an_old_requirement_by_name_still_holds_and_is_resolved_on_save: saved again, its rows name their stage by record
+    let proposal = stage_of("Proposal").await;
+    admin.update("RecordType", vid(&json!({"id": kind})), json!({"disabled": false})).await;
+    let rows = admin.get("RecordType", vid(&json!({"id": kind}))).await["requirements"].as_array().unwrap().clone();
+    assert_eq!((rows[0]["stage"].clone(), rows[0]["stage_name"].clone()), (proposal.clone(), Value::Null), "{rows:?}");
+    assert_eq!((rows[1]["stage"].clone(), rows[1]["stage_name"].clone()), (stage_of("Contract").await, Value::Null));
+    // renaming_a_stage_keeps_a_type_s_requirement
+    admin.update("SalesStage", vid(&json!({"id": proposal})), json!({"stage_name": "Offer"})).await;
+    let d2 = anna.insert("Opportunity", json!({"opportunity_from": "Customer", "customer": acme, "record_type": kind, "amount": "100"})).await;
+    refused(anna.k.update(&anna.ctx, "Opportunity", uid(&d2), obj(json!({"sales_stage": proposal})), None).await, "asks for Next Step before Offer");
+    // a type's requirement by stage, with a condition; a lead's type names a status, never a stage
+    let cond = uid(&admin
+        .insert(
+            "RecordType",
+            json!({"type_name": "Big deal", "applies_to": "Opportunity", "pipeline": pipeline,
+                   "requirements": [{"stage": proposal, "field": "expected_close_date", "only_if": "doc.amount > 1000"}]}),
+        )
+        .await);
+    let d3 = anna.insert("Opportunity", json!({"opportunity_from": "Customer", "customer": acme, "record_type": cond.to_string(), "amount": "100"})).await;
+    anna.update("Opportunity", uid(&d3), json!({"sales_stage": proposal})).await;
+    let d4 = anna.insert("Opportunity", json!({"opportunity_from": "Customer", "customer": acme, "record_type": cond.to_string(), "amount": "5000"})).await;
+    refused(anna.k.update(&anna.ctx, "Opportunity", uid(&d4), obj(json!({"sales_stage": proposal})), None).await, "Expected Close");
+    refused(
+        admin
+            .k
+            .insert(
+                &admin.ctx,
+                "RecordType",
+                obj(json!({"type_name": "Staged lead", "applies_to": "Lead", "requirements": [{"stage": proposal, "field": "budget"}]})),
+            )
+            .await,
+        "status",
+    );
     prospect_activities(admin, anna).await;
 }
 

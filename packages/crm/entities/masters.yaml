@@ -12,6 +12,13 @@
     - {name: description, type: text}
   list: {columns: [pipeline_name, is_default, disabled], sort: pipeline_name asc}
 
+- name: StageRequirement
+  label: Stage Requirement
+  kind: child
+  fields:
+    - {name: field, type: data, required: true, in_list: true, description: "A field of the deal, by its name, that must have a value when a deal enters the stage: campaign, territory, expected_close_date…"}
+    - {name: only_if, type: text, in_list: true, label: Only If, description: "Empty: always. A condition on the deal, as rules write them: doc.amount > 50000"}
+
 - name: SalesStage
   label: Sales Stage
   kind: master
@@ -37,11 +44,13 @@
     - {name: requires_next_step, type: check, label: A Next Step, visible_if: "doc.outcome != 'Lost'"}
     - {name: requires_lines, type: check, label: At Least One Line, visible_if: "doc.outcome != 'Lost'"}
     - {name: requires_quotation, type: check, label: A Submitted Quotation, visible_if: "doc.outcome != 'Lost'"}
+    - {name: required_fields, type: table, of: StageRequirement, label: Other Fields a Deal Must Have, visible_if: "doc.outcome != 'Lost'",
+       description: "Asked of every deal moved forward into this stage, with or without a record type"}
     - {name: disabled, type: check, in_filter: true, description: "Refused while open deals stand in it"}
   unique: [[pipeline, stage_name]]
   form:
     - {label: Stage, fields: [pipeline, stage_name, probability, stage_order, outcome, forecast_category, disabled]}
-    - {label: Before a Deal Enters It, visible_if: "doc.outcome != 'Lost'", fields: [requires_amount, requires_close_date, requires_primary_contact, requires_next_step, requires_lines, requires_quotation]}
+    - {label: Before a Deal Enters It, visible_if: "doc.outcome != 'Lost'", fields: [requires_amount, requires_close_date, requires_primary_contact, requires_next_step, requires_lines, requires_quotation, required_fields]}
   list: {columns: [stage_name, pipeline, probability, stage_order, outcome], sort: stage_order asc}
 
 - name: BuyingRole
@@ -136,8 +145,11 @@
     - {name: annual_revenue, type: currency, min: "0"}
     - {name: territory, type: link, to: Territory, in_filter: true}
     - {name: website, type: url}
-    - {name: email, type: email}
+    - {name: email, type: email, index: true}
     - {name: phone, type: phone}
+    - {name: phone_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The phone's national part, by which the same organization is found"}
+    - {name: website_key, type: data, read_only: true, hidden: true, no_copy: true, index: true, description: "The website's domain, by which the same organization is found"}
+    - {name: allow_duplicate, type: check, no_copy: true, description: "Save it although another prospect or a customer has the same email, phone or website; decided save by save"}
     - {name: assigned_to, type: email, default_expr: "user.email", label: Account Owner, in_list: true, in_filter: true}
     - {name: parent_prospect, type: link, to: Prospect, label: Parent Account, in_filter: true, description: "The group or head office it belongs to"}
     - {name: customer, type: link, to: Customer, read_only: true, no_copy: true, in_filter: true, description: Set when one of its leads is converted}
@@ -150,12 +162,13 @@
   kind: master
   module: crm
   title_field: description
-  description: "What may be quoted together: an item that needs another on the same quotation, two that exclude each other, or one that needs so many of another per unit. A quotation that breaks one lists it, and is not submitted until it is put right."
+  description: "What may be quoted together: an item that needs another on the same quotation, two that exclude each other, one that needs so many of another per unit, or a kit that includes so many of another per unit at no charge. A quotation that breaks one lists it, and is not submitted until it is put right."
   fields:
     - {name: item, type: link, to: Item, required: true, in_list: true, in_filter: true}
-    - {name: rule, type: select, options: [Requires, Excludes, At least per unit], required: true, default: Requires, in_list: true}
+    - {name: rule, type: select, options: [Requires, Excludes, At least per unit, Includes], required: true, default: Requires, in_list: true,
+       description: "Includes: each unit of the item comes with this many of the other, on lines at a 100% discount; the item's own price is the kit's"}
     - {name: other_item, type: link, to: Item, required: true, in_list: true}
-    - {name: qty_per_unit, type: decimal, min: "0.000000001", visible_if: "doc.rule == 'At least per unit'", required_if: "doc.rule == 'At least per unit'", label: Qty of the Other per Unit, description: In stock units}
+    - {name: qty_per_unit, type: decimal, min: "0.000000001", visible_if: "doc.rule == 'At least per unit' || doc.rule == 'Includes'", required_if: "doc.rule == 'At least per unit' || doc.rule == 'Includes'", label: Qty of the Other per Unit, description: In stock units}
     - {name: description, type: data, required: true, in_list: true, description: "What people read when the rule is broken, e.g. The boiler is installed with its kit"}
     - {name: disabled, type: check, in_filter: true}
   rules:

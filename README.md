@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.16.1-0f766e?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.19.0-0f766e?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -39,7 +39,7 @@ priced and taxed by the same engine that invoices it.
 
 | | |
 |---|---|
-| **Version** | 0.16.1 (packages: `crm` 0.8.0, `crm_erp` 0.1.2) |
+| **Version** | 0.19.0 (packages: `crm` 0.11.0, `crm_erp` 0.1.2) |
 | **Kind** | Its own interface at `/crm/` (pipeline board, Today, deal, account, quotation, sequence and forecast pages) plus Ferrum's standard lists and forms for every record |
 | **What it adds** | 36 entities (24 records and 12 line tables), 4 roles, 13 reports, 2 print and document formats, 2 messages, 2 connections, 1 menu with 41 entries, 5 create shortcuts, 5 notification kinds |
 | **Depends on** | Ferrum platform `>=0.4.0, <0.5`; core, contacts, parties and products packages. Quotation tax and sales orders come with the `crm_erp` connector and ERP |
@@ -139,7 +139,7 @@ On a phone:
 - **Consent kept apart for calls and email.** Do Not Call, Unsubscribed, the day each was given or withdrawn, and how (web form, in person, call, letter). A call logged to someone on Do Not Call needs a reason.
 - **Bounced mail.** The day a mail to the address came back is kept (Email Bounced On); sequences send nothing more to it.
 - **Convert to a customer.** Convert to Customer makes a customer, a contact and an address, or goes onto an existing customer and contact, carrying the lead's notes along. The new customer takes the lead's owner and territory. Undo Conversion gives the lead back while nothing else hangs on it.
-- **Create Opportunity** from a lead that is not Lost or Junk.
+- **Create Opportunity** from a lead that is not Lost or Junk, by someone who may change the lead (it counts as qualified from then on).
 - **Duplicate prospects, leads and customers can be merged** with the platform's merge.
 
 ### 🏢 Accounts, contacts and prospects
@@ -155,13 +155,13 @@ On a phone:
 
 - **Several pipelines.** Each pipeline (New Business, Renewals, anything you define) has its own stages. One pipeline is the default.
 - **Stages with probability and forecast category.** A stage sets the win probability a deal starts with and its forecast category (Pipeline, Best Case, Commit, Omitted). A stage can be Won or Lost. A deal can set its own category.
-- **What a deal must have before a stage.** Each stage can require an amount, an expected close date, a primary contact, a next step, at least one line, or a submitted quotation. The refusal names what is missing. Closing a deal is never held up.
+- **What a deal must have before a stage.** Each stage can require an amount, an expected close date, a primary contact, a next step, at least one line, a submitted quotation, and any other field of the deal, each maybe only if a condition holds (`doc.amount > 50000`). It is asked of every deal moved forward into the stage, with or without a record type. The refusal names what is missing. Moving back, closing a deal and the engine's own saves (an order winning it) are never held up.
 - **Deals for a lead, a prospect or a customer.** With currency and conversion rate, a price list, item lines (priced from the list, with units and discounts), weighted amount and the amount in the company's currency.
 - **People and buying roles.** Several contacts on a deal, each with a buying role (Decision Maker, Influencer, User, Finance, Legal, or your own); one is the primary contact.
 - **Competitors.** A deal lists the competitors in it.
 - **Won, lost and reopened.** Mark Won, Mark Lost (with a lost reason and detail) and Reopen, which puts a closed deal back at the last open stage where it stood.
 - **Time in stage and last activity.** In Stage Since and Last Activity say how long a deal stood and when something was last done.
-- **Record types.** A record type for deals or leads picks the pipeline, fills in fields left empty when a record is made, asks for chosen fields before a stage or status, and lists the stages a deal of that type may enter. It is edited with fields and stages chosen from the entity's own.
+- **Record types.** A record type for deals or leads picks the pipeline, fills in fields left empty when a record is made, asks for chosen fields before a stage (named by the stage itself, so renaming it keeps the requirement) or a status, each maybe with a condition, and lists the stages a deal of that type may enter. It is edited with fields and stages chosen from the entity's own.
 - **Pipeline board.** Drag a deal from stage to stage, see what each column is worth, drop it on Won or Lost. Touch screens and keyboards have the same moves from a menu on each card. It filters by search and owner and offers to clear a filter that hides every deal.
 - **Today.** One page of the follow-ups and deals that need action today, and the same list in Home's My work.
 
@@ -195,7 +195,7 @@ On a phone:
 - **Order on accept.** A setting (off by default) makes the draft sales order the moment a quotation is accepted.
 - **Revisions.** A quotation is revised by cancelling and amending; Revision, Revises and Replaced By keep the chain.
 - **Approval.** Approval rules set a discount percentage or a total above which someone with a chosen role must approve before submitting. What was approved is kept as a digest of its terms (party, lines, discount, taxes, currency, terms and validity), and a later change needs approval again. The orders and invoices made from it keep the approved terms.
-- **Product rules.** An item can require another, exclude another, or need so many of another per unit. A draft that breaks a rule says so, and Add What the Rules Need adds the missing lines.
+- **Product rules and kits.** An item can require another, exclude another, need so many of another per unit, or be a kit that includes so many of another per unit at no charge. A draft that breaks a rule says so, and Add What the Rules Need adds the missing lines, a kit's components at a 100% line discount, so the customer's document lists what they get and the total is the kit's price; the sales order carries the same lines and prices.
 - **Print format.** A printable quotation, and a customer document (`crm.quotation_document`) that a workspace edits in Settings.
 - **What the customer typed is personal data.** It is exported and erased with the person.
 
@@ -295,7 +295,7 @@ Everything CRM adds is ordinary Ferrum metadata and Rust: its records get lists,
 | Territory, SalesTeam | Who sees what | Territory tree and sales people; manager and members |
 | SalesTarget | What a person or team should win | Period, measure (Amount Won, Deals Won), target |
 | LeadAssignmentRule, LeadScoringRule | Sharing out and ranking | Order, matches, method; field, value, points |
-| QuotationApprovalRule, ProductRule | Quotation limits | Discount over, total over, approver role; requires, excludes, per unit |
+| QuotationApprovalRule, ProductRule | Quotation limits | Discount over, total over, approver role; requires, excludes, per unit, includes |
 | Sequence, SequenceEnrolment | Timed outreach | Steps, working-day waits; status, next step due, stopped reason |
 | ForecastSubmission, ForecastSnapshot | A forecast and its history | Period, lines by category, submitted, adjusted |
 | RecordType | A kind of deal or lead | Pipeline, defaults, requirements, allowed stages |
@@ -342,7 +342,7 @@ Compared with Salesforce Sales Cloud, HubSpot Sales Hub, Microsoft Dynamics 365 
 | Duplicate checks on create | 🟡 [1] | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
 | Lead assignment rules (round robin) | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ |
 | Lead scoring | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | ✅ |
-| Required fields per stage | 🟡 [2] | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
+| Required fields per stage | ✅ [2] | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
 | Mail and meetings filed on records by address | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | 🟡 |
 | Connect a Gmail or Microsoft 365 mailbox by sign-in | 🟡 [3] | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Two-way calendar sync | 🟡 [4] | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -351,7 +351,7 @@ Compared with Salesforce Sales Cloud, HubSpot Sales Hub, Microsoft Dynamics 365 
 | Quote approvals | 🟡 [5] | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
 | E-signature on quotes | ❌ | 🟡 | ✅ | 🟡 | 🟡 | ✅ | ✅ |
 | Quote to order and invoice in the same system | ✅ | 🟡 | 🟡 | ✅ | 🟡 | ✅ | ✅ |
-| Product bundles and CPQ | ❌ | ✅ | 🟡 | ✅ | ❌ | 🟡 | 🟡 |
+| Product bundles and CPQ | 🟡 [9] | ✅ | 🟡 | ✅ | ❌ | 🟡 | 🟡 |
 | Subscriptions and renewals | ❌ | ✅ | ✅ | ✅ | ❌ | ✅ | 🟡 |
 | Forecast submitted and adjusted, with history | ✅ | ✅ | ✅ | ✅ | 🟡 | ✅ | 🟡 |
 | Targets and quotas | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -372,14 +372,15 @@ Compared with Salesforce Sales Cloud, HubSpot Sales Hub, Microsoft Dynamics 365 
 
 Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of the feature; 🟡 for Ferrum is explained below.
 
-1. Open leads refuse a duplicate by email or phone; contacts, customers and prospects are merged afterwards, and a new lead does not look at existing customers.
-2. Six fixed requirements per stage (amount, close date, primary contact, next step, lines, submitted quotation), plus any field through a record type.
+1. A lead a person enters is refused (unless they tick Allow Duplicate) when an open lead, a customer, a contact or a prospect has its email or phone; a prospect when another prospect has its email, phone or website domain, or a customer its email or phone. A refusal names the record only to someone who may open it. A lead repeating a converted, lost or junk lead is saved and linked. Matching is exact (whole email, a phone's last ten digits); contacts and customers themselves are checked only afterwards, by the platform's merge.
+2. A stage asks for six fixed things (amount, close date, primary contact, next step, lines, submitted quotation) and any field of the deal, each maybe with a condition; a record type adds its own per stage. Asked when a person moves a deal forward into the stage; the engine's saves (an order winning a deal) are not held to them.
 3. Two connections ship turned off and read message headers only; a workspace fills in its provider's addresses and client. Mail's own accounts are the route today.
 4. Mail's calendar events are filed on people as meetings; the outside-provider calendar connection ships off and its events are not pulled.
 5. One level; rules by discount and total; one approver role.
 6. The platform assistant answers questions about records; nothing summarises a record or suggests a next step yet.
 7. A responsive web interface with touch menus on the board; no native app and no offline cache for CRM screens yet.
 8. Odoo Community is open source; Odoo Enterprise is not.
+9. Kits that include other items at no charge (on their own lines, carried to the sales order). No set price shared out over the components, and no configurator (options, attributes, guided selling).
 
 ### 🏆 Where Ferrum CRM stands out
 
@@ -407,6 +408,10 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 
 ### ✅ Recently shipped
 
+- [x] **0.19.0**: Kits: a product rule Includes adds a kit's components at no charge.
+- [x] **0.18.0**: A stage asks for any field of a deal, with a condition; a record type names its stage by record.
+- [x] **0.17.0**: A lead is checked against customers, contacts and prospects, a prospect against prospects and customers; a refusal names only what you may open.
+- [x] **0.16.2**: Only the customer answers a quotation on their link; making a deal of a lead needs the right to change the lead.
 - [x] **0.16.1**: A marketing mail is shown on the person and touches no lead or deal.
 - [x] **0.16.0**: Upkeep runs one workspace at a time, on whichever replica is free.
 - [x] **0.15.2** — The package's SQL is one file.
@@ -450,7 +455,7 @@ Notes. 🟡 for a leader means a paid add-on, a marketplace app or only part of 
 - [ ] Lead-ad sync from Meta, Google and LinkedIn.
 - [ ] Scoring on behaviour and on contacts and deals; deal risk and predicted close.
 - [ ] AI summary of a lead, deal, account or thread, and a drafted reply.
-- [ ] Product bundles with price roll-up; subscriptions, renewals and co-term.
+- [ ] A bundle price shared out over its components, and a configurator; subscriptions, renewals and co-term.
 - [ ] Quote to contract through Ferrum Contracts.
 - [ ] Commission and incentive plans.
 - [ ] Deal splits and deal teams; mutual action plans.
@@ -544,7 +549,7 @@ docs/             connection notes and screenshots
 
 ## 📜 Changelog
 
-Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.16.1**.
+Every version is in [CHANGELOG.md](CHANGELOG.md). The latest is **0.19.0**.
 
 ## 🤝 Contributing
 

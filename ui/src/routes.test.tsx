@@ -15,6 +15,11 @@ import me from "./fixtures/me.json";
 import lead from "./fixtures/meta-Lead.json";
 import quotation from "./fixtures/meta-Quotation.json";
 import territory from "./fixtures/meta-Territory.json";
+// Written by hand from the package's YAML (the record type editor's answers), not copied from a server.
+import opportunity from "./fixtures/meta-Opportunity.json";
+import recordTypeMeta from "./fixtures/meta-RecordType.json";
+import recordType from "./fixtures/record-type.json";
+import salesStages from "./fixtures/sales-stages.json";
 import draft from "./fixtures/quotation-draft.json";
 import { CRM_PACKAGES, routes } from "./routes";
 
@@ -25,6 +30,10 @@ const answers: Record<string, unknown> = {
   "/api/meta/Quotation": quotation,
   "/api/meta/Territory": territory,
   [`/api/v1/Quotation/${draft.id}`]: draft,
+  "/api/meta/RecordType": recordTypeMeta,
+  "/api/meta/Opportunity": opportunity,
+  "/api/v1/RecordType/t1": recordType,
+  "/api/v1/SalesStage": salesStages,
 };
 
 const asked: string[] = [];
@@ -79,6 +88,14 @@ describe("CRM's routes as mounted", () => {
     const text = await open(`/e/Quotation/${draft.id}`);
     expect(text).not.toContain("Loading");
     expect(text).toContain(String(draft.number));
+  });
+
+  it("opens a record type in its editor, its requirement on a stage by record and with a condition", async () => {
+    const text = await open("/e/RecordType/t1");
+    expect(text).not.toContain("Loading");
+    expect(text).toContain("Enterprise deal");
+    expect(text).toContain("What it asks for");
+    expect(text).toContain("Only if");
   });
 
   it("opens an entity CRM has no screen for with the generic form", async () => {

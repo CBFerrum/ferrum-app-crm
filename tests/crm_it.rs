@@ -63,6 +63,15 @@ fn refused<T: std::fmt::Debug>(r: Result<T, Error>, needle: &str) {
     }
 }
 
+/// A refusal's words, for what they must and must not name.
+fn refusal<T: std::fmt::Debug>(r: Result<T, Error>) -> String {
+    match r {
+        Err(Error::Validation(e)) => e.iter().map(|f| f.message.clone()).collect::<Vec<_>>().join("; "),
+        Err(Error::Invalid(m)) => m,
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
 async fn fresh_kernel() -> Arc<Kernel> {
     let url = std::env::var("FERRUM_CRM_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_crm_test".into());
     let db = Db::connect(DbConfig { url, max_connections: 10, ..Default::default() }).await.expect("connect");
@@ -219,7 +228,14 @@ async fn scenario() {
     assert_eq!(l1["assigned_to"], json!("anna@crm.test"), "the creator owns the lead");
     assert!(l1["number"].as_str().unwrap().starts_with("LEAD-"));
     let dup = ben.k.insert(&ben.ctx, "Lead", obj(json!({"first_name": "J", "email": "jane@acme.test"}))).await;
-    refused(dup, "already exists");
+    // a_refusal_names_only_what_the_caller_may_open: Ben may not open Anna's lead, so it is not named to him
+    let said = refusal(dup);
+    assert!(said.contains("already exists") && said.contains("not yours to open"), "{said}");
+    assert!(!said.contains(l1["number"].as_str().unwrap()) && !said.contains("Jane Doe"), "{said}");
+    admin.insert("Customer", json!({"customer_name": "Hidden Buyer Co", "email": "hidden@buyer.test"})).await;
+    let mo = user("mo@crm.test", "Mo Marketing", &["Marketing Manager"]).await;
+    let said = refusal(mo.k.insert(&mo.ctx, "Lead", obj(json!({"first_name": "H", "email": "hidden@buyer.test"}))).await);
+    assert!(said.contains("customer") && said.contains("not yours to open") && !said.contains("Hidden Buyer"), "{said}");
     refused(anna.k.insert(&anna.ctx, "Lead", obj(json!({"email": "nobody@x.test"}))).await, "first_name");
     let l2 = anna
         .insert(
@@ -252,6 +268,14 @@ async fn scenario() {
     let note = anna.insert("Activity", json!({"activity_type": "Note", "subject": "Met at the booth", "lead": l2_id.to_string()})).await;
     assert_eq!(note["status"], json!("Done"), "notes are done when written");
     assert_eq!(anna.get("Lead", l2_id).await["status"], json!("New"), "a note is not an interaction");
+
+    // ───────────── a_reader_of_a_lead_cannot_qualify_it_by_making_a_deal ─────────────
+    // Vera reads every lead (CRM Viewer) and makes deals of her own (Sales User), but may not change Anna's lead.
+    let vera = user("vera@crm.test", "Vera Viewer", &["Sales User", "CRM Viewer"]).await;
+    assert_eq!(vera.get("Lead", l1_id).await["status"], json!("Contacted"), "she reads it");
+    assert!(vera.k.run_action(&vera.ctx, "Lead", l1_id, "make_opportunity", json!({})).await.is_err(), "she may not qualify it");
+    assert_eq!(anna.get("Lead", l1_id).await["status"], json!("Contacted"));
+    assert!(admin.list("Opportunity", json!({"lead": l1_id.to_string()})).await.is_empty(), "and no deal was made");
 
     // ───────────── opportunity from a lead ─────────────
     let made = anna.action("Lead", l1_id, "make_opportunity", json!({})).await;
@@ -825,6 +849,88 @@ async fn scenario() {
     assert!(quote["rule_issues"].is_null(), "nothing broken: {quote:?}");
     assert_eq!(anna.submit("Quotation", q).await["docstatus"], json!(1));
 
+    // ───────────── kits: an item that includes others at no charge ─────────────
+    let (starter, cable, pro, lamp) =
+        (item("STARTER", "Starter Kit", "100").await, item("CABLE", "Cable", "8").await, item("PRO", "Pro Kit", "200").await, item("LAMP", "Lamp", "30").await);
+    // a_kit_rule_needs_its_quantity
+    refused(
+        maria.k.insert(&maria.ctx, "ProductRule", obj(json!({"item": starter, "rule": "Includes", "other_item": cable, "description": "x"}))).await,
+        "qty_per_unit",
+    );
+    maria
+        .insert(
+            "ProductRule",
+            json!({"item": starter, "rule": "Includes", "other_item": cable, "qty_per_unit": "2", "description": "A starter kit comes with two cables"}),
+        )
+        .await;
+    // a_kit_lists_what_it_includes_until_the_lines_are_there
+    let kq = anna.insert("Quotation", lines(json!([{"item": starter, "qty": "3"}]))).await;
+    let issues = kq["rule_issues"].as_str().unwrap_or_default().to_string();
+    assert!(issues.contains("A starter kit comes with two cables (6 of Cable come with 3 of Starter Kit, not 0)"), "{issues}");
+    let kq = uid(&kq);
+    refused(anna.k.submit(&anna.ctx, "Quotation", kq, None).await, "product rules");
+    // a_viewer_cannot_add_what_the_rules_need
+    let vic = user("vic@crm.test", "Vic Viewer", &["CRM Viewer"]).await;
+    let r = vic.k.run_action(&vic.ctx, "Quotation", kq, "add_rule_needs", json!({})).await;
+    assert!(matches!(r, Err(Error::Forbidden(_))), "{r:?}");
+    // add_what_the_rules_need_adds_included_lines_at_no_charge
+    let added = anna.action("Quotation", kq, "add_rule_needs", json!({})).await;
+    assert!(added["message"].as_str().is_some_and(|m| m.contains("Cable × 6 (included)")), "{added}");
+    assert_eq!(added["added"][0]["included"], json!(true), "{added}");
+    let quote = anna.get("Quotation", kq).await;
+    let cables: Vec<Value> = quote["items"].as_array().unwrap().iter().filter(|l| l["item"] == json!(cable)).cloned().collect();
+    assert_eq!(cables.len(), 1, "{quote:?}");
+    assert_eq!(
+        (dec(&cables[0]["qty"]), dec(&cables[0]["discount_percent"]), dec(&cables[0]["rate"]), dec(&cables[0]["amount"])),
+        (n("6"), n("100"), n("0"), n("0"))
+    );
+    assert_eq!(dec(&quote["net_total"]), n("300"), "the kits' price is the quotation's");
+    assert!(quote["rule_issues"].is_null(), "{quote:?}");
+    // adding_twice_adds_once
+    refused(anna.k.run_action(&anna.ctx, "Quotation", kq, "add_rule_needs", json!({})).await, "not available");
+    assert_eq!(anna.get("Quotation", kq).await["items"].as_array().map(Vec::len), Some(2));
+    // an_included_line_reaches_the_sales_order_at_no_charge
+    anna.submit("Quotation", kq).await;
+    let order = vid(&anna.action("Quotation", kq, "make_sales_order", json!({})).await);
+    let doc = anna.get("SalesOrder", order).await;
+    let line = doc["items"].as_array().unwrap().iter().find(|l| l["item"] == json!(cable)).cloned().expect("the cable line");
+    assert_eq!((dec(&line["discount_percent"]), dec(&line["rate"])), (n("100"), n("0")));
+    anna.submit("SalesOrder", order).await;
+    // a_charged_line_of_the_component_does_not_count_as_included
+    let q3 = anna.insert("Quotation", lines(json!([{"item": starter, "qty": "1"}, {"item": cable, "qty": "2"}]))).await;
+    assert!(q3["rule_issues"].as_str().unwrap_or_default().contains("(2 of Cable come with 1 of Starter Kit, not 0)"), "{q3:?}");
+    anna.action("Quotation", uid(&q3), "add_rule_needs", json!({})).await;
+    let cables: Vec<Decimal> = anna.get("Quotation", uid(&q3)).await["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|l| l["item"] == json!(cable))
+        .map(|l| dec(&l["discount_percent"]))
+        .collect();
+    assert_eq!(cables, [n("0"), n("100")], "one charged, one included");
+    // two_kits_with_one_component_add_up
+    maria
+        .insert(
+            "ProductRule",
+            json!({"item": pro, "rule": "Includes", "other_item": cable, "qty_per_unit": "1", "description": "A pro kit comes with a cable"}),
+        )
+        .await;
+    let q4 = anna
+        .insert("Quotation", lines(json!([{"item": starter, "qty": "1"}, {"item": pro, "qty": "1"}, {"item": cable, "qty": "2", "discount_percent": "100"}])))
+        .await;
+    let issues = q4["rule_issues"].as_str().unwrap_or_default().to_string();
+    assert!(
+        issues.contains("A pro kit comes with a cable") && issues.contains("A starter kit comes with two cables") && issues.contains("3 of Cable"),
+        "{issues}"
+    );
+    assert_eq!(issues.matches("of Cable come with").count(), 1, "one issue: {issues}");
+    let added = anna.action("Quotation", uid(&q4), "add_rule_needs", json!({})).await;
+    assert!(added["message"].as_str().is_some_and(|m| m.contains("Cable × 1 (included)")), "{added}");
+    // requires_and_per_unit_are_as_they_were: an included cable satisfies "needs a cable"
+    maria.insert("ProductRule", json!({"item": lamp, "rule": "Requires", "other_item": cable, "description": "A lamp needs a cable"})).await;
+    let q8 = anna.insert("Quotation", lines(json!([{"item": lamp, "qty": "1"}, {"item": cable, "qty": "1", "discount_percent": "100"}]))).await;
+    assert!(q8["rule_issues"].is_null(), "{q8:?}");
+
     crm_alone(&k).await;
     day_one(&k).await;
     assign_and_remind(&k).await;
@@ -1016,6 +1122,41 @@ async fn day_one(k: &Arc<Kernel>) {
     let (a, b) = tokio::join!(anna.k.insert(&anna.ctx, "Lead", obj(twin.clone())), anna.k.insert(&anna.ctx, "Lead", obj(twin.clone())));
     assert_eq!([a.is_ok(), b.is_ok()].iter().filter(|ok| **ok).count(), 1, "{a:?} {b:?}");
     assert_eq!(anna.list("Lead", json!({"email": "tia@twin.test"})).await.len(), 1);
+    // a_lead_with_a_customers_email_is_refused_and_names_it
+    admin.insert("Customer", json!({"customer_name": "Dup Customer Ltd", "email": "buyer@dupco.test"})).await;
+    let said = refusal(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "Bo", "email": "Buyer@DupCo.test"}))).await);
+    assert!(said.contains("customer") && said.contains("Dup Customer Ltd") && said.contains("already exists"), "{said}");
+    let kept = anna.insert("Lead", json!({"first_name": "Bo", "email": "buyer@dupco.test", "allow_duplicate": true})).await;
+    assert_eq!(kept["allow_duplicate"], json!(false), "decided save by save");
+    // a_lead_with_a_contacts_phone_is_refused
+    admin.insert("Contact", json!({"first_name": "Cy", "last_name": "Phone", "phones": [{"phone": "+91 98450 12345"}]})).await;
+    let said = refusal(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "C", "mobile": "098450 12345"}))).await);
+    assert!(said.contains("contact") && said.contains("Cy Phone"), "{said}");
+    // a_lead_with_a_prospects_email_is_refused_unless_it_is_its_own_prospect
+    let dp = maria.insert("Prospect", json!({"prospect_name": "Dup Prospect Co", "email": "hello@dupprospect.test"})).await;
+    let said = refusal(anna.k.insert(&anna.ctx, "Lead", obj(json!({"first_name": "Pe", "email": "hello@dupprospect.test"}))).await);
+    assert!(said.contains("prospect") && said.contains("Dup Prospect Co"), "{said}");
+    anna.insert("Lead", json!({"first_name": "Pe", "email": "hello@dupprospect.test", "prospect": dp["id"]})).await;
+    // an_engine_made_lead_is_never_refused, against a customer either
+    k.insert(&engine, "Lead", obj(json!({"first_name": "Form", "email": "buyer@dupco.test", "company": cid}))).await.expect("kept");
+    // a_converted_lead_can_still_be_edited: its own customer and contact do not refuse it
+    let cora = anna.insert("Lead", json!({"first_name": "Cora", "organization_name": "Cora Co", "email": "cora@cora.test", "phone": "+91 98450 77777"})).await;
+    anna.action("Lead", uid(&cora), "convert_to_customer", json!({})).await;
+    anna.update("Lead", uid(&cora), json!({"notes": "Converted last week"})).await;
+    anna.update("Lead", uid(&cora), json!({"phone": "+91 98450 77778"})).await;
+    // a_prospect_repeating_another_is_refused: by website domain, email, phone, and a customer's email
+    let sites = maria.insert("Prospect", json!({"prospect_name": "Acme Sites", "website": "https://www.Acme.test/about"})).await;
+    let said = refusal(maria.k.insert(&maria.ctx, "Prospect", obj(json!({"prospect_name": "Acme Again", "website": "http://acme.test"}))).await);
+    assert!(said.contains("Acme Sites") && said.contains("already exists"), "{said}");
+    let again = maria.insert("Prospect", json!({"prospect_name": "Acme Again", "website": "http://acme.test", "allow_duplicate": true})).await;
+    assert_eq!(again["allow_duplicate"], json!(false));
+    maria.insert("Prospect", json!({"prospect_name": "Mail One", "email": "one@mailone.test"})).await;
+    refused(maria.k.insert(&maria.ctx, "Prospect", obj(json!({"prospect_name": "Mail Two", "email": "One@MailOne.test"}))).await, "Mail One");
+    maria.insert("Prospect", json!({"prospect_name": "Ph One", "phone": "+91 80 5555 1111"})).await;
+    refused(maria.k.insert(&maria.ctx, "Prospect", obj(json!({"prospect_name": "Ph Two", "phone": "080 5555 1111"}))).await, "Ph One");
+    refused(maria.k.insert(&maria.ctx, "Prospect", obj(json!({"prospect_name": "Cust Twin", "email": "buyer@dupco.test"}))).await, "Dup Customer Ltd");
+    // editing_a_prospect_without_touching_its_keys_is_not_checked
+    maria.update("Prospect", uid(&sites), json!({"notes": "Two of them, kept on purpose"})).await;
     // The lead keeps the national part of its numbers, which those lookups compare.
     assert_eq!(admin.get("Lead", uid(&asha)).await["mobile_key"], json!("9845000001"));
 
@@ -1036,7 +1177,10 @@ async fn day_one(k: &Arc<Kernel>) {
     assert_eq!(note["customer"], rao["id"]);
     // Refused on a customer with the same phone, then allowed when asked to make a new one.
     admin.insert("Customer", json!({"customer_name": "Chen Old", "phone": "+65 6123 4567"})).await;
-    let chen = anna.insert("Lead", json!({"first_name": "Mei", "last_name": "Chen", "organization_name": "Chen New", "phone": "+65-6123-4567"})).await;
+    // Kept on purpose when entered (the customer's phone refuses it otherwise), so that conversion is the one asking.
+    let chen = anna
+        .insert("Lead", json!({"first_name": "Mei", "last_name": "Chen", "organization_name": "Chen New", "phone": "+65-6123-4567", "allow_duplicate": true}))
+        .await;
     refused(anna.k.run_action(&anna.ctx, "Lead", uid(&chen), "convert_to_customer", json!({})).await, "Create New Anyway");
     let made = anna.action("Lead", uid(&chen), "convert_to_customer", json!({"create_new": true})).await;
     assert_eq!(anna.get("Customer", vid(&made)).await["customer_name"], json!("Chen New"));
@@ -1842,6 +1986,50 @@ async fn pipelines_and_quotes(k: &Arc<Kernel>) {
         "an expected close date",
     );
     anna.update("Opportunity", rollout, json!({"sales_stage": proposal})).await;
+
+    // ───────────── a_stage_asks_for_any_field_of_any_deal ─────────────
+    maria.update("SalesStage", idv(&proposal), json!({"required_fields": [{"field": "campaign"}]})).await;
+    let ready = json!({"amount": "10", "expected_close_date": day, "contact": ann, "sales_stage": qualification});
+    let camp = uid(&anna.insert("Opportunity", deal("Camp", ready.clone())).await);
+    let said = refusal(anna.k.update(&anna.ctx, "Opportunity", camp, obj(json!({"sales_stage": proposal})), None).await);
+    assert!(said.contains("Campaign") && said.contains("before deal Camp"), "{said}");
+    let webinar = maria.insert("Campaign", json!({"campaign_name": "Stage webinar", "campaign_type": "Webinar", "status": "Active", "start_date": day})).await;
+    anna.update("Opportunity", camp, json!({"sales_stage": proposal, "campaign": webinar["id"]})).await;
+    // moving_back_losing_and_the_engine_are_not_held_up
+    let bare = uid(&anna.insert("Opportunity", deal("No campaign", ready.clone())).await);
+    anna.update("Opportunity", camp, json!({"sales_stage": qualification, "campaign": null})).await;
+    anna.action("Opportunity", camp, "mark_lost", json!({"lost_reason": "Timing"})).await;
+    let engine = Ctx::system(tenant, admin.ctx.schema.clone());
+    k.update(&engine, "Opportunity", bare, obj(json!({"sales_stage": proposal})), None).await.expect("the engine is not held up");
+    // a_stage_refuses_a_field_the_deal_does_not_have_and_a_condition_that_does_not_compile
+    refused(
+        maria.k.update(&maria.ctx, "SalesStage", idv(&qualification), obj(json!({"required_fields": [{"field": "no_such_field"}]})), None).await,
+        "no_such_field",
+    );
+    refused(
+        maria
+            .k
+            .update(&maria.ctx, "SalesStage", idv(&qualification), obj(json!({"required_fields": [{"field": "next_step", "only_if": "doc.amount >"}]})), None)
+            .await,
+        "only_if",
+    );
+    // a_sales_user_cannot_change_what_a_stage_asks
+    let r = anna.k.update(&anna.ctx, "SalesStage", idv(&qualification), obj(json!({"required_fields": [{"field": "next_step"}]})), None).await;
+    assert!(matches!(r, Err(Error::Forbidden(_))), "{r:?}");
+    // a_requirement_with_a_condition_is_asked_only_then
+    maria.update("SalesStage", idv(&qualification), json!({"required_fields": [{"field": "next_step", "only_if": "doc.amount > 1000"}]})).await;
+    let small = uid(&anna.insert("Opportunity", deal("Small one", json!({"amount": "500", "sales_stage": prospecting}))).await);
+    anna.update("Opportunity", small, json!({"sales_stage": qualification})).await;
+    let big = uid(&anna.insert("Opportunity", deal("Big one", json!({"amount": "5000", "sales_stage": prospecting}))).await);
+    refused(anna.k.update(&anna.ctx, "Opportunity", big, obj(json!({"sales_stage": qualification})), None).await, "Next Step");
+    anna.update("Opportunity", big, json!({"sales_stage": qualification, "next_step": "Call the buyer"})).await;
+    // a_condition_that_cannot_be_worked_out_refuses_and_says_so
+    maria.update("SalesStage", idv(&qualification), json!({"required_fields": [{"field": "next_step", "only_if": "doc.amount > 'x'"}]})).await;
+    let odd = uid(&anna.insert("Opportunity", deal("Odd one", json!({"amount": "5", "sales_stage": prospecting}))).await);
+    refused(anna.k.update(&anna.ctx, "Opportunity", odd, obj(json!({"sales_stage": qualification})), None).await, "cannot be worked out");
+    for st in [&proposal, &qualification] {
+        maria.update("SalesStage", idv(st), json!({"required_fields": []})).await;
+    }
 
     // ───────────── lines priced from a price list in another currency ─────────────
     let yesterday = (today() - chrono::Duration::days(1)).to_string();

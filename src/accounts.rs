@@ -473,3 +473,56 @@ async fn move_to(hc: &mut HookCtx<'_>, doc: &Doc, params: &Value) -> Result<Valu
     settle(hc, contact, id(&link, "id")).await?;
     Ok(json!({"message": format!("{who} moved to {at} on {on}"), "link": link.get("id")}))
 }
+
+// ───────────────────────────── prospects ─────────────────────────────
+
+/// A prospect a person enters is refused when another prospect has its email, phone or website's domain, or a customer
+/// its email or phone, unless they tick Allow Duplicate (decided save by save); the engine's saves never are. Checked
+/// when it is made and when one of the three changes. A refusal names the other only to someone who may open it.
+pub struct ProspectHook;
+
+#[async_trait]
+impl DocHook for ProspectHook {
+    async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
+        let phone = crate::lead::digits(s(doc, "phone"));
+        let site = crate::lead::domain(s(doc, "website"));
+        set(doc, "phone_key", json!(phone));
+        set(doc, "website_key", json!(site));
+        let old = stored(hc, doc).await?;
+        let changed = old.as_ref().is_none_or(|o| ["email", "phone", "website"].iter().any(|f| o.get(*f) != doc.get(*f)));
+        if changed && !hc.ctx.is_system && !b(doc, "allow_duplicate") {
+            let email = s(doc, "email").map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty());
+            let phones: Vec<String> = phone.into_iter().collect();
+            // Two saves of the same key queue here, so the second one sees the first.
+            let mut locks: Vec<String> = email
+                .iter()
+                .map(|e| format!("email:{e}"))
+                .chain(phones.iter().map(|p| format!("phone:{p}")))
+                .chain(site.iter().map(|d| format!("site:{d}")))
+                .collect();
+            locks.sort();
+            for key in locks {
+                sqlx::query("select pg_advisory_xact_lock(hashtext($1))")
+                    .bind(format!("ferrum:crm:prospect:{}:{key}", hc.ctx.tenant))
+                    .execute(&mut **hc.tx)
+                    .await?;
+            }
+            let field = if email.is_some() {
+                "email"
+            } else if !phones.is_empty() {
+                "phone"
+            } else {
+                "website"
+            };
+            if let Some((other, name)) = crate::lead::prospects_holding(hc, &email, &phones, site.as_deref(), id(doc, "id")).await? {
+                return Err(Error::field(field, crate::lead::held_by(hc, "Prospect", other, &name, "email, phone or website").await?));
+            }
+            let own = id(doc, "customer");
+            if let Some((other, name)) = crate::lead::customers_holding(hc, &email, &phones).await?.into_iter().find(|(c, _)| Some(*c) != own) {
+                return Err(Error::field(field, crate::lead::held_by(hc, "Customer", other, &name, "email or phone").await?));
+            }
+        }
+        set(doc, "allow_duplicate", false);
+        Ok(())
+    }
+}

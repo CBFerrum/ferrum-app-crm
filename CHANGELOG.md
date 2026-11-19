@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.19.0
+
+Package `crm` 0.11.0. Needs the same platform as 0.16.0. No database or interface change.
+
+- **Kits.** A Product Rule can be Includes: each charged unit of the item comes with so many of another (Qty of the
+  Other per Unit, in stock units). A draft quotation whose kits include more of a component than it has on lines at
+  a 100% line discount says so in Product Rules Broken (one sentence per component, naming every kit) and is not
+  submitted. Add What the Rules Need adds the shortfall as a line at a 100% discount, before the other rules' lines,
+  and those count it ("needs a cable" is met by an included cable). The sales order made from the quotation carries
+  the same lines at the same prices. A kit at no charge brings nothing (kits do not nest).
+- **Add What the Rules Need has a contract**: what it adds (`item`, `qty`, `included`) and what "done" means, for an
+  agent calling `crm.quotation.add_rule_needs`.
+
+## 0.18.0
+
+Package `crm` 0.10.0. Needs the same platform as 0.16.0. Interface rebuilt (`ui/dist`).
+
+- **A stage asks for any field.** A sales stage's Other Fields a Deal Must Have lists fields of the deal, each with an
+  optional condition (Only If, written as rules are: `doc.amount > 50000`). They are asked of every deal a person
+  moves forward into the stage, with or without a record type, beside the six ticks, in the same refusal. Moving
+  back, losing and the engine's saves are never held up. A field the deal does not have, or a condition that does not
+  compile, is refused when the stage is saved; a condition that cannot be worked out for a deal refuses its move and
+  says so.
+- **A record type names its stage by record.** A deal type's requirement has When Entering Stage, a link to the stage,
+  so renaming the stage keeps it. Rows kept by name match by name as before until the type is next saved, when a name
+  exactly one stage answers to becomes that stage. A requirement may carry Only If too. A lead's type names a status,
+  never a stage; a stage outside the type's pipeline is refused.
+- **The record type editor** chooses a deal's stage from the stages themselves (an old row shows "(by name)" until
+  another is chosen) and has Only If on each requirement.
+- Database: table `e_sales_stage__required_fields` (rows of the new Stage Requirement); the record type's requirement
+  rows gain `stage` and `only_if`.
+
+## 0.17.0
+
+Package `crm` 0.9.0. Needs the same platform as 0.16.0. No interface change (the prospect form shows Allow Duplicate).
+
+- **A lead is checked against customers, contacts and prospects.** A person entering a lead whose email or phone is
+  already an open lead's, a customer's, a contact's or a prospect's (not the lead's own prospect) is refused and told
+  which, unless they tick Allow Duplicate. A lead repeating a converted, lost or junk lead is still saved and linked
+  to it. Forms, mail and integrations (the engine) are never refused. A converted lead being edited is not checked
+  against its own customer.
+- **A prospect is checked.** Another prospect with the same email, phone (its last ten digits) or website domain, or
+  a customer with the same email or phone, refuses a prospect a person enters or whose email, phone or website they
+  change, unless they tick Allow Duplicate (decided save by save).
+- **A refusal names only what you may open.** It used to print another rep's lead number and name to anyone; now
+  someone who may not open the match is told that one exists and to ask their manager.
+- Database: `e_prospect` gains `phone_key`, `website_key` (both indexed) and `allow_duplicate`, and `email` is indexed.
+  Existing prospects are matched by email at once, and by phone and website once they are next saved.
+
+## 0.16.2
+
+Package `crm` 0.8.1. Needs the same platform as 0.16.0. No database or interface change.
+
+- **Only the customer answers.** A quotation's Accept, Decline and Ask a Question are the customer's, on their link (or
+  a portal role an administrator gives them). A person of the workspace pressing one, its administrator included, is
+  refused: they record the customer's answer with Accepted or Rejected, which need the right to submit. Ask a Question
+  is answered by the app now (the same task for the owner, and the owner told), so it can refuse a member.
+- **Create Opportunity needs the right to change the lead.** It sets a new or contacted lead Qualified; someone who only
+  reads the lead could do that before.
+
 ## 0.16.1
 
 Needs the same platform as 0.16.0.

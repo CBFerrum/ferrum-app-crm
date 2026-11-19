@@ -49,7 +49,8 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("LeadScoringRule", Arc::new(score::RuleHook))
         .register("SequenceEnrolment", Arc::new(sequence::EnrolmentHook))
         .register("ForecastSubmission", Arc::new(forecast::SubmissionHook))
-        .register("RecordType", Arc::new(record_type::TypeHook));
+        .register("RecordType", Arc::new(record_type::TypeHook))
+        .register("Prospect", Arc::new(accounts::ProspectHook));
     // On the platform's contacts, only where CRM is installed.
     hooks.scoped(&["crm".to_string()], |h| {
         h.register("Contact", Arc::new(accounts::ContactHook));

@@ -3,7 +3,7 @@
 //! stage that deals stand in is neither deleted nor disabled, and the refusal says how many.
 
 use async_trait::async_trait;
-use ferrum_domain::util::{b, find, id, s, set, sys};
+use ferrum_domain::util::{b, find, id, rows, s, set, sys};
 use ferrum_kernel::{Doc, DocHook, Error, Filter, HookCtx, Result};
 use serde_json::json;
 use uuid::Uuid;
@@ -136,6 +136,23 @@ impl DocHook for StageHook {
             && let Some(p) = default_pipeline(hc).await?
         {
             set(doc, "pipeline", p.to_string());
+        }
+        Ok(())
+    }
+
+    /// What it asks of a deal entering it names the deal's own fields, with conditions as rules write them.
+    async fn validate(&self, hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
+        let Some(deal) = hc.ctx.schema.entity("Opportunity").cloned() else { return Ok(()) };
+        for (i, r) in rows(doc, "required_fields").iter().enumerate() {
+            let Some(f) = s(r, "field") else { continue };
+            if !crate::record_type::nameable(&deal, f) {
+                return Err(Error::Validation(vec![
+                    ferrum_kernel::FieldError::new("field", format!("{f} is not a field of a deal that a stage can ask for")).in_row("required_fields", i),
+                ]));
+            }
+            if let Some(e) = crate::record_type::condition_issue(r, "required_fields", i) {
+                return Err(e);
+            }
         }
         Ok(())
     }

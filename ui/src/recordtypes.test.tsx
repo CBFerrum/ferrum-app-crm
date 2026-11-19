@@ -37,7 +37,10 @@ function client(write = "all") {
     pipeline: "p1",
     disabled: false,
     defaults: [{ id: "d1", field: "source", value: "Referral" }],
-    requirements: [{ id: "q1", stage_name: "Proposal", field: "next_step" }],
+    requirements: [
+      { id: "q1", stage: "2", stage_name: null, field: "next_step", only_if: "doc.amount > 1000" },
+      { id: "q2", stage: null, stage_name: "Old Stage", field: "next_step", only_if: null },
+    ],
     allowed_stages: [{ id: "a1", stage: "2" }],
   });
   return qc;
@@ -88,7 +91,10 @@ describe("a record type's editor", () => {
     expect(html).toContain('<option value="source" selected="">Source</option>');
     expect(html).not.toContain("Amount (Company)");
     expect(html).toContain('<option value="Referral" selected="">Referral</option>');
-    expect(html).toContain('<option value="Proposal" selected="">Proposal</option>');
+    expect(html).toContain('<option value="2" selected="">Proposal</option>');
+    expect(html).toContain("Old Stage (by name)");
+    expect(html).toContain("Only if");
+    expect(html).toContain('value="doc.amount &gt; 1000"');
     expect(html).toContain("Add a default");
     expect(html).toContain("Add a requirement");
   });

@@ -1,4 +1,5 @@
-//! Leads: one open lead per email address or phone number, qualification, conversion into a
+//! Leads: one open lead per email address or phone number, and none a person enters with a customer's, a contact's or
+//! a prospect's (unless they say to keep it), qualification, conversion into a
 //! customer with its contact and address (or onto ones that exist already) and undoing it, and
 //! opportunities created from a lead.
 
@@ -134,6 +135,18 @@ pub(crate) fn digits(phone: Option<&str>) -> Option<String> {
     (national.len() >= 6).then(|| national.to_string())
 }
 
+/// A website's domain, lower case, without its scheme, path, port, user and a leading `www.`: what tells one
+/// organization's site from another's. Something with no dot, with spaces, or too short or long is none.
+pub(crate) fn domain(website: Option<&str>) -> Option<String> {
+    let s = website?.trim().to_lowercase();
+    let s = s.split_once("://").map_or(s.as_str(), |(_, rest)| rest);
+    let s = s.split(['/', '?', '#']).next().unwrap_or_default();
+    let s = s.rsplit_once('@').map_or(s, |(_, host)| host);
+    let s = s.rsplit_once(':').filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit())).map_or(s, |(host, _)| host);
+    let s = s.strip_prefix("www.").unwrap_or(s);
+    (s.contains('.') && !s.contains(char::is_whitespace) && (4..=253).contains(&s.len())).then(|| s.to_string())
+}
+
 /// [`digits`] in SQL, of column `$c` (less the six-digit floor, which the side holding the
 /// [`digits`] keeps): what customers' and contacts' numbers are compared by. A lead's keys are stored and indexed because
 /// under row-level security the planner uses no index on an expression of functions that are not
@@ -152,11 +165,12 @@ fn keys(doc: &Doc) -> (Option<String>, Vec<String>) {
     (email, phones)
 }
 
-/// Another lead of the company with the same email or phone. An open one refuses a lead entered by
-/// a person, unless they tick Allow Duplicate; a lead arriving from a form, a mail or an integration
-/// (the engine's context), or one matching only a converted, lost or junk lead, is saved. Either
-/// way it is linked as Duplicate Of to the lead it repeats (an open one first, and the first of them
-/// rather than another duplicate), to merge.
+/// Another lead of the company with the same email or phone, then (for a person's open lead with none) a customer, a
+/// contact or a prospect holding it. An open lead, a customer, a contact or a prospect refuses a lead entered by a
+/// person, unless they tick Allow Duplicate; a lead arriving from a form, a mail or an integration (the engine's
+/// context), or one matching only a converted, lost or junk lead, is saved. A refusal names the record only when the
+/// person may open it. A lead that repeats another is linked as Duplicate Of to it (an open one first, and the first
+/// of them rather than another duplicate), to merge.
 async fn duplicates(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
     let (email, phones) = keys(doc);
     // Two saves of the same address or number queue here, so the second one sees the first.
@@ -183,27 +197,88 @@ async fn duplicates(hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
         .fetch_optional(&mut **hc.tx)
         .await?
     };
-    let Some((other, number, name, status, by_email)) = found else {
-        set(doc, "duplicate_of", Value::Null);
+    let asked = !hc.ctx.is_system && !b(doc, "allow_duplicate");
+    if let Some((other, number, name, status, by_email)) = found {
+        if asked && OPEN.contains(&status.as_str()) {
+            let (field, what) = match by_email {
+                true => ("email", "email"),
+                false if phones.iter().any(|p| digits(s(doc, "phone")).as_ref() == Some(p)) => ("phone", "phone number"),
+                false => ("mobile", "phone number"),
+            };
+            let said = match readable(hc, "Lead", other).await? {
+                true => format!(
+                    "a lead with this {what} already exists: {} ({}); open it, or tick Allow Duplicate to keep both",
+                    number.unwrap_or_default(),
+                    name.unwrap_or_default()
+                ),
+                false => format!("a lead with this {what} already exists and is not yours to open; ask your manager, or tick Allow Duplicate to keep both"),
+            };
+            return Err(Error::field(field, said));
+        }
+        set(doc, "duplicate_of", other.to_string());
         return Ok(());
-    };
-    if OPEN.contains(&status.as_str()) && !hc.ctx.is_system && !b(doc, "allow_duplicate") {
-        let (field, what) = match by_email {
-            true => ("email", "email"),
-            false if phones.iter().any(|p| digits(s(doc, "phone")).as_ref() == Some(p)) => ("phone", "phone number"),
-            false => ("mobile", "phone number"),
-        };
-        return Err(Error::field(
-            field,
-            format!(
-                "a lead with this {what} already exists: {} ({}); open it, or tick Allow Duplicate to keep both",
-                number.unwrap_or_default(),
-                name.unwrap_or_default()
-            ),
-        ));
     }
-    set(doc, "duplicate_of", other.to_string());
-    Ok(())
+    set(doc, "duplicate_of", Value::Null);
+    // A converted lead being edited is its own customer's; a closed one is nobody's business.
+    if !asked || id(doc, "customer").is_some() || !OPEN.contains(&s(doc, "status").unwrap_or("New")) {
+        return Ok(());
+    }
+    let mut held: Vec<(&'static str, Uuid, String)> = holders(hc, doc).await?.into_iter().map(|(e, i, n, _)| (e, i, n)).collect();
+    held.extend(prospects_holding(hc, &email, &phones, None, id(doc, "prospect")).await?.map(|(i, n)| ("Prospect", i, n)));
+    let Some((entity, other, name)) = held.into_iter().next() else { return Ok(()) };
+    let field = if email.is_some() {
+        "email"
+    } else if digits(s(doc, "phone")).is_some() {
+        "phone"
+    } else {
+        "mobile"
+    };
+    Err(Error::field(field, held_by(hc, entity, other, &name, "email or phone").await?))
+}
+
+/// Whether the person saving may open `entity` `record`: what a refusal may name. The match itself is found as the
+/// engine (a duplicate they cannot see is still one); only its name waits on this.
+pub(crate) async fn readable(hc: &mut HookCtx<'_>, entity: &str, record: Uuid) -> Result<bool> {
+    match hc.kernel.get_tx(hc.ctx, hc.tx, entity, record, false).await {
+        Ok(_) => Ok(true),
+        Err(Error::NotFound(_) | Error::Forbidden(_)) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+/// The refusal for a record of `entity` that already holds what `keys` names.
+pub(crate) async fn held_by(hc: &mut HookCtx<'_>, entity: &str, record: Uuid, name: &str, keys: &str) -> Result<String> {
+    let kind = entity.to_lowercase();
+    Ok(match readable(hc, entity, record).await? {
+        true => format!("a {kind} with this {keys} already exists: {name}; work on it, or tick Allow Duplicate to enter this anyway"),
+        false => format!("a {kind} with this {keys} already exists and is not yours to open; ask your manager, or tick Allow Duplicate to enter this anyway"),
+    })
+}
+
+/// The first prospect (not `own`, not merged away) with this email, a phone of `phones`, or this website domain.
+pub(crate) async fn prospects_holding(
+    hc: &mut HookCtx<'_>,
+    email: &Option<String>,
+    phones: &[String],
+    site: Option<&str>,
+    own: Option<Uuid>,
+) -> Result<Option<(Uuid, String)>> {
+    if email.is_none() && phones.is_empty() && site.is_none() {
+        return Ok(None);
+    }
+    Ok(sqlx::query_as(
+        "select a.id, a.prospect_name from e_prospect a \
+         where a.tenant_id = $1 and a.id is distinct from $4 and (a.email = $2 or a.phone_key = any($3) or a.website_key = $5) \
+         and not exists (select 1 from record_alias m where m.tenant_id = a.tenant_id and m.entity = 'Prospect' and m.alias_id = a.id) \
+         order by a.created_at limit 1",
+    )
+    .bind(hc.ctx.tenant)
+    .bind(email)
+    .bind(phones)
+    .bind(own)
+    .bind(site)
+    .fetch_optional(&mut **hc.tx)
+    .await?)
 }
 
 fn copy(from: &Doc, to: &mut Doc, fields: &[&str]) {
@@ -235,14 +310,14 @@ fn param_on(params: &Value, name: &str) -> bool {
     matches!(params.get(name), Some(Value::Bool(true))) || params.get(name).and_then(Value::as_i64) == Some(1)
 }
 
-/// Customers and contacts that already hold the lead's email or phone (the contacts kept for the
-/// lead itself aside): (entity, id, name, the contact's customer).
-async fn holders(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Vec<(&'static str, Uuid, String, Option<Uuid>)>> {
-    let (email, phones) = keys(lead);
+/// Customers (not merged away) holding this email or a phone of `phones`, the first three.
+// ponytail: customers and contacts are scanned (the platform keeps no indexed phone key on them); fine for a lead
+// typed in, slow for a person importing thousands. Add keys when the platform has them.
+pub(crate) async fn customers_holding(hc: &mut HookCtx<'_>, email: &Option<String>, phones: &[String]) -> Result<Vec<(Uuid, String)>> {
     if email.is_none() && phones.is_empty() {
         return Ok(vec![]);
     }
-    let customers: Vec<(Uuid, String)> = sqlx::query_as(concat!(
+    Ok(sqlx::query_as(concat!(
         "select a.id, a.customer_name from e_customer a where a.tenant_id = $1 and (lower(a.email) = $2 or ",
         national!("a.phone"),
         " = any($3)) \
@@ -250,10 +325,20 @@ async fn holders(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Vec<(&'static str, 
              order by a.created_at limit 3"
     ))
     .bind(hc.ctx.tenant)
-    .bind(&email)
-    .bind(&phones)
+    .bind(email)
+    .bind(phones)
     .fetch_all(&mut **hc.tx)
-    .await?;
+    .await?)
+}
+
+/// Customers and contacts that already hold the lead's email or phone (the contacts kept for the
+/// lead itself aside): (entity, id, name, the contact's customer).
+pub(crate) async fn holders(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Vec<(&'static str, Uuid, String, Option<Uuid>)>> {
+    let (email, phones) = keys(lead);
+    if email.is_none() && phones.is_empty() {
+        return Ok(vec![]);
+    }
+    let customers = customers_holding(hc, &email, &phones).await?;
     let contacts: Vec<(Uuid, String, Option<Uuid>)> = sqlx::query_as(concat!(
         "select c.id, coalesce(c.full_name, c.first_name), c.customer from e_contact c where c.tenant_id = $1 and c.lead is distinct from $4 \
              and (lower(c.email) = $2 or ",
@@ -626,6 +711,16 @@ async fn make_opportunity(hc: &mut HookCtx<'_>, lead: &Doc) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_website_is_its_domain() {
+        for site in ["https://www.Acme.test/about?x=1", "ACME.test:443", "acme.test", "http://user@www.acme.test#top"] {
+            assert_eq!(domain(Some(site)).as_deref(), Some("acme.test"), "{site}");
+        }
+        for none in ["localhost", "", "not a site", "a.b"] {
+            assert_eq!(domain(Some(none)), None, "{none}");
+        }
+    }
 
     #[test]
     fn a_phone_is_its_national_part() {
