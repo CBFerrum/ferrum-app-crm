@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.20.0
+
+Package `crm` 0.12.0. Needs the same platform as 0.16.0. No interface change (generic forms; the deal form shows
+Commission Splits).
+
+- **Commission plans.** A Commission Plan (Sales Manager) has its people, a period (month, or quarter or year of the
+  fiscal year), the day deals start counting, an optional pipeline, and tiers: the part of what a person won in a
+  period above each tier's start earns that tier's rate. Tiers Are Percent of Target starts each tier at that percent
+  of the person's Amount Won target for the period, which is how an accelerator past quota is written.
+- **Splits.** A deal's Commission Splits give named people a percent of it; its owner has the rest. A split naming
+  the owner, a person twice, or more than 100% in all is refused.
+- **Statements state differences.** Make Statements drafts one Commission Statement per person with something to
+  state: a line for each deal whose worth to them (amount in the company's currency times their share, won inside
+  the plan's dates) differs from what their submitted statements credited, for the difference: Won, Changed, or No
+  Longer Won (negative, a clawback). Commission per period is the tiers over everything credited in it, less what
+  was stated before. Submitted, a statement stands; cancelled, its lines stop counting and the next one states them
+  again. Submitting holds the plan's row lock and refuses when the figures changed since the draft was saved, so a
+  deal is never credited twice. A rep reads only their own statements; nobody but a Sales Manager reads plans.
+  `crm.commission_plan.make_statements` has a contract. Nothing pays a statement yet.
+- Database: tables `e_commission_plan` (with `__tiers`, `__people`), `e_commission_statement` (with `__lines`,
+  `__periods`), and `e_opportunity__splits`.
+
 ## 0.19.0
 
 Package `crm` 0.11.0. Needs the same platform as 0.16.0. No database or interface change.

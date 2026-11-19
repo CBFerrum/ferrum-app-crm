@@ -145,6 +145,13 @@
     - {name: their_price, type: currency, min: "0", currency: parent.currency, in_list: true}
     - {name: notes, type: data, in_list: true}
 
+- name: OpportunitySplit
+  label: Opportunity Split
+  kind: child
+  fields:
+    - {name: person, type: email, required: true, in_list: true, description: "A user's email: not the deal's owner"}
+    - {name: percent, type: percent, required: true, min: "0.01", max: "100", in_list: true, label: Share %}
+
 - name: Opportunity
   label: Opportunity
   label_plural: Opportunities
@@ -164,6 +171,7 @@
     - {name: prospect, type: link, to: Prospect, required_if: "doc.opportunity_from == 'Prospect'", in_filter: true}
     - {name: contact, type: link, to: Contact, label: Primary Contact, description: "The primary of its contacts"}
     - {name: contacts, type: table, of: OpportunityContact, description: "The people in the decision, with their buying roles; one is the primary"}
+    - {name: splits, type: table, of: OpportunitySplit, label: Commission Splits, description: "People who share the deal's credit, each with a percent; its owner has the rest"}
     - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", in_filter: true}
     - {name: record_type, type: link, to: RecordType, in_filter: true, link_filters: {applies_to: Opportunity}, description: "Its kind: its pipeline, what it fills in when it is made and what it asks for before a stage"}
     - {name: pipeline, type: link, to: SalesPipeline, in_list: true, in_filter: true, description: "Empty: the sales stage's, else the default pipeline. Another pipeline puts the deal at its first open stage unless a stage of it is chosen"}
@@ -207,6 +215,7 @@
   form:
     - {label: Opportunity, fields: [company, record_type, title, opportunity_from, lead, customer, party_name, prospect, contact, assigned_to, sales_team]}
     - {label: Contacts, fields: [contacts]}
+    - {label: Commission Splits, collapsible: true, fields: [splits]}
     - {label: Pipeline, fields: [pipeline, sales_stage, probability, forecast_category, status, lost_reason, lost_detail, expected_close_date, next_step, next_follow_up, stage_changed_at, last_activity_at, closed_on]}
     - {label: Value, fields: [currency, conversion_rate, price_list, items, amount, weighted_amount, base_amount, base_weighted_amount]}
     - {label: Competition, collapsible: true, fields: [competitors]}

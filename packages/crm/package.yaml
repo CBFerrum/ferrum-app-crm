@@ -1,5 +1,5 @@
 package: crm
-version: 0.11.0
+version: 0.12.0
 label: CRM
 description: Leads, opportunities and the sales pipeline, prospects, contacts and addresses, campaigns, activities and quotations.
 # Contacts, customers and items are shared with other apps; ERP's sales orders and taxes come with
@@ -73,7 +73,8 @@ modules:
     items: [Lead, Opportunity, Quotation, Activity, Prospect, Contact, AccountContact, Address, Customer, Item, Campaign, SalesPipeline, SalesStage, BuyingRole, Territory, SalesTeam,
             SalesTarget, LostReason, QuotationApprovalRule, ProductRule, LeadAssignmentRule, LeadScoringRule, CrmSettings, report:sales_pipeline, report:sales_forecast, report:sales_targets, report:lead_funnel, report:campaign_performance,
             report:campaign_attribution, report:quotation_register, report:win_rate, report:sales_cycle, report:lost_reasons, report:activity_by_person,
-            Sequence, SequenceEnrolment, ForecastSubmission, ForecastSnapshot, RecordType, report:forecast_vs_closed, report:forecast_history]
+            Sequence, SequenceEnrolment, ForecastSubmission, ForecastSnapshot, RecordType, report:forecast_vs_closed, report:forecast_history,
+            CommissionPlan, CommissionStatement]
 
 roles:
   - name: Sales User
@@ -121,6 +122,8 @@ roles:
       - {entity: ForecastSubmission, read: true, write: true, via: sales_team.manager}
       - {entity: ForecastSnapshot, read: true, if_owner: true}
       - {entity: ForecastSnapshot, read: true, via: sales_team.manager}
+      # What they are owed: their own commission statements, never the plans (rates, colleagues).
+      - {entity: CommissionStatement, read: true, if_owner: true}
   - name: Sales Manager
     description: The whole team's CRM records, pipeline and quotations.
     permissions:
@@ -150,6 +153,8 @@ roles:
       - {entity: ForecastSubmission, read: true, write: true, create: true, delete: true, export: true}
       - {entity: ForecastSnapshot, read: true, export: true}
       - {entity: RecordType, read: true, write: true, create: true, delete: true}
+      - {entity: CommissionPlan, read: true, write: true, create: true, delete: true}
+      - {entity: CommissionStatement, read: true, write: true, create: true, delete: true, submit: true, cancel: true, export: true}
       - {entity: Customer, read: true, write: true, create: true, export: true}
       - {entity: CustomerGroup, read: true}
       - {entity: Item, read: true}
@@ -228,6 +233,8 @@ personal_data:
   - {entity: Quotation, match: contact, erase: [answer_name, answer_detail]}
   - {entity: SequenceEnrolment, match: lead, erase: [title, log]}
   - {entity: SequenceEnrolment, match: contact, erase: [title, log]}
+  # A statement of commission owed names a member of the workspace; it is kept.
+  - {entity: CommissionStatement, match: person, retain: "A statement of commission owed is a financial record"}
 # What the package sends and prints, as templates a workspace edits (Settings, Messages and Documents).
 messages:
   - key: crm.quotation_sent
