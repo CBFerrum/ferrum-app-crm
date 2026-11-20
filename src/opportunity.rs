@@ -27,6 +27,7 @@ impl DocHook for OpportunityHook {
             set(doc, "title", json!(s(doc, "party_name")));
         }
         contacts(doc, old.as_ref())?;
+        crate::commission::check_splits(doc, &hc.ctx.email)?;
         crate::accounts::follow_team(hc, doc, old.as_ref()).await?;
         crate::record_type::apply(hc, doc, old.as_ref(), "Opportunity").await?;
         stage(hc, doc, old.as_ref()).await?;

@@ -9,6 +9,7 @@
 mod accounts;
 mod activity;
 mod assign;
+mod commission;
 mod consent;
 mod filing;
 mod forecast;
@@ -50,7 +51,9 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("SequenceEnrolment", Arc::new(sequence::EnrolmentHook))
         .register("ForecastSubmission", Arc::new(forecast::SubmissionHook))
         .register("RecordType", Arc::new(record_type::TypeHook))
-        .register("Prospect", Arc::new(accounts::ProspectHook));
+        .register("Prospect", Arc::new(accounts::ProspectHook))
+        .register("CommissionPlan", Arc::new(commission::PlanHook))
+        .register("CommissionStatement", Arc::new(commission::StatementHook));
     // On the platform's contacts, only where CRM is installed.
     hooks.scoped(&["crm".to_string()], |h| {
         h.register("Contact", Arc::new(accounts::ContactHook));
@@ -283,6 +286,8 @@ mod tests {
             "report:sales_cycle",
             "report:lost_reasons",
             "report:activity_by_person",
+            "CommissionPlan",
+            "CommissionStatement",
         ] {
             assert!(items.iter().any(|i| i == item), "{item} in CRM's menu");
         }

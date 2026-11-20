@@ -1,0 +1,93 @@
+# Commission plans and the statements of what people are owed on them (src/commission.rs).
+- name: CommissionTier
+  label: Commission Tier
+  kind: child
+  fields:
+    - {name: over, type: decimal, required: true, min: "0", in_list: true, label: Over, description: "Where the tier starts: an amount in the company's currency, or a percent of the person's target (see Tiers Are)"}
+    - {name: rate, type: percent, required: true, min: "0", max: "100", in_list: true, label: Rate %, description: "Earned on the part of the period's amount above this tier's start, up to the next tier's"}
+
+- name: CommissionPlanMember
+  label: Commission Plan Member
+  kind: child
+  fields:
+    - {name: person, type: email, required: true, in_list: true, description: "A user's email"}
+
+- name: CommissionPlan
+  label: Commission Plan
+  kind: master
+  module: crm
+  title_field: plan_name
+  company_scoped: true
+  description: "What people earn on the deals they win: who is on the plan, the period, and tiers. The part of what a person won in a period above each tier's start earns that tier's rate. Statements state what is due."
+  fields:
+    - {name: plan_name, type: data, required: true, label: Name, in_list: true}
+    - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", in_filter: true}
+    - {name: period, type: select, options: [Month, Quarter, Year], required: true, default: Quarter, in_list: true, description: "Quarters and years follow the fiscal year"}
+    - {name: start_date, type: date, required: true, label: Counts From, in_list: true, description: "Deals won before this day never count"}
+    - {name: pipeline, type: link, to: SalesPipeline, in_filter: true, description: "Empty: every pipeline"}
+    - {name: tiers_are, type: select, options: [Amounts, Percent of Target], required: true, default: Amounts, label: Tiers Are,
+       description: "Percent of Target: a tier starts at that percent of the person's Amount Won target for the period, so a tier over 100 is an accelerator past quota"}
+    - {name: tiers, type: table, of: CommissionTier}
+    - {name: people, type: table, of: CommissionPlanMember}
+    - {name: disabled, type: check, in_list: true, in_filter: true, description: "No new statements are made for it"}
+  unique: [[company, plan_name]]
+  actions:
+    - name: make_statements
+      label: Make Statements
+      permission: write
+      condition: "!doc.disabled"
+      params:
+        - {name: as_of, type: date, label: As Of, description: "Deals won up to this day count; today when empty"}
+      contract:
+        effect: transactional_action
+        completion: "Each person on the plan with something to state as of the day has one draft statement; a person who already has a draft gets no second one"
+        returns: {type: object, properties: {made: {type: array, items: {type: object, properties: {id: {type: string, format: uuid, "x-ferrum-link": CommissionStatement}, person: {type: string}}}}, skipped: {type: array, items: {type: string}}}}
+  list: {columns: [plan_name, period, start_date, tiers_are, disabled], sort: plan_name asc}
+
+- name: CommissionStatementLine
+  label: Commission Statement Line
+  kind: child
+  fields:
+    - {name: opportunity, type: link, to: Opportunity, required: true, read_only: true, in_list: true}
+    - {name: period_start, type: date, read_only: true, in_list: true, label: Period}
+    - {name: closed_on, type: date, read_only: true, in_list: true}
+    - {name: share_percent, type: percent, read_only: true, in_list: true, label: Share %}
+    - {name: amount, type: currency, read_only: true, in_list: true, description: "The change in what the deal is credited to the person, in the company's currency: negative takes back"}
+    - {name: reason, type: select, options: [Won, Changed, No Longer Won], read_only: true, in_list: true}
+
+- name: CommissionStatementPeriod
+  label: Commission Statement Period
+  kind: child
+  fields:
+    - {name: period_start, type: date, read_only: true, in_list: true, label: Period}
+    - {name: period_end, type: date, read_only: true, in_list: true}
+    - {name: credited, type: currency, read_only: true, in_list: true, label: Credited to Date, description: "Everything credited to the person in the period, this statement included"}
+    - {name: target, type: decimal, read_only: true, in_list: true, description: "The person's Amount Won target for the period, when tiers are percents of it"}
+    - {name: commission, type: currency, read_only: true, in_list: true, label: Commission to Date}
+    - {name: stated_before, type: currency, read_only: true, in_list: true, description: "What earlier statements stated for the period"}
+    - {name: due, type: currency, read_only: true, in_list: true, description: "Commission to Date less Stated Before: negative takes back"}
+
+- name: CommissionStatement
+  label: Commission Statement
+  kind: document
+  module: crm
+  internal: true
+  submittable: true
+  company_scoped: true
+  title_field: plan_name
+  numbering: {template: "COM-{YYYY}-{seq:5}"}
+  owner_fields: [person]
+  description: "What a person is owed on a commission plan as of a day: the deals credited or taken back since their last statement, and the commission due. Submitted, it stands; a later change to a deal is on the next statement."
+  fields:
+    - {name: plan, type: link, to: CommissionPlan, required: true, in_filter: true}
+    - {name: plan_name, type: data, fetch_from: plan.plan_name, read_only: true, in_list: true}
+    - {name: person, type: email, required: true, in_list: true, in_filter: true, description: "A user's email: one of the plan's people"}
+    - {name: company, type: link, to: Company, required: true, default_expr: "user.default_company", read_only: true, in_filter: true}
+    - {name: as_of, type: date, required: true, default_expr: today, in_list: true, in_filter: true, description: "Deals won up to this day count"}
+    - {name: lines, type: table, of: CommissionStatementLine, read_only: true, no_copy: true}
+    - {name: periods, type: table, of: CommissionStatementPeriod, read_only: true, no_copy: true}
+    - {name: credited, type: currency, read_only: true, no_copy: true, label: Credited, description: "The sum of the lines"}
+    - {name: commission, type: currency, read_only: true, no_copy: true, in_list: true, label: Commission Due, description: "The sum of the periods' Due; negative when more is taken back than earned"}
+    - {name: basis, type: data, read_only: true, hidden: true, no_copy: true, description: "A digest of the lines and periods as last worked out: submitting refuses if they would be different now"}
+    - {name: notes, type: text}
+  list: {columns: [number, person, plan_name, as_of, commission], sort: as_of desc}

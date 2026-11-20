@@ -936,6 +936,7 @@ async fn scenario() {
     assign_and_remind(&k).await;
     pipelines_and_quotes(&k).await;
     accounts_and_teams(&k).await;
+    commissions(&k).await;
     open_forms(&k).await;
 }
 
@@ -2508,7 +2509,7 @@ async fn open_forms(k: &Arc<Kernel>) {
         }
     }
     with_company.sort();
-    assert_eq!(with_company, ["Campaign", "ForecastSubmission", "Lead", "Opportunity", "Quotation", "SalesTarget"]);
+    assert_eq!(with_company, ["Campaign", "CommissionPlan", "CommissionStatement", "ForecastSubmission", "Lead", "Opportunity", "Quotation", "SalesTarget"]);
 
     // One company: nobody is refused for it. Several and no default: the refusal names the field (now on screen).
     let inr = admin.one("Currency", json!({"code": "INR"})).await;
@@ -2540,4 +2541,241 @@ async fn open_forms(k: &Arc<Kernel>) {
     let cara = admin.get("Contact", uid(&cara)).await;
     assert!(cara["email"].is_null() && cara["phone"].is_null() && cara["last_name"].is_null(), "{cara:?}");
     assert!(cara["emails"].as_array().unwrap().is_empty() && cara["phones"].as_array().unwrap().is_empty(), "{cara:?}");
+}
+
+/// Commission plans and statements (CRM-09): tiers, splits, statements that state differences, one credit per deal.
+async fn commissions(k: &Arc<Kernel>) {
+    let tenant = k
+        .create_tenant(NewTenant {
+            slug: "comm".into(),
+            name: "Commissions".into(),
+            admin_email: "admin@comm.test".into(),
+            admin_password: PASSWORD.into(),
+            admin_name: None,
+            packages: vec!["crm".into(), "crm_erp".into()],
+            settings: Some(json!({"fiscal_year_start_month": 4, "timezone": *ZONE})),
+        })
+        .await
+        .expect("tenant");
+    let session = k.login("comm", "admin@comm.test", PASSWORD).await.expect("login");
+    let admin = U { k: k.clone(), ctx: k.load_ctx(tenant, session.user, Some(session.token_version), "it".into()).await.expect("ctx") };
+    let inr = admin.one("Currency", json!({"code": "INR"})).await;
+    admin.insert("Company", json!({"company_name": "Commissions", "abbr": "CM", "default_currency": inr["id"]})).await;
+    let user = |email: &'static str, roles: &'static [&'static str]| {
+        let (k, admin_ctx) = (k.clone(), admin.ctx.clone());
+        async move {
+            let roles: Vec<String> = roles.iter().map(|r| r.to_string()).collect();
+            let id = k.create_user(&admin_ctx, email, email, Some(PASSWORD), &roles, false).await.expect("user");
+            U { ctx: k.load_ctx(tenant, id, None, "it".into()).await.expect("user ctx"), k }
+        }
+    };
+    let anna = user("anna@comm.test", &["Sales User"]).await;
+    let ben = user("ben@comm.test", &["Sales User"]).await;
+    let carl = user("carl@comm.test", &["Sales User"]).await;
+    let dave = user("dave@comm.test", &["Sales User"]).await;
+    let maria = user("maria@comm.test", &["Sales Manager"]).await;
+    let acme = admin.insert("Customer", json!({"customer_name": "Comm Acme"})).await["id"].clone();
+    let deal = |who: &U, title: &str, amount: &str, extra: Value| {
+        let mut v = json!({"opportunity_from": "Customer", "customer": acme.clone(), "title": title, "amount": amount});
+        v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap());
+        let who = U { k: who.k.clone(), ctx: who.ctx.clone() };
+        async move { uid(&who.insert("Opportunity", v).await) }
+    };
+    let won = |who: &U, d: Uuid| {
+        let who = U { k: who.k.clone(), ctx: who.ctx.clone() };
+        async move { who.update("Opportunity", d, json!({"status": "Won"})).await }
+    };
+    let make = |plan: Uuid| {
+        let maria = U { k: maria.k.clone(), ctx: maria.ctx.clone() };
+        async move { maria.action("CommissionPlan", plan, "make_statements", json!({})).await }
+    };
+    let made_for = |r: &Value, who: &str| -> Uuid {
+        vid(r["made"].as_array().unwrap().iter().find(|m| m["person"] == json!(who)).unwrap_or_else(|| panic!("{who} in {r}")))
+    };
+    let lines = |st: &Doc| -> Vec<(String, Decimal, String)> {
+        st["lines"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|l| (l["opportunity"].as_str().unwrap().to_string(), dec(&l["amount"]), l["reason"].as_str().unwrap().to_string()))
+            .collect()
+    };
+    let start = (today() - chrono::Duration::days(400)).to_string();
+
+    // a_plan_needs_a_tier
+    refused(
+        maria.k.insert(&maria.ctx, "CommissionPlan", obj(json!({"plan_name": "Empty", "start_date": start, "people": [{"person": "anna@comm.test"}]}))).await,
+        "tier",
+    );
+    let plan = uid(&maria
+        .insert(
+            "CommissionPlan",
+            json!({"plan_name": "Reps", "period": "Quarter", "start_date": start, "tiers": [{"over": "0", "rate": "5"}],
+                   "people": [{"person": "Anna@comm.test"}, {"person": "ben@comm.test"}]}),
+        )
+        .await);
+    // a_person_not_on_the_plan_has_no_statement
+    refused(maria.k.insert(&maria.ctx, "CommissionStatement", obj(json!({"plan": plan.to_string(), "person": "carl@comm.test"}))).await, "not on this plan");
+
+    // a_first_statement_credits_what_was_won
+    let d1 = deal(&anna, "Four", "4000", json!({})).await;
+    let d2 = deal(&anna, "Six", "6000", json!({})).await;
+    won(&anna, d1).await;
+    won(&anna, d2).await;
+    // only_a_manager_makes_and_submits
+    let r = anna.k.run_action(&anna.ctx, "CommissionPlan", plan, "make_statements", json!({})).await;
+    assert!(matches!(r, Err(Error::Forbidden(_))), "{r:?}");
+    let r = make(plan).await;
+    assert_eq!(r["made"].as_array().unwrap().len(), 1, "{r}");
+    assert!(r["skipped"].as_array().unwrap().contains(&json!("ben@comm.test")), "{r}");
+    let s1 = made_for(&r, "anna@comm.test");
+    let st = maria.get("CommissionStatement", s1).await;
+    assert_eq!(st["lines"].as_array().unwrap().len(), 2);
+    assert!(lines(&st).iter().all(|l| l.2 == "Won"));
+    assert_eq!((dec(&st["credited"]), dec(&st["commission"])), (n("10000"), n("500")));
+    let r = anna.k.submit(&anna.ctx, "CommissionStatement", s1, None).await;
+    assert!(matches!(r, Err(Error::Forbidden(_))), "a rep does not submit: {r:?}");
+    maria.submit("CommissionStatement", s1).await;
+
+    // a_second_statement_states_only_what_is_new
+    let d3 = deal(&anna, "Two", "2000", json!({})).await;
+    won(&anna, d3).await;
+    // a_submitted_statement_does_not_move
+    if let Ok(after) = maria.k.update(&maria.ctx, "CommissionStatement", s1, obj(json!({"notes": "Paid in October"})), None).await {
+        assert_eq!((dec(&after["credited"]), dec(&after["commission"]), after["lines"].as_array().unwrap().len()), (n("10000"), n("500"), 2));
+    }
+    let st = maria.get("CommissionStatement", s1).await;
+    assert_eq!((dec(&st["credited"]), dec(&st["commission"]), st["lines"].as_array().unwrap().len()), (n("10000"), n("500"), 2));
+    let s2 = made_for(&make(plan).await, "anna@comm.test");
+    let st = maria.get("CommissionStatement", s2).await;
+    assert_eq!(lines(&st), [(d3.to_string(), n("2000"), "Won".to_string())]);
+    let p = &st["periods"][0];
+    assert_eq!((dec(&p["credited"]), dec(&p["stated_before"]), dec(&p["due"])), (n("12000"), n("500"), n("100")));
+    maria.submit("CommissionStatement", s2).await;
+    let r = make(plan).await;
+    assert!(r["made"].as_array().unwrap().is_empty() && r["skipped"].as_array().unwrap().contains(&json!("anna@comm.test")), "nothing new: {r}");
+
+    // a_deal_no_longer_won_is_taken_back
+    anna.action("Opportunity", d2, "reopen", json!({})).await;
+    let s3 = made_for(&make(plan).await, "anna@comm.test");
+    let st = maria.get("CommissionStatement", s3).await;
+    assert_eq!(lines(&st), [(d2.to_string(), n("-6000"), "No Longer Won".to_string())]);
+    assert_eq!((dec(&st["periods"][0]["due"]), dec(&st["commission"])), (n("-300"), n("-300")));
+    maria.submit("CommissionStatement", s3).await;
+
+    // a_split_shares_the_credit
+    let anna_s = "anna@comm.test";
+    refused(
+        anna.k
+            .insert(
+                &anna.ctx,
+                "Opportunity",
+                obj(json!({"opportunity_from": "Customer", "customer": acme, "title": "x", "splits": [{"person": anna_s, "percent": "10"}]})),
+            )
+            .await,
+        "owner",
+    );
+    refused(
+        anna.k.insert(&anna.ctx, "Opportunity", obj(json!({"opportunity_from": "Customer", "customer": acme, "title": "x", "splits": [{"person": "ben@comm.test", "percent": "10"}, {"person": "Ben@comm.test", "percent": "10"}]}))).await,
+        "twice",
+    );
+    refused(
+        anna.k.insert(&anna.ctx, "Opportunity", obj(json!({"opportunity_from": "Customer", "customer": acme, "title": "x", "splits": [{"person": "ben@comm.test", "percent": "60"}, {"person": "carl@comm.test", "percent": "50"}]}))).await,
+        "100",
+    );
+    let d5 = deal(&anna, "Shared", "1000", json!({"splits": [{"person": "ben@comm.test", "percent": "40"}]})).await;
+    won(&anna, d5).await;
+    let r = make(plan).await;
+    let (sa, sb) = (made_for(&r, anna_s), made_for(&r, "ben@comm.test"));
+    let (a, b) = (maria.get("CommissionStatement", sa).await, maria.get("CommissionStatement", sb).await);
+    assert_eq!((lines(&a), dec(&a["lines"][0]["share_percent"])), (vec![(d5.to_string(), n("600"), "Won".to_string())], n("60")));
+    assert_eq!((lines(&b), dec(&b["lines"][0]["share_percent"])), (vec![(d5.to_string(), n("400"), "Won".to_string())], n("40")));
+    maria.submit("CommissionStatement", sa).await;
+    maria.submit("CommissionStatement", sb).await;
+    anna.update("Opportunity", d5, json!({"splits": [{"person": "ben@comm.test", "percent": "50"}]})).await;
+    let r = make(plan).await;
+    let (sa, sb) = (made_for(&r, anna_s), made_for(&r, "ben@comm.test"));
+    assert_eq!(lines(&maria.get("CommissionStatement", sa).await), [(d5.to_string(), n("-100"), "Changed".to_string())]);
+    assert_eq!(lines(&maria.get("CommissionStatement", sb).await), [(d5.to_string(), n("100"), "Changed".to_string())]);
+    maria.submit("CommissionStatement", sa).await;
+    maria.submit("CommissionStatement", sb).await;
+
+    // a_cancelled_statement_is_stated_again
+    maria.k.cancel(&maria.ctx, "CommissionStatement", sb, None).await.expect("cancelled");
+    let again = made_for(&make(plan).await, "ben@comm.test");
+    assert_eq!(lines(&maria.get("CommissionStatement", again).await), [(d5.to_string(), n("100"), "Changed".to_string())]);
+    maria.submit("CommissionStatement", again).await;
+
+    // a_rep_reads_only_their_own_statements
+    assert!(ben.list("CommissionStatement", json!({"person": anna_s})).await.is_empty());
+    assert!(matches!(ben.k.get(&ben.ctx, "CommissionStatement", s1, false).await, Err(Error::NotFound(_))));
+    anna.get("CommissionStatement", s1).await;
+    assert!(matches!(anna.k.get(&anna.ctx, "CommissionPlan", plan, false).await, Err(Error::Forbidden(_) | Error::NotFound(_))));
+    assert!(matches!(ben.k.list(&ben.ctx, "CommissionPlan", &ListQuery::default()).await, Err(Error::Forbidden(_))));
+
+    // a_deal_moved_to_another_period_moves_its_credit
+    sql(k, "update e_opportunity set closed_on = (closed_on - interval '3 months')::date where id = $1", d3).await;
+    let s7 = made_for(&make(plan).await, anna_s);
+    let st = maria.get("CommissionStatement", s7).await;
+    let mut moved: Vec<Decimal> = lines(&st).iter().map(|l| l.1).collect();
+    moved.sort();
+    assert_eq!(moved, [n("-2000"), n("2000")], "{st:?}");
+    let dues: Vec<Decimal> = st["periods"].as_array().unwrap().iter().map(|p| dec(&p["due"])).collect();
+    assert_eq!(dues, [n("100"), n("-100")], "the old period earns it, the new gives it back: {st:?}");
+    maria.submit("CommissionStatement", s7).await;
+
+    // two_submits_at_once_credit_a_deal_once
+    let d9 = deal(&anna, "Race", "500", json!({})).await;
+    won(&anna, d9).await;
+    let first = made_for(&make(plan).await, anna_s);
+    let second = uid(&maria.insert("CommissionStatement", json!({"plan": plan.to_string(), "person": anna_s})).await);
+    let (r1, r2) =
+        tokio::join!(maria.k.submit(&maria.ctx, "CommissionStatement", first, None), maria.k.submit(&maria.ctx, "CommissionStatement", second, None));
+    assert_eq!([r1.is_ok(), r2.is_ok()].iter().filter(|ok| **ok).count(), 1, "{r1:?} {r2:?}");
+    let lost = if r1.is_ok() { r2 } else { r1 };
+    assert!(matches!(&lost, Err(Error::Invalid(m)) if m.contains("the figures changed")), "{lost:?}");
+    let credited: Decimal = {
+        let mut tx = k.db.system_tx().await.unwrap();
+        let v = sqlx::query_scalar(
+            "select coalesce(sum(l.amount), 0) from e_commission_statement__lines l join e_commission_statement st on st.tenant_id = l.tenant_id and st.id = l.parent_id \
+             where st.docstatus = 1 and l.opportunity = $1",
+        )
+        .bind(d9)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        v
+    };
+    assert_eq!(credited, n("500"), "credited once");
+
+    // an_accelerator_past_target: 10000 at 5%, the 2000 past it at 10%
+    let fast = uid(&maria
+        .insert(
+            "CommissionPlan",
+            json!({"plan_name": "Accelerated", "period": "Quarter", "start_date": today().to_string(), "tiers_are": "Percent of Target",
+                   "tiers": [{"over": "0", "rate": "5"}, {"over": "100", "rate": "10"}], "people": [{"person": "carl@comm.test"}]}),
+        )
+        .await);
+    maria
+        .insert("SalesTarget", json!({"target_for": "Person", "person": "carl@comm.test", "period": "Quarter", "start_date": today().to_string(), "measure": "Amount Won", "target": "10000"}))
+        .await;
+    let dc = deal(&carl, "Big", "12000", json!({})).await;
+    won(&carl, dc).await;
+    let sc = made_for(&make(fast).await, "carl@comm.test");
+    assert_eq!(dec(&maria.get("CommissionStatement", sc).await["commission"]), n("700"));
+    maria.update("CommissionPlan", fast, json!({"people": [{"person": "carl@comm.test"}, {"person": "dave@comm.test"}]})).await;
+    let dd = deal(&dave, "Dave's", "100", json!({})).await;
+    won(&dave, dd).await;
+    refused(maria.k.run_action(&maria.ctx, "CommissionPlan", fast, "make_statements", json!({})).await, "dave@comm.test has no Amount Won target");
+
+    // agent: one effect key, one draft
+    let d14 = deal(&ben, "Agent's", "300", json!({})).await;
+    won(&ben, d14).await;
+    let call =
+        || ferrum_kernel::capability::Invocation::new("crm.commission_plan.make_statements", json!({"id": plan.to_string(), "params": {}})).key("comm-k1");
+    let first = k.invoke(&maria.ctx, call()).await.expect("invoked");
+    let again = k.invoke(&maria.ctx, call()).await.expect("again");
+    assert!(!first.repeated && again.repeated, "{again:?}");
+    assert_eq!(maria.list("CommissionStatement", json!({"person": "ben@comm.test", "docstatus": 0})).await.len(), 1);
 }
